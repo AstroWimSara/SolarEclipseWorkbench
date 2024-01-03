@@ -1,3 +1,4 @@
+import os
 from enum import Enum
 
 
@@ -13,3 +14,18 @@ class Notifications(str, Enum):
     MAX_ECLIPSE = "Maximum eclipse!"
     FILTERS_OFF = "Filters OFF!  Filters OFF!"
     FILTERS_ON = "Filters ON!  Filters ON!"
+
+
+def voice_prompt(notification: Notifications) -> int:
+    """ Voice prompt of the given notification.
+
+    In the current implementation, the default voice from your system settings will be used.
+
+    Args:
+        - notification: Notification
+
+    Returns: On Unix, the return value is the exit status of the process and on Windows, the return value is the value
+             returned by the system shell after running command.
+    """
+
+    os.system(f"say {notification}")
