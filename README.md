@@ -25,7 +25,7 @@ poetry install
 
 ## Running Solar Eclipse Workbench
 
-- Before starting Solar Eclipse Maestro, make sure to enable the correct python environment by executing the following command in the installation directory: 
+- Before starting Solar Eclipse Workbench, make sure to enable the correct python environment by executing the following command in the installation directory: 
   
 ```bash
 poetry shell
