@@ -12,3 +12,8 @@ class CameraSettings:
         self.exposure_time = exposure_time
         self.f = f
         self.iso = iso
+
+
+def take_picture(camera_name: str, camera_settings: CameraSettings, description: str):
+
+    raise NotImplementedError
