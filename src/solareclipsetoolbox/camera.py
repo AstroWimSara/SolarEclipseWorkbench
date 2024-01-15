@@ -78,6 +78,26 @@ def get_camera(camera_name: str):
     camera.init()
     return camera
 
+def get_free_space(camera_name: str) -> str:
+    """ Return the free space on the card of the selected camera 
+    
+    Args: 
+        - camera_name: Name of the camera
+    Returns: Free space on the card of the camera
+    """
+    camera = get_camera(camera_name)
+    return str(round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)) + " gb"
+
+def get_battery_level(camera_name: str) -> float:
+    """ Return the battery level of the selected camera 
+    
+    Args: 
+        - camera_name: Name of the camera
+    Returns: Current battery level of the camera
+    """
+    camera = get_camera(camera_name)
+    return camera.get_config().get_child_by_name('batterylevel').get_value()
+
 def get_time(camera_name: str) -> str:
     """ Returns the current time of the selected camera
 
@@ -125,14 +145,12 @@ def get_time(camera_name: str) -> str:
     return camera_time.isoformat(' ')
 
 def set_time(camera_name: str) -> None:
-    """ Set the computer time on the selected camera
-    """
+    """ Set the computer time on the selected camera """
     camera = get_camera(camera_name)
     # get configuration tree
     config = camera.get_config()
-    abilities = camera.get_abilities()
 
-    if set_datetime(config, abilities.model):
+    if set_datetime(config):
         # apply the changed config
         camera.set_config(config)
     else:
@@ -141,7 +159,8 @@ def set_time(camera_name: str) -> None:
     # clean up
     camera.exit()
 
-def set_datetime(config, model):
+def set_datetime(config) -> bool:
+    """ Private method to set the date and time of the camera. """
     OK, date_config = gp.gp_widget_get_child_by_name(config, 'datetimeutc')
     if OK >= gp.GP_OK:
         widget_type = date_config.get_type()
