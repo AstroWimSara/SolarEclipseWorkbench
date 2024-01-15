@@ -1,5 +1,6 @@
 import locale
 import logging
+import time
 import gphoto2 as gp
 from datetime import datetime
 
@@ -50,12 +51,12 @@ def get_address(camera_name: str) -> str:
     except IndexError:
         raise CameraError(f"Camera {camera_name} not found")
 
-def get_time(camera_name: str) -> str:
-    """ Returns the current time of the selected camera
+def get_camera(camera_name: str):
+    """ Returns the initialized camera object of the selected camera
 
     Args: 
         - camera_name: Name of the camera
-    Returns: Current time of the camera
+    Returns: Initialized camera object of the selected camera.
     """
     addr = get_address(camera_name)
     if addr == '':
@@ -75,6 +76,16 @@ def get_time(camera_name: str) -> str:
 
     # Initialize the camera
     camera.init()
+    return camera
+
+def get_time(camera_name: str) -> str:
+    """ Returns the current time of the selected camera
+
+    Args: 
+        - camera_name: Name of the camera
+    Returns: Current time of the camera
+    """
+    camera = get_camera(camera_name)
     # get configuration tree
     config = camera.get_config()
     # find the date/time setting config item and get it
@@ -112,3 +123,33 @@ def get_time(camera_name: str) -> str:
     # clean up
     camera.exit()
     return camera_time.isoformat(' ')
+
+def set_time(camera_name: str) -> None:
+    """ Set the computer time on the selected camera
+    """
+    camera = get_camera(camera_name)
+    # get configuration tree
+    config = camera.get_config()
+    abilities = camera.get_abilities()
+
+    if set_datetime(config, abilities.model):
+        # apply the changed config
+        camera.set_config(config)
+    else:
+        logging.error('Could not set date & time')
+
+    # clean up
+    camera.exit()
+
+def set_datetime(config, model):
+    OK, date_config = gp.gp_widget_get_child_by_name(config, 'datetimeutc')
+    if OK >= gp.GP_OK:
+        widget_type = date_config.get_type()
+        if widget_type == gp.GP_WIDGET_DATE:
+            now = int(time.time())
+            date_config.set_value(now)
+        else:
+            now = time.strftime('%Y-%m-%d %H:%M:%S')
+            date_config.set_value(now)
+        return True
+    return False
