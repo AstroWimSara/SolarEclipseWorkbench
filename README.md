@@ -14,7 +14,7 @@
 - Install poetry by executing the following line in the terminal (on Linux, or Mac)
 
 ```bash
-curl -sSL https://install.python-poetry.org | python3 -
+curl -sSL https://install.python-poetry.org | sed 's/symlinks=False/symlinks=True/' | python3 -
 ```
 
 - Install the python environment by executing the following command in the Solar Eclipse Workbench directory
