@@ -3,29 +3,73 @@ import logging
 import time
 import gphoto2 as gp
 from datetime import datetime
+import os
 
 class CameraError(Exception):
     pass
 
 class CameraSettings:
 
-    def __init__(self, exposure_time: float, f: float, iso: int):
+    def __init__(self, shutter_speed: str, aperture: float, iso: int):
         """ Initialise new camera settings.
 
         Args:
-            - exposure_time: Exposure time [s].
-            - f: f-number.
+            - shutter_speed: Exposure time [s], e.g. "1/2000".
+            - aperture: Aperture (f-number), e.g. 5.6.
             - iso: ISO-value.
         """
 
-        self.exposure_time = exposure_time
-        self.f = f
+        self.shutter_speed = shutter_speed
+        self.aperture = aperture
         self.iso = iso
 
 
 def take_picture(camera_name: str, camera_settings: CameraSettings, description: str):
+    """ Take a picture with the selected camera 
+    
+    Args: 
+        - camera_name: Name of the camera
+        - camera_settings: Settings of the camera (exposure, f, iso)
+        - description: Description of the picture
+    """
+    camera = get_camera(camera_name)
+    context = gp.gp_context_new()
+    config = gp.check_result(gp.gp_camera_get_config(camera, context))
 
-    raise NotImplementedError
+    iso = gp.check_result(
+        gp.gp_widget_get_child_by_name(config, 'iso'))
+    gp.check_result(gp.gp_widget_set_value(iso, str(camera_settings.iso)))
+    # set config
+    gp.check_result(gp.gp_camera_set_config(camera, config))
+
+    # Set aperture
+    aperture = gp.check_result(
+        gp.gp_widget_get_child_by_name(config, 'aperture'))
+    gp.check_result(gp.gp_widget_set_value(aperture, str(camera_settings.aperture)))
+    # set config
+    gp.check_result(gp.gp_camera_set_config(camera, config))
+
+    # Set shutter speed
+    shutter_speed = gp.check_result(
+        gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+    gp.check_result(gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed)))
+    # set config
+    gp.check_result(gp.gp_camera_set_config(camera, config))
+
+    # find the capture target config item (to save to the memory card)
+    capture_target = gp.check_result(
+        gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+    # set value
+    value = gp.check_result(gp.gp_widget_get_choice(capture_target, 1))
+    gp.check_result(gp.gp_widget_set_value(capture_target, value))
+    # set config
+    gp.check_result(gp.gp_camera_set_config(camera, config))
+
+    # Take picture
+    camera.capture(gp.GP_CAPTURE_IMAGE)
+
+    camera.exit() 
+
 
 def get_cameras() -> list:
     """ Returns a list with the cameras.
@@ -87,6 +131,16 @@ def get_free_space(camera_name: str) -> str:
     """
     camera = get_camera(camera_name)
     return str(round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)) + " gb"
+
+def get_space(camera_name: str) -> str:
+    """ Return the size of the memory card of the selected camera 
+    
+    Args: 
+        - camera_name: Name of the camera
+    Returns: Size of memory card of the camera
+    """
+    camera = get_camera(camera_name)
+    return str(round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)) + " gb"
 
 def get_battery_level(camera_name: str) -> float:
     """ Return the battery level of the selected camera 
