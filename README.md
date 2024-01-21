@@ -30,3 +30,5 @@ poetry install
 ```bash
 poetry shell
 ```
+
+- There is a problem with gphoto2.  On macOS, Solar Eclipse Workbench needs to be started with sudo rights to be able to connect to the cameras.
