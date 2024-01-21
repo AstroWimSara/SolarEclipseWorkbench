@@ -82,7 +82,7 @@ def get_cameras() -> list:
     # make a list of all available cameras
     return list(gp.Camera.autodetect())
 
-def get_address(camera_name: str) -> str:
+def __get_address(camera_name: str) -> str:
     """ Gets the address of the camera if the name is given 
     
     Args:
@@ -102,7 +102,7 @@ def get_camera(camera_name: str):
         - camera_name: Name of the camera
     Returns: Initialized camera object of the selected camera.
     """
-    addr = get_address(camera_name)
+    addr = __get_address(camera_name)
     if addr == '':
         return ''
 
@@ -224,7 +224,7 @@ def set_time(camera_name: str) -> None:
     # get configuration tree
     config = camera.get_config()
 
-    if set_datetime(config):
+    if __set_datetime(config):
         # apply the changed config
         camera.set_config(config)
     else:
@@ -233,7 +233,7 @@ def set_time(camera_name: str) -> None:
     # clean up
     camera.exit()
 
-def set_datetime(config) -> bool:
+def __set_datetime(config) -> bool:
     """ Private method to set the date and time of the camera. """
     OK, date_config = gp.gp_widget_get_child_by_name(config, 'datetimeutc')
     if OK >= gp.GP_OK:
