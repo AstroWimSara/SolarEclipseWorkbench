@@ -142,7 +142,27 @@ def get_space(camera_name: str) -> str:
     camera = get_camera(camera_name)
     return str(round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)) + " gb"
 
-def get_battery_level(camera_name: str) -> float:
+def get_shooting_mode(camera_name: str) -> str:
+    """ Return the shooting mode of the selected camera. Should be "Manual".
+    
+    Args: 
+        - camera_name: Name of the camera
+    Returns: Shooting mode of the camera
+    """
+    camera = get_camera(camera_name)
+    return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
+
+def get_focus_mode(camera_name: str) -> str:
+    """ Return the focus mode of the selected camera. Should be "Manual"
+    
+    Args: 
+        - camera_name: Name of the camera
+    Returns: Focus mode of the camera
+    """
+    camera = get_camera(camera_name)
+    return camera.get_config().get_child_by_name('focusmode').get_value()
+
+def get_battery_level(camera_name: str) -> str:
     """ Return the battery level of the selected camera 
     
     Args: 

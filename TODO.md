@@ -7,20 +7,9 @@
 
 - [ ] Check Solar Eclipse Timer
 
-## To implement
+## Problems with gphoto2
 
-- [X] Implement the method to get the cameras
-- [X] Get the date and time of the cameras
-- [X] Get the battery status of the camera
-- [X] Get the free space on the camera
-- [X] Set the date of the camera
-- [X] Get the total size of the memory card
-- [X] Take a picture
-- [ ] Check if the lens is in manual mode
-- [ ] Check if the camera mode is M
-
-## Bigger problems
-
+- [ ] Does not install on apple silicon
 - [ ] Camera access only works when executing the command using `sudo`
 
 Hi,
