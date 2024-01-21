@@ -3,7 +3,6 @@ import logging
 import time
 import gphoto2 as gp
 from datetime import datetime
-import os
 
 class CameraError(Exception):
     pass
