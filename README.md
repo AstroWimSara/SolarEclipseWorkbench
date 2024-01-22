@@ -17,6 +17,12 @@
 curl -sSL https://install.python-poetry.org | sed 's/symlinks=False/symlinks=True/' | python3 -
 ```
 
+- For modern Apple Mac computers (using Apple Silicon processors), install [homebrew](https://brew.sh/). Then install gphoto2 using homebrew:
+
+```bash
+brew install gphoto2
+```
+
 - Install the python environment by executing the following command in the Solar Eclipse Workbench directory
 
 ```bash
