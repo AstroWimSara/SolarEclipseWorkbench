@@ -1,3 +1,7 @@
+COMMANDS = {
+    'voice_prompt': voice_prompt,
+    'take_picture': take_picture
+}
 def start_scheduler():
     """ Start background scheduler and return it.
 
