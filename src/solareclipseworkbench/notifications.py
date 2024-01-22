@@ -14,9 +14,10 @@ class Notifications(str, Enum):
     MAX_ECLIPSE = "Maximum eclipse!"
     FILTERS_OFF = "Filters OFF!  Filters OFF!"
     FILTERS_ON = "Filters ON!  Filters ON!"
+    # CHECK_FOCUS = "Check focus!"
 
 
-def voice_prompt(notification: Notifications) -> int:
+def voice_prompt(notification: str) -> int:
     """ Voice prompt of the given notification.
 
     In the current implementation, the default voice from your system settings will be used.
@@ -28,4 +29,4 @@ def voice_prompt(notification: Notifications) -> int:
              returned by the system shell after running command.
     """
 
-    os.system(f"say {notification}")
+    os.system(f"say {Notifications[notification.lstrip()].value}")
