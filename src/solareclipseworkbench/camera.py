@@ -133,7 +133,7 @@ def get_free_space(camera_name: str) -> str:
     Args: 
         - camera_name: Name of the camera
 
-    Returns: Free space on the card of the camera (in gigabyte)
+    Returns: Free space on the card of the camera [GB]
     """
 
     camera = get_camera(camera_name)
@@ -145,7 +145,7 @@ def get_space(camera_name: str) -> str:
     Args: 
         - camera_name: Name of the camera
 
-    Returns: Size of memory card of the camera (in gigabyte)
+    Returns: Size of memory card of the camera [GB]
     """
 
     camera = get_camera(camera_name)
@@ -181,7 +181,7 @@ def get_battery_level(camera_name: str) -> str:
     Args: 
         - camera_name: Name of the camera
 
-    Returns: Current battery level of the camera
+    Returns: Current battery level of the camera [%]
     """
 
     camera = get_camera(camera_name)
@@ -265,3 +265,80 @@ def __set_datetime(config) -> bool:
             date_config.set_value(now)
         return True
     return False
+
+def get_camera_overview():
+    """ Returns a dictionary with information of the connected cameras.
+
+    The keys in the dictionary are the camera names and the values (the camera information) contains information about
+    the battery level and space on the memory card of the camera.
+
+    Returns: Dictionary with information of the connected cameras.
+    """
+    
+    camera_overview = {}
+
+    camera_names = get_cameras()
+
+    for camera_name in camera_names:
+
+        battery_level = get_battery_level(camera_name)
+        free_space = get_free_space(camera_name)
+        total_space = get_space(camera_name)
+
+        camera_overview[camera_name] = CameraInfo(camera_name, battery_level, free_space)
+
+    return camera_overview
+
+class CameraInfo():
+
+    def __init__(self, camera_name: str, battery_level: float, free_space: float, total_space: float) -> None:
+        """ Create a new CameraInfo object.
+
+        Args:
+            - camera_name: Name of the camera
+            - battery_level: Battery level [%]
+            - free_space: Free space on the camera memory card [GB]
+            - total_space: Total space on the camera memory card [GB]
+        """
+
+        self.camera_name = camera_name
+        self.battery_level = battery_level
+        self.free_space = free_space
+        self.total_space = total_space
+
+    def get_camera_name(self) -> str:
+        """ Returns the name of the camera.
+
+        Returns: Name of the camera.
+        """
+        return self.camera_name
+
+    def get_battery_level(self) -> float:
+        """ Returns the battery level of the camera.
+
+        Returns: Battery level of the camera [%].
+        """
+        return self.battery_level
+
+    def get_absolute_free_space(self) -> float:
+        """ Returns the absolute free space on the memory card of the camera.
+
+        Returns: Free space on the memory card of the camera [GB].
+        """
+
+        return self.free_space
+
+    def get_relative_free_space(self) -> float:
+        """ Returns the relative free space on the memory card of the camera.
+
+        Returns: Free space on the memory card of the camera [%].
+        """
+
+        return self.get_absolute_free_space() / self.get_total_space() * 100
+
+    def get_total_space(self) -> float:
+        """ Returns the total space on the memory card of the camera.
+
+        Returns: Total space on the memory card of the camera [GB].
+        """
+        return self.total_space
