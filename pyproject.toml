@@ -11,9 +11,9 @@ keywords = ["astronomy", "photography", "solar eclipse"]
 [tool.poetry.dependencies]
 python = "^3.9"
 astropy = "^6.0.0"
-gphoto2 = "^2.5.0"
 geopandas = "^0.14.2"
 matplotlib = "^3.8.2"
+gphoto2 = "^2.5.0"
 
 
 [build-system]
