@@ -12,6 +12,7 @@ def plot_current_location():
     longitude, latitude = get_current_location()
     plot_location(longitude, latitude)
 
+
 def get_current_location() -> (float, float):
     """ Returns the longitude and latitude of the current location.
 

@@ -4,8 +4,10 @@ import time
 import gphoto2 as gp
 from datetime import datetime
 
+
 class CameraError(Exception):
     pass
+
 
 class CameraSettings:
 
@@ -83,6 +85,7 @@ def get_cameras() -> list:
     # make a list of all available cameras
     return list(gp.Camera.autodetect())
 
+
 def __get_address(camera_name: str) -> str:
     """ Gets the address of the camera if the name is given 
     
@@ -97,6 +100,7 @@ def __get_address(camera_name: str) -> str:
         return camera_tuple[0]
     except IndexError:
         raise CameraError(f"Camera {camera_name} not found")
+
 
 def get_camera(camera_name: str):
     """ Returns the initialized camera object of the selected camera
@@ -127,6 +131,7 @@ def get_camera(camera_name: str):
     camera.init()
     return camera
 
+
 def get_free_space(camera_name: str) -> str:
     """ Return the free space on the card of the selected camera 
     
@@ -138,6 +143,7 @@ def get_free_space(camera_name: str) -> str:
 
     camera = get_camera(camera_name)
     return str(round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)) + " gb"
+
 
 def get_space(camera_name: str) -> str:
     """ Return the size of the memory card of the selected camera 
@@ -151,6 +157,7 @@ def get_space(camera_name: str) -> str:
     camera = get_camera(camera_name)
     return str(round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)) + " gb"
 
+
 def get_shooting_mode(camera_name: str) -> str:
     """ Return the shooting mode of the selected camera. Should be "Manual".
     
@@ -162,6 +169,7 @@ def get_shooting_mode(camera_name: str) -> str:
 
     camera = get_camera(camera_name)
     return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
+
 
 def get_focus_mode(camera_name: str) -> str:
     """ Return the focus mode of the selected camera. Should be "Manual"
@@ -175,6 +183,7 @@ def get_focus_mode(camera_name: str) -> str:
     camera = get_camera(camera_name)
     return camera.get_config().get_child_by_name('focusmode').get_value()
 
+
 def get_battery_level(camera_name: str) -> str:
     """ Return the battery level of the selected camera 
     
@@ -186,6 +195,7 @@ def get_battery_level(camera_name: str) -> str:
 
     camera = get_camera(camera_name)
     return camera.get_config().get_child_by_name('batterylevel').get_value()
+
 
 def get_time(camera_name: str) -> str:
     """ Returns the current time of the selected camera
@@ -235,6 +245,7 @@ def get_time(camera_name: str) -> str:
     camera.exit()
     return camera_time.isoformat(' ')
 
+
 def set_time(camera_name: str) -> None:
     """ Set the computer time on the selected camera """
 
@@ -251,6 +262,7 @@ def set_time(camera_name: str) -> None:
     # clean up
     camera.exit()
 
+
 def __set_datetime(config) -> bool:
     """ Private method to set the date and time of the camera. """
 
@@ -266,6 +278,7 @@ def __set_datetime(config) -> bool:
         return True
     return False
 
+
 def get_camera_overview():
     """ Returns a dictionary with information of the connected cameras.
 
@@ -274,7 +287,7 @@ def get_camera_overview():
 
     Returns: Dictionary with information of the connected cameras.
     """
-    
+
     camera_overview = {}
 
     camera_names = get_cameras()
@@ -288,6 +301,7 @@ def get_camera_overview():
         camera_overview[camera_name] = CameraInfo(camera_name, battery_level, free_space)
 
     return camera_overview
+
 
 class CameraInfo():
 
