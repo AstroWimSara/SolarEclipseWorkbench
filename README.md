@@ -17,9 +17,10 @@
 curl -sSL https://install.python-poetry.org | sed 's/symlinks=False/symlinks=True/' | python3 -
 ```
 
-- For modern Apple Mac computers (using Apple Silicon processors), install [homebrew](https://brew.sh/). Then install gphoto2 using homebrew:
+- For modern Apple Mac computers (using Apple Silicon processors), install [homebrew](https://brew.sh/). Add your homebrew/bin directory to your PATH. Then install gphoto2 using homebrew:
 
 ```bash
+export PATH=<location_of_homebrew_installation>/bin:$PATH
 brew install gphoto2
 ```
 
