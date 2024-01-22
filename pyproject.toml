@@ -14,6 +14,8 @@ astropy = "^6.0.0"
 geopandas = "^0.14.2"
 matplotlib = "^3.8.2"
 gphoto2 = "^2.5.0"
+apscheduler = "^3.10.4"
+geodatasets = "^2023.12.0"
 
 
 [build-system]
