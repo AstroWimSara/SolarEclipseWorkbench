@@ -137,7 +137,7 @@ def get_free_space(camera_name: str) -> str:
     """
 
     camera = get_camera(camera_name)
-    return str(round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)) + " gb"
+    return round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
 
 def get_space(camera_name: str) -> str:
     """ Return the size of the memory card of the selected camera 
@@ -149,7 +149,7 @@ def get_space(camera_name: str) -> str:
     """
 
     camera = get_camera(camera_name)
-    return str(round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)) + " gb"
+    return round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)
 
 def get_shooting_mode(camera_name: str) -> str:
     """ Return the shooting mode of the selected camera. Should be "Manual".
