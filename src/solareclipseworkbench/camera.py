@@ -76,7 +76,7 @@ def take_picture(camera_name: str, camera_settings: CameraSettings, description:
 def get_cameras() -> list:
     """ Returns a list with the cameras.
 
-    Returns: List with all the attached cameras.
+    Returns: List with all the attached cameras ([name, USB port]).
     """
 
     locale.setlocale(locale.LC_ALL, '')
@@ -131,8 +131,7 @@ def get_camera(camera_name: str):
     camera.init()
     return camera
 
-
-def get_free_space(camera_name: str) -> str:
+def get_free_space(camera_name: str) -> float:
     """ Return the free space on the card of the selected camera 
     
     Args: 
@@ -144,8 +143,7 @@ def get_free_space(camera_name: str) -> str:
     camera = get_camera(camera_name)
     return round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
 
-
-def get_space(camera_name: str) -> str:
+def get_space(camera_name: str) -> float:
     """ Return the size of the memory card of the selected camera 
     
     Args: 
@@ -294,11 +292,11 @@ def get_camera_overview():
 
     for camera_name in camera_names:
 
-        battery_level = get_battery_level(camera_name)
-        free_space = get_free_space(camera_name)
-        total_space = get_space(camera_name)
+        battery_level = get_battery_level(camera_name[0])
+        free_space = get_free_space(camera_name[0])
+        total_space = get_space(camera_name[0])
 
-        camera_overview[camera_name] = CameraInfo(camera_name, battery_level, free_space)
+        camera_overview[camera_name[0]] = CameraInfo(camera_name, battery_level, free_space, total_space)
 
     return camera_overview
 

@@ -9,7 +9,6 @@
 
 ## Problems with gphoto2
 
-- [ ] Does not install on apple silicon
 - [ ] Camera access only works when executing the command using `sudo`
 
 Hi,
