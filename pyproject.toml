@@ -16,6 +16,9 @@ matplotlib = "^3.8.2"
 gphoto2 = "^2.5.0"
 apscheduler = "^3.10.4"
 geodatasets = "^2023.12.0"
+sunpy = "^5.1.1"
+jplephem = "^2.21"
+scipy = "^1.12.0"
 
 
 [build-system]
