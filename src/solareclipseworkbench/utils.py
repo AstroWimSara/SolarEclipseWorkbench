@@ -1,7 +1,41 @@
+import logging
+from datetime import datetime, timedelta
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from solareclipseworkbench import voice_prompt, take_picture, read_reference_moments
+
 COMMANDS = {
     'voice_prompt': voice_prompt,
     'take_picture': take_picture
 }
+
+
+def observe_solar_eclipse(ref_moments_filename: str, commands_filename: str) -> BackgroundScheduler:
+    """ Observe (and photograph) the solar eclipse, as per given files.
+
+    Args:
+        - ref_moments_filename: Name of the file that specifies the timing of the reference moments (C1,..., C4, and
+                                maximum eclipse)
+        - commands_filename: Name of the configuration file that specifies which commands have to be executed at which
+                             moment during the solar eclipse
+
+    Returns: Scheduler that is used to schedule the commands.
+    """
+
+    scheduler = start_scheduler()
+
+    # Read timing of the reference moments
+
+    reference_moments = read_reference_moments(ref_moments_filename)
+
+    # Schedule commands
+
+    schedule_commands(commands_filename, scheduler, reference_moments)
+
+    return scheduler
+
+
 def start_scheduler():
     """ Start background scheduler and return it.
 
@@ -68,3 +102,4 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
                           second=execution_time.second)
 
     scheduler.add_job(func, trigger=trigger, args=args, name=description)
+    # eval(f"{func_name}({args})")
