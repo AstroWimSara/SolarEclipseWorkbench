@@ -3,6 +3,13 @@
 - https://github.com/quentinsf/pygarmin
 - https://stackoverflow.com/questions/75268690/using-astropy-to-generate-solar-eclipse-conditions-based-on-my-location
 
+## TODO
+
+- [ ] Duration of totality
+- [ ] Reference times should return DateTime
+- [ ] Notification should play a wav file (Linux does not know the 'say' command)
+- [ ] Attributions
+
 ## Extra things for the sound notification
 
 - [ ] Check Solar Eclipse Timer
