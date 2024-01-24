@@ -39,5 +39,12 @@ poetry shell
 ```
 
 - There is a problem with gphoto2.  On macOS, Solar Eclipse Workbench needs to be started with sudo rights to be able to connect to the cameras.
-
 - The first time you run Solar Eclipse Workbench, some ephemerid files are downloaded from the JPL website.  Make sure to do this before eclipse day!
+
+## Image attributions
+
+### GUI icons
+-  <a href="https://www.flaticon.com/free-icons/map" title="map icons">Map icons created by Freepik - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/clock" title="clock icons">Clock icons created by Freepik - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/camera" title="camera icons">Camera icons created by Freepik - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/calendar" title="calendar icons">Calendar icons created by Freepik - Flaticon</a>
