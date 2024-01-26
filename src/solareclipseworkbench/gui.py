@@ -279,8 +279,9 @@ class SolarEclipseController(Observer):
             return
 
         elif isinstance(changed_object, EclipsePopup):
-            print(changed_object.eclipse_combobox.currentText())
-            # self.model
+            eclipse_date = changed_object.eclipse_combobox.currentText()
+            self.model.eclipse_date = datetime.datetime.strptime(eclipse_date, DATE_FORMATS[self.view.date_format])
+
             self.view.eclipse_date.setText(changed_object.eclipse_combobox.currentText())
             return
 
@@ -288,16 +289,10 @@ class SolarEclipseController(Observer):
             return
 
         elif isinstance(changed_object, SettingsPopup):
-            print("Accepted date and time settings")
-            print(changed_object.date_combobox.currentText())
-
-            # TODO Update eclipse date
             date_format = changed_object.date_combobox.currentText()
-            # str -> datetime --> store this in the model
-
             self.view.date_format = date_format
-
-            return
+            if self.model.eclipse_date:
+                self.view.eclipse_date.setText(self.model.eclipse_date.strftime(DATE_FORMATS[date_format]))
 
             time_format = changed_object.time_combobox.currentText()
             self.view.time_format = time_format
