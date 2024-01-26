@@ -26,8 +26,10 @@ ECLIPSE_DATES = ["08/04/2024", "02/10/2024", "29/03/2025", "21/09/2025", "17/02/
                  "21/08/2036", "16/01/2037", "13/07/2037", "05/01/2038", "02/07/2038", "26/12/2038", "21/06/2039",
                  "15/12/2039", "11/05/2040", "04/11/2040", "30/04/2041", "25/10/2041", "20/04/2042", "14/10/2042",
                  "09/04/2043", "03/10/2043", "28/02/2044", "23/08/2044", "16/02/2045", "12/08/2045"]
-TIME_FORMATS = ["24 hours", "12 hours"]
-# DATE_FORMATS = ["dd Month yyyy", "dd/mm/yyyy", "mm/dd/yy"]
+
+TIME_FORMATS = {
+    "24 hours": "%H:%M:%S",
+    "12 hours": "%I:%M:%S"}
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
     "dd/mm/yyyy": "%d/%m/%Y",
@@ -35,12 +37,11 @@ DATE_FORMATS = {
 }
 
 
-
 class SolarEclipseModel:
 
     def __init__(self):
 
-        self.eclipse_date = ""
+        self.eclipse_date: datetime.datetime = None
 
         self.local_time: datetime.datetime = None
         self.utc_time: datetime.datetime = None
@@ -81,6 +82,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.setWindowTitle("Solar Eclipse Workbench")
 
         self.date_format = list(DATE_FORMATS.keys())[0]
+        self.time_format = list(TIME_FORMATS.keys())[0]
 
         self.toolbar = None
 
@@ -101,9 +103,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.longitude_label = QLabel("dd.ddd")
         self.latitude_label = QLabel("dd.ddd")
         self.altitude_label = QLabel("m")
-
-
-        # self.time_format =
 
         self.init_ui()
 
@@ -230,11 +229,20 @@ class SolarEclipseView(QMainWindow, Observable):
     def update_time(self, current_time_local: datetime.datetime, current_time_utc: datetime.datetime):
 
         self.eclipse_date_label.setText(f"Eclipse date [{self.date_format}]")
+
         self.date_label.setText(f"Date [{self.date_format}]")
         self.date_label_local.setText(datetime.datetime.strftime(current_time_local, DATE_FORMATS[self.date_format])) # "%d/%m/%Y"))
-        self.time_label_local.setText(datetime.datetime.strftime(current_time_local, "%H:%M:%S"))
         self.date_label_utc.setText(datetime.datetime.strftime(current_time_utc, DATE_FORMATS[self.date_format]))
-        self.time_label_utc.setText(datetime.datetime.strftime(current_time_utc, "%H:%M:%S"))
+
+        suffix = ""
+        if self.time_format == "12 hours":
+            suffix = " am" if current_time_utc.hour < 12 else " pm"
+
+        self.time_label_local.setText(
+            f"{datetime.datetime.strftime(current_time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        self.time_label_utc.setText(
+            f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+
 
 class SolarEclipseController(Observer):
 
@@ -291,10 +299,10 @@ class SolarEclipseController(Observer):
 
             return
 
-        # if isinstance(changed_object, QComboBox):
+            time_format = changed_object.time_combobox.currentText()
+            self.view.time_format = time_format
 
-        #     print(changed_object.currentText())
-        #     return
+            return
 
         text = changed_object.text()
 
@@ -385,7 +393,6 @@ class EclipsePopup(QWidget, Observable):
         self.eclipse_combobox = QComboBox()
 
         date_format = DATE_FORMATS[observer.view.date_format]
-        print(date_format)
 
         formatted_eclipse_dates = []
 
@@ -445,7 +452,7 @@ class SettingsPopup(QWidget, Observable):
         layout.addWidget(self.date_combobox, 0, 1)
         layout.addWidget(QLabel("Time format"), 1, 0)
         self.time_combobox = QComboBox()
-        self.time_combobox.addItems(TIME_FORMATS)
+        self.time_combobox.addItems(TIME_FORMATS.keys())
         layout.addWidget(self.time_combobox, 1, 1)
 
         ok_button = QPushButton("OK")
