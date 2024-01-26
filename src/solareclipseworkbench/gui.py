@@ -443,6 +443,9 @@ class SettingsPopup(QWidget, Observable):
         self.time_combobox.addItems(TIME_FORMATS.keys())
         layout.addWidget(self.time_combobox, 1, 1)
 
+        self.date_combobox.setCurrentText(observer.view.date_format)
+        self.time_combobox.setCurrentText(observer.view.time_format)
+
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.accept_settings)
         cancel_button = QPushButton("Cancel")
