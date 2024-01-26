@@ -94,14 +94,14 @@ class SolarEclipseView(QMainWindow, Observable):
         self.reference_moments_widget = QWidget()
 
         self.date_label = QLabel(f"Date [{self.date_format}]")
-        self.date_label_local = QLabel("dd/mm/yyyy")
-        self.time_label_local = QLabel("hh:mm:ss.s")
-        self.date_label_utc = QLabel("dd/mm/yyyy")
-        self.time_label_utc = QLabel("hh:mm:ss.s")
+        self.date_label_local = QLabel()
+        self.time_label_local = QLabel()
+        self.date_label_utc = QLabel()
+        self.time_label_utc = QLabel()
 
-        self.longitude_label = QLabel("dd.ddd")
-        self.latitude_label = QLabel("dd.ddd")
-        self.altitude_label = QLabel("m")
+        self.longitude_label = QLabel()
+        self.latitude_label = QLabel()
+        self.altitude_label = QLabel()
 
         self.init_ui()
 
@@ -146,11 +146,11 @@ class SolarEclipseView(QMainWindow, Observable):
 
         location_group_box = QGroupBox()
         location_grid_layout = QGridLayout()
-        location_grid_layout.addWidget(QLabel("Longitude"), 0, 0)
+        location_grid_layout.addWidget(QLabel("Longitude [°]"), 0, 0)
         location_grid_layout.addWidget(self.longitude_label, 0, 1)
-        location_grid_layout.addWidget(QLabel("Latitude"), 1, 0)
+        location_grid_layout.addWidget(QLabel("Latitude [°]"), 1, 0)
         location_grid_layout.addWidget(self.latitude_label, 1, 1)
-        location_grid_layout.addWidget(QLabel("Altitude"), 2, 0)
+        location_grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
         location_grid_layout.addWidget(self.altitude_label, 2, 1)
         location_group_box.setLayout(location_grid_layout)
         vbox_left.addWidget(location_group_box)
