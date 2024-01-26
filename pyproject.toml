@@ -19,6 +19,9 @@ geodatasets = "^2023.12.0"
 sunpy = "^5.1.1"
 jplephem = "^2.21"
 scipy = "^1.12.0"
+gpsdclient = "^1.3.2"
+skyfield = "^1.47"
+skyfield-data = "^5.0.0"
 
 
 [build-system]
