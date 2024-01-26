@@ -408,6 +408,7 @@ class EclipsePopup(QWidget, Observable):
     def load_eclipse_date(self):
 
         self.notify_observers(self)
+        self.close()
 
 
 class ReferenceMomentsPopup(QWidget, Observable):
