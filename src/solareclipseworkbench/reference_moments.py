@@ -125,7 +125,7 @@ def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
     timings = {}
     alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunrise.utc_datetime()[0])
     sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt)
-    timings['rise'] = sunrise
+    timings['sunrise'] = sunrise
 
     if len(partial) > 0:
         start_partial, end_partial = times[partial[[0, -1]]]
@@ -157,17 +157,17 @@ def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
             max = ReferenceMomentInfo(max_time, az, alt)
             timings["MAX"] = max
         max_loc = location.get_itrs(Time(max_time, format="unix"))
-        timings["magnitude"] = sun.eclipse_amount(max_loc).value / 100
+        magnitude = sun.eclipse_amount(max_loc).value / 100
 
         alt, az = __calculate_alt_az(ts, earth, sunc, loc, end_partial.datetime)
         c4 = ReferenceMomentInfo(end_partial.datetime, az, alt)
         timings["C4"] = c4
 
     alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunset.utc_datetime()[0])
-    sunrise = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt)
-    timings['set'] = sunrise
+    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt)
+    timings['sunset'] = sunset
 
-    return timings
+    return timings, magnitude
 
 def __calculate_alt_az(ts, earth, sunc, loc, timing):
     astro = (earth + loc).at(ts.utc(timing.year, timing.month, timing.day, timing.hour, timing.minute, timing.second)).observe(sunc)
