@@ -6,13 +6,12 @@
 """
 import datetime
 import sys
-from enum import Enum
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer, QRect
 from PyQt6.QtGui import QIcon, QAction, QPainter
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QDateEdit
+    QGroupBox, QComboBox, QPushButton
 
 from solareclipseworkbench import camera
 from solareclipseworkbench.observer import Observer, Observable
@@ -400,12 +399,6 @@ class EclipsePopup(QWidget, Observable):
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.load_eclipse_date)
 
-        # ok_action = QAction("Confirm eclipse date", self)
-        # ok_action.setStatusTip("Confirm eclipse date")
-        # ok_action.setIcon(QIcon(str(ICON_PATH / "location.png")))
-        # ok_action.triggered.connect(self.on_toolbar_button_click)
-        # self.toolbar.addAction(ok_action)
-
         layout = QHBoxLayout()
 
         layout.addWidget(self.eclipse_combobox)
@@ -442,7 +435,6 @@ class SettingsPopup(QWidget, Observable):
         layout = QGridLayout()
         layout.addWidget(QLabel("Date format"), 0, 0)
         self.date_combobox = QComboBox()
-        # self.date_combobox.addItems(DATE_FORMATS)
         self.date_combobox.addItems(DATE_FORMATS.keys())
         layout.addWidget(self.date_combobox, 0, 1)
         layout.addWidget(QLabel("Time format"), 1, 0)
