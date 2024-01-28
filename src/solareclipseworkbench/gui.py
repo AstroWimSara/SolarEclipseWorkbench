@@ -301,15 +301,11 @@ class SolarEclipseController(Observer):
         text = changed_object.text()
 
         if text == "Location":
-            # TODO
-            print("Location")
             self.location_popup = LocationPopup(self)
             # self.location_popup.setGeometry(QRect(100, 100, 400, 200))
             self.location_popup.show()
 
         elif text == "Date":
-            # TODO
-            print("Date")
             self.eclipse_popup = EclipsePopup(self)
             # eclipse_popup.setGeometry(QRect(100, 100, 400, 200))
             self.eclipse_popup.show()
