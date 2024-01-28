@@ -308,6 +308,9 @@ class SolarEclipseController(Observer):
         elif isinstance(changed_object, ReferenceMomentsPopup):
             return
 
+        elif isinstance(changed_object, CameraPopup):
+            return
+
         elif isinstance(changed_object, SettingsPopup):
             date_format = changed_object.date_combobox.currentText()
             self.view.date_format = date_format
@@ -340,6 +343,8 @@ class SolarEclipseController(Observer):
         elif text == "Camera(s)":
             # TODO
             print("Camera(s)")
+            self.camera_popup = CameraPopup(self)
+            self.camera_popup.show()
 
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
@@ -485,6 +490,15 @@ class ReferenceMomentsPopup(QWidget, Observable):
         dc = QPainter(self)
         dc.drawLine(0, 0, 100, 100)
         dc.drawLine(100, 0, 0, 100)
+
+
+class CameraPopup(QWidget, Observable):
+
+    def __init__(self, observer: SolarEclipseController):
+        QWidget.__init__(self)
+        self.setWindowTitle("Camera(s)")
+        self.setGeometry(QRect(100, 100, 300, 75))
+        self.add_observer(observer)
 
 
 class SettingsPopup(QWidget, Observable):
