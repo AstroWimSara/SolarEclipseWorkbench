@@ -6,24 +6,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def plot_current_location():
-    """ Plots the current location on the world map."""
-
-    longitude, latitude = get_current_location()
-    plot_location(longitude, latitude)
-
-
-def get_current_location() -> (float, float):
-    """ Returns the longitude and latitude of the current location.
-
-    Both coordinates are expressed in degrees.
-
-    Returns: (longitude, latitude) of the current location [degrees].
-    """
-
-    pass
-
-
 def plot_location(longitude: float, latitude: float):
     """ Plot the given location on the world map.
 
