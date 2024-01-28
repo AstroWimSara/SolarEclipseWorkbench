@@ -8,10 +8,15 @@ import datetime
 import sys
 from pathlib import Path
 
+import geopandas
+import pandas as pd
 from PyQt6.QtCore import QTimer, QRect
-from PyQt6.QtGui import QIcon, QAction, QPainter
+from PyQt6.QtGui import QIcon, QAction, QPainter, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton
+    QGroupBox, QComboBox, QPushButton, QLineEdit, QSizePolicy
+from geodatasets import get_path
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from solareclipseworkbench import camera
 from solareclipseworkbench.observer import Observer, Observable
@@ -255,8 +260,11 @@ class SolarEclipseController(Observer):
         self.view = view
         self.view.add_observer(self)
 
-        # self.date_format = "%d/%m/%Y"
-        # self.time_format = "%d/%m/%Y"
+        self.location_popup: LocationPopup = None
+        self.eclipse_popup: EclipsePopup = None
+        self.reference_moments_popup: ReferenceMomentsPopup = None
+        self.camera_popup: CameraPopup = None
+        self.settings_popup: SettingsPopup = None
 
         self.time_display_timer = QTimer()
         self.time_display_timer.timeout.connect(self.update_time)
