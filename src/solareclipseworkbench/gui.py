@@ -100,7 +100,10 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc = QLabel()
 
         self.longitude_label = QLabel()
+        self.longitude_label.setToolTip(
+            "Positive values: East of Greenwich meridian; Negative values: West of Greenwich meridian")
         self.latitude_label = QLabel()
+        self.latitude_label.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
         self.altitude_label = QLabel()
 
         self.init_ui()
@@ -274,7 +277,17 @@ class SolarEclipseController(Observer):
         pass
 
     def update(self, changed_object):
+
         if isinstance(changed_object, LocationPopup):
+            longitude = float(changed_object.longitude.text())
+            latitude = float(changed_object.latitude.text())
+            altitude = float(changed_object.altitude.text())
+
+            self.model.set_position(longitude, latitude, altitude)
+
+            self.view.longitude_label.setText(str(longitude))
+            self.view.latitude_label.setText(str(latitude))
+            self.view.altitude_label.setText(str(altitude))
             return
 
         elif isinstance(changed_object, EclipsePopup):
@@ -363,13 +376,58 @@ class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
         QWidget.__init__(self)
         self.setWindowTitle("Location")
-        self.setGeometry(QRect(100, 100, 400, 200))
+        self.setGeometry(QRect(100, 100, 1000, 800))
         self.add_observer(observer)
 
-    def paintEvent(self, e):
-        dc = QPainter(self)
-        dc.drawLine(0, 0, 100, 100)
-        dc.drawLine(100, 0, 0, 100)
+        layout = QVBoxLayout()
+
+        grid_layout = QGridLayout()
+        grid_layout.addWidget(QLabel("Longitude [°]"), 0, 0)
+        self.longitude = QLineEdit()
+        longitude_validator = QDoubleValidator()
+        longitude_validator.setRange(-180, 180, 5)
+        self.longitude.setValidator(longitude_validator)
+        self.longitude.setToolTip("Positive values: East of Greenwich meridian; "
+                                  "Negative values: West of Greenwich meridian")
+        grid_layout.addWidget(self.longitude, 0, 1)
+
+        grid_layout.addWidget(QLabel("Latitude [°]"), 1, 0)
+        self.latitude = QLineEdit()
+        latitude_validator = QDoubleValidator()
+        latitude_validator.setRange(-90, 90, 5)
+        self.latitude.setValidator(latitude_validator)
+        self.latitude.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
+        grid_layout.addWidget(self.latitude, 1, 1)
+
+        grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
+        self.altitude = QLineEdit()
+        altitude_validator = QDoubleValidator()
+        self.altitude.setValidator(altitude_validator)
+        grid_layout.addWidget(self.altitude, 2, 1)
+        layout.addLayout(grid_layout)
+
+        plot_button = QPushButton("Plot")
+        plot_button.clicked.connect(self.plot_location)
+        plot_button.setFixedWidth(100)
+        layout.addWidget(plot_button)
+
+        self.location_plot = LocationPlot()
+        layout.addWidget(self.location_plot)
+
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept_location)
+        ok_button.setFixedWidth(100)
+        layout.addWidget(ok_button)
+
+        self.setLayout(layout)
+
+    def plot_location(self):
+        print("Plotting location...")
+        self.location_plot.plot_location(longitude=float(self.longitude.text()), latitude=float(self.latitude.text()))
+
+    def accept_location(self):
+        self.notify_observers(self)
+        self.close()
 
 
 class EclipsePopup(QWidget, Observable):
@@ -457,6 +515,49 @@ class SettingsPopup(QWidget, Observable):
 
     def cancel_settings(self):
         self.close()
+
+
+class LocationPlot(FigureCanvas):
+    """ Display the world with the selected location overplotted in red."""
+
+    def __init__(self, parent=None, dpi=100):
+        self.figure = Figure(dpi=dpi)
+        self.ax = self.figure.add_subplot(111, aspect='equal')
+
+        FigureCanvas.__init__(self, self.figure)
+        self.setParent(parent)
+
+        FigureCanvas.updateGeometry(self)
+
+        self.location_is_drawn = False
+        self.location = None
+        self.gdf = None
+
+        world = geopandas.read_file(get_path("naturalearth.land"))
+        # Crop -> min longitude, min latitude, max longitude, max latitude
+        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)     # TODO
+        self.draw()
+
+    def plot_location(self, longitude: float, latitude: float):
+
+        if self.location_is_drawn:
+            self.gdf.plot(ax=self.ax, color="white")    # TODO
+        #     self.location.
+        #     self.location.remove()
+        #     print("Remove previous location")
+        #     self.ax.lines[-1].remove()
+
+        df = pd.DataFrame(
+            {
+                "Latitude": [latitude],
+                "Longitude": [longitude],
+            }
+        )
+        self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude), crs="EPSG:4326")
+        self.gdf.plot(ax=self.ax, color="red")
+
+        self.draw()
+        self.location_is_drawn = True
 
 
 if __name__ == "__main__":
