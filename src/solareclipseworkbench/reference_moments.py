@@ -73,7 +73,7 @@ def read_reference_moments(
     return reference_moments
 
 
-def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
+def calculate_reference_moments(longitude: float, latitude: float, altitude: float, time: Time) -> dict:
     """ Calculate the reference moments of the solar eclipse and return as a dictionary.
 
     The reference moments of a solar eclipse are the following:
@@ -87,11 +87,15 @@ def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
         - sunset: Moment of sun set.
 
     Args:
-        - location: Location of the observer (longitude [°], latitude [°], elevation [m])
+        - longitude: Longitude of the location [degrees]
+        - latitude: Latitude of the location [degrees]
+        - altitude: Altitude of the location [m]
         - time: Date of the eclipse [yyyy-mm-dd]
 
     Returns: Dictionary with the reference moments of the solar eclipse, as datetime objects.
     """
+
+    location = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=altitude * u.m)
 
     time_start = __calc_time_start(
         location=location,
@@ -250,10 +254,10 @@ def __distance_contact(location: EarthLocation, time: Time) -> u.Quantity:
 
 def main():
     # Example
-    location = EarthLocation(lat=24.01491 * u.deg, lon=-104.63525 * u.deg, height=1877.3 * u.m)
+    # location = EarthLocation(lat=24.01491 * u.deg, lon=-104.63525 * u.deg, height=1877.3 * u.m)
     eclipse_date = Time('2024-04-08')
-    ref_moments = calculate_reference_moments(location, eclipse_date)
-    print (ref_moments)
+    timings, magnitude = calculate_reference_moments(-104.63525, 24.01491, 1877.3, eclipse_date)
+    print(timings)
 
 
 if __name__ == "__main__":
