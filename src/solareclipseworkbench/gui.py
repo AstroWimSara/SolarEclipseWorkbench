@@ -14,12 +14,14 @@ from PyQt6.QtCore import QTimer, QRect
 from PyQt6.QtGui import QIcon, QAction, QPainter, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
     QGroupBox, QComboBox, QPushButton, QLineEdit, QSizePolicy
+from astropy.time import Time
 from geodatasets import get_path
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from solareclipseworkbench import camera
 from solareclipseworkbench.observer import Observer, Observable
+from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
 ICON_PATH = Path(__file__).parent.resolve() / ".." / ".." / "img"
 
@@ -54,19 +56,42 @@ class SolarEclipseModel:
         self.latitude: float = None
         self.altitude: float = None
 
-        self.reference_moments: dict = None
+        # self.reference_moments: dict = None
+        self.c1_info: ReferenceMomentInfo = None
+        self.c2_info: ReferenceMomentInfo = None
+        self.max_info: ReferenceMomentInfo = None
+        self.c3_info: ReferenceMomentInfo = None
+        self.c4_info: ReferenceMomentInfo = None
+        self.sunrise_info: ReferenceMomentInfo = None
+        self.sunset_info: ReferenceMomentInfo = None
 
         self.camera_overview: dict = None
 
     def set_position(self, longitude: float, latitude: float, altitude: float):
-
         self.longitude = longitude
         self.latitude = latitude
         self.altitude = altitude
 
-    def set_reference_moments(self, reference_moments: dict):
+        self.is_location_set = True
 
-        self.reference_moments = reference_moments
+    def set_eclipse_date(self, eclipse_date: datetime.datetime):
+        self.eclipse_date = eclipse_date
+
+        self.is_eclipse_date_set = True
+
+    def get_reference_moments(self):
+
+        reference_moments, _ = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
+                                                           self.eclipse_date)
+        self.c1_info = reference_moments["C1"]
+        self.c2_info = reference_moments["C2"]
+        self.max_info = reference_moments["MAX"]
+        self.c3_info = reference_moments["C3"]
+        self.c4_info = reference_moments["C4"]
+        self.sunrise_info = reference_moments["sunrise"]
+        self.sunset_info = reference_moments["sunset"]
+
+        return reference_moments
 
     def set_camera_overview(self):
 
@@ -97,6 +122,30 @@ class SolarEclipseView(QMainWindow, Observable):
         self.eclipse_date = QLabel(f"")
 
         self.reference_moments_widget = QWidget()
+        self.c1_time_local_label = QLabel()
+        self.c2_time_local_label = QLabel()
+        self.max_time_local_label = QLabel()
+        self.c3_time_local_label = QLabel()
+        self.c4_time_local_label = QLabel()
+        self.sunrise_time_local_label = QLabel()
+        self.sunset_time_local_label = QLabel()
+        self.c1_time_utc_label = QLabel()
+        self.c2_time_utc_label = QLabel()
+        self.max_time_utc_label = QLabel()
+        self.c3_time_utc_label = QLabel()
+        self.c4_time_utc_label = QLabel()
+        self.sunrise_time_utc_label = QLabel()
+        self.sunset_time_utc_label = QLabel()
+        self.c1_azimuth_label = QLabel()
+        self.c2_azimuth_label = QLabel()
+        self.max_azimuth_label = QLabel()
+        self.c3_azimuth_label = QLabel()
+        self.c4_azimuth_label = QLabel()
+        self.c1_altitude_label = QLabel()
+        self.c2_altitude_label = QLabel()
+        self.max_altitude_label = QLabel()
+        self.c3_altitude_label = QLabel()
+        self.c4_altitude_label = QLabel()
 
         self.date_label = QLabel(f"Date [{self.date_format}]")
         self.date_label_local = QLabel()
@@ -163,11 +212,45 @@ class SolarEclipseView(QMainWindow, Observable):
         location_group_box.setLayout(location_grid_layout)
         vbox_left.addWidget(location_group_box)
 
+        eclipse_date_group_box = QGroupBox()
+        eclipse_date_grid_layout = QGridLayout()
+        eclipse_date_grid_layout.addWidget(self.eclipse_date_label, 0, 0)
+        eclipse_date_grid_layout.addWidget(self.eclipse_date, 0, 1)
+
+        eclipse_date_group_box.setLayout(eclipse_date_grid_layout)
+        vbox_left.addWidget(eclipse_date_group_box)
+
         reference_moments_group_box = QGroupBox()
         reference_moments_grid_layout = QGridLayout()
         reference_moments_grid_layout.addWidget(QLabel("Time (local)"), 0, 1)
+        reference_moments_grid_layout.addWidget(self.c1_time_local_label, 1, 1)
+        reference_moments_grid_layout.addWidget(self.c2_time_local_label, 2, 1)
+        reference_moments_grid_layout.addWidget(self.max_time_local_label, 3, 1)
+        reference_moments_grid_layout.addWidget(self.c3_time_local_label, 4, 1)
+        reference_moments_grid_layout.addWidget(self.c4_time_local_label, 5, 1)
+        reference_moments_grid_layout.addWidget(self.sunrise_time_local_label, 6, 1)
+        reference_moments_grid_layout.addWidget(self.sunset_time_local_label, 7, 1)
         reference_moments_grid_layout.addWidget(QLabel("Time (UTC)"), 0, 2)
+        reference_moments_grid_layout.addWidget(self.c1_time_utc_label, 1, 2)
+        reference_moments_grid_layout.addWidget(self.c2_time_utc_label, 2, 2)
+        reference_moments_grid_layout.addWidget(self.max_time_utc_label, 3, 2)
+        reference_moments_grid_layout.addWidget(self.c3_time_utc_label, 4, 2)
+        reference_moments_grid_layout.addWidget(self.c4_time_utc_label, 5, 2)
+        reference_moments_grid_layout.addWidget(self.sunrise_time_utc_label, 6, 2)
+        reference_moments_grid_layout.addWidget(self.sunset_time_utc_label, 7, 2)
         reference_moments_grid_layout.addWidget(QLabel("Countdown"), 0, 3)
+        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]"), 0, 4)
+        reference_moments_grid_layout.addWidget(self.c1_azimuth_label, 1, 4)
+        reference_moments_grid_layout.addWidget(self.c2_azimuth_label, 2, 4)
+        reference_moments_grid_layout.addWidget(self.max_azimuth_label, 3, 4)
+        reference_moments_grid_layout.addWidget(self.c3_azimuth_label, 4, 4)
+        reference_moments_grid_layout.addWidget(self.c4_azimuth_label, 5, 4)
+        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]"), 0, 5)
+        reference_moments_grid_layout.addWidget(self.c1_altitude_label, 1, 5)
+        reference_moments_grid_layout.addWidget(self.c2_altitude_label, 2, 5)
+        reference_moments_grid_layout.addWidget(self.max_altitude_label, 3, 5)
+        reference_moments_grid_layout.addWidget(self.c3_altitude_label, 4, 5)
+        reference_moments_grid_layout.addWidget(self.c4_altitude_label, 5, 5)
         reference_moments_grid_layout.addWidget(QLabel("First contact (C1)"), 1, 0)
         reference_moments_grid_layout.addWidget(QLabel("Second contact (C2)"), 2, 0)
         reference_moments_grid_layout.addWidget(QLabel("Maximum eclipse"), 3, 0)
@@ -250,6 +333,80 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc.setText(
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
+    def show_reference_moments(self, reference_moments: dict):
+        suffix = ""
+        # if self.time_format == "12 hours":
+        #     suffix = " am" if current_time_utc.hour < 12 else " pm"
+
+        # self.time_label_local.setText(
+        #     f"{datetime.datetime.strftime(current_time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        # self.time_label_utc.setText(
+        #     f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+
+        # First contact
+
+        c1_info: ReferenceMomentInfo = reference_moments["C1"]
+        self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c1_time_local_label.setText(
+            f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
+        self.c1_altitude_label.setText(str(int(c1_info.altitude)))
+
+        # Second contact
+
+        c2_info: ReferenceMomentInfo = reference_moments["C2"]
+        self.c2_time_utc_label.setText(
+            f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c2_time_local_label.setText(
+            f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
+        self.c2_altitude_label.setText(str(int(c2_info.altitude)))
+
+        # Maximum eclipse
+
+        max_info: ReferenceMomentInfo = reference_moments["MAX"]
+        self.max_time_utc_label.setText(
+            f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.max_time_local_label.setText(
+            f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        self.max_azimuth_label.setText(str(int(max_info.azimuth)))
+        self.max_altitude_label.setText(str(int(max_info.altitude)))
+
+        # Third contact
+
+        c3_info: ReferenceMomentInfo = reference_moments["C3"]
+        self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c3_time_local_label.setText(
+            f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
+        self.c3_altitude_label.setText(str(int(c3_info.altitude)))
+
+        # Fourth contact
+
+        c4_info: ReferenceMomentInfo = reference_moments["C4"]
+        self.c4_time_utc_label.setText(
+            f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c4_time_local_label.setText(
+            f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
+        self.c4_altitude_label.setText(str(int(c4_info.altitude)))
+
+        # Sunrise
+
+        sunrise_info: ReferenceMomentInfo = reference_moments["sunrise"]
+        self.sunrise_time_utc_label.setText(
+            f"{datetime.datetime.strftime(sunrise_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.sunrise_time_local_label.setText(
+            f"{datetime.datetime.strftime(sunrise_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+
+        # Sunset
+
+        sunset_info: ReferenceMomentInfo = reference_moments["sunset"]
+        self.sunset_time_utc_label.setText(
+            f"{datetime.datetime.strftime(sunset_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        self.sunset_time_local_label.setText(
+            f"{datetime.datetime.strftime(sunrise_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+
 
 class SolarEclipseController(Observer):
 
@@ -320,6 +477,62 @@ class SolarEclipseController(Observer):
             time_format = changed_object.time_combobox.currentText()
             self.view.time_format = time_format
 
+            if self.model.c1_info:
+                c1_time_utc = self.model.c1_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_utc.hour < 12 else " pm"
+                self.view.c1_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(c1_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
+            if self.model.c2_info:
+                c2_time_utc = self.model.c2_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if c2_time_utc.hour < 12 else " pm"
+                self.view.c2_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(c2_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
+            if self.model.max_info:
+                max_time_utc = self.model.max_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if max_time_utc.hour < 12 else " pm"
+                self.view.max_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(max_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
+            if self.model.c3_info:
+                c3_time_utc = self.model.c3_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if c3_time_utc.hour < 12 else " pm"
+                self.view.c3_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(c3_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
+            if self.model.c4_info:
+                c4_time_utc = self.model.c4_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if c4_time_utc.hour < 12 else " pm"
+                self.view.c4_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(c4_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
+            if self.model.sunrise_info:
+                sunrise_time_utc = self.model.sunrise_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if sunrise_time_utc.hour < 12 else " pm"
+                self.view.sunrise_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(sunrise_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
+            if self.model.sunset_info:
+                sunset_time_utc = self.model.sunset_info.time_utc
+                suffix = ""
+                if time_format == "12 hours":
+                    suffix = " am" if sunset_time_utc.hour < 12 else " pm"
+                self.view.sunset_time_utc_label.setText(
+                    f"{datetime.datetime.strftime(sunset_time_utc, TIME_FORMATS[time_format])}{suffix}")
+
             return
 
         text = changed_object.text()
@@ -335,10 +548,9 @@ class SolarEclipseController(Observer):
             self.eclipse_popup.show()
 
         elif text == "Reference moments":
-            # TODO
-            print("Reference moments")
-            self.reference_moments_popup = ReferenceMomentsPopup(self)
-            self.reference_moments_popup.show()
+            if self.model.is_location_set and self.model.is_eclipse_date_set:
+                reference_moments = self.model.get_reference_moments()
+                self.view.show_reference_moments(reference_moments)
 
         elif text == "Camera(s)":
             # TODO
