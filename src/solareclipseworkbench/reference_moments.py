@@ -35,9 +35,15 @@ class ReferenceMomentInfo:
             - altitude: Altitude of the sun at this time.
         """
 
-        self.time = time
-        self.azimuth = azimuth
-        self.altitude = altitude
+        self.time_utc = time_utc
+        self.time_utc.replace(tzinfo=pytz.UTC)
+        # TODO Check conversion UTC <-> local
+        timezone = datetime.now().astimezone().tzinfo
+        self.time_local = self.time_utc.astimezone(timezone)
+
+        self.azimuth = azimuth.degrees
+        self.altitude = altitude.degrees
+
 
 def read_reference_moments(
         filename="/Users/sara/private/solareclipseworkbench/softwareDevelopment/solareclipseworkbench/config/reference_moments.yaml") -> dict:
