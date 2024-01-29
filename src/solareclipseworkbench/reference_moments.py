@@ -10,6 +10,7 @@ Reference moments of a solar eclipse:
 from datetime import datetime
 from pathlib import Path
 
+import pytz
 from astropy.coordinates import EarthLocation
 from astropy.time import Time
 import numpy as np
@@ -25,11 +26,11 @@ import yaml
 
 class ReferenceMomentInfo:
 
-    def __init__(self, time: datetime, azimuth: Angle, altitude: Angle):
+    def __init__(self, time_utc: datetime, azimuth: Angle, altitude: Angle):
         """ Keep information for the reference moments.
 
         Args:
-            - time: Time of the reference moment.
+            - time_utc: Time of the reference moment [UTC]
             - azimuth: Azimuth of the sun at this time.
             - altitude: Altitude of the sun at this time.
         """
