@@ -47,7 +47,10 @@ class SolarEclipseModel:
 
     def __init__(self):
 
-        self.eclipse_date: datetime.datetime = None
+        self.is_location_set = False
+        self.is_eclipse_date_set = False
+
+        self.eclipse_date: Time = None
 
         self.local_time: datetime.datetime = None
         self.utc_time: datetime.datetime = None
@@ -170,14 +173,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.add_toolbar()
 
         vbox_left = QVBoxLayout()
-
-        eclipse_date_group_box = QGroupBox()
-        eclipse_date_grid_layout = QGridLayout()
-        eclipse_date_grid_layout.addWidget(self.eclipse_date_label, 0, 0)
-        eclipse_date_grid_layout.addWidget(self.eclipse_date, 0, 1)
-
-        eclipse_date_group_box.setLayout(eclipse_date_grid_layout)
-        vbox_left.addWidget(eclipse_date_group_box)
 
         place_time_group_box = QGroupBox()
         place_time_grid_layout = QGridLayout()
@@ -419,7 +414,6 @@ class SolarEclipseController(Observer):
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
-        self.reference_moments_popup: ReferenceMomentsPopup = None
         self.camera_popup: CameraPopup = None
         self.settings_popup: SettingsPopup = None
 
@@ -457,12 +451,9 @@ class SolarEclipseController(Observer):
 
         elif isinstance(changed_object, EclipsePopup):
             eclipse_date = changed_object.eclipse_combobox.currentText()
-            self.model.eclipse_date = datetime.datetime.strptime(eclipse_date, DATE_FORMATS[self.view.date_format])
+            self.model.set_eclipse_date(Time(datetime.datetime.strptime(eclipse_date, DATE_FORMATS[self.view.date_format])))
 
             self.view.eclipse_date.setText(changed_object.eclipse_combobox.currentText())
-            return
-
-        elif isinstance(changed_object, ReferenceMomentsPopup):
             return
 
         elif isinstance(changed_object, CameraPopup):
@@ -660,7 +651,7 @@ class EclipsePopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
         QWidget.__init__(self)
         self.setWindowTitle("Eclipse date")
-        self.setGeometry(QRect(100, 100, 400, 200))
+        self.setGeometry(QRect(100, 100, 400, 75))
         self.add_observer(observer)
 
         self.eclipse_combobox = QComboBox()
