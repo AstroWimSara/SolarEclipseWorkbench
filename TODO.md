@@ -4,12 +4,8 @@
 
 ## TODO
 
-- [ ] Notification should play a wav file (Linux does not know the 'say' command)
+- [ ] Do we also need a command to update the camera status (free memory and battery status)?
 - [ ] Attributions
-
-## Extra things for the sound notification
-
-- [ ] Check Solar Eclipse Timer
 
 ## Problems with gphoto2
 
