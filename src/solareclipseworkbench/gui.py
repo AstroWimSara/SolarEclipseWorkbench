@@ -681,20 +681,6 @@ class EclipsePopup(QWidget, Observable):
         self.close()
 
 
-class ReferenceMomentsPopup(QWidget, Observable):
-
-    def __init__(self, observer: SolarEclipseController):
-        QWidget.__init__(self)
-        self.setWindowTitle("Reference Moments")
-        self.setGeometry(QRect(100, 100, 400, 200))
-        self.add_observer(observer)
-
-    def paintEvent(self, e):
-        dc = QPainter(self)
-        dc.drawLine(0, 0, 100, 100)
-        dc.drawLine(100, 0, 0, 100)
-
-
 class CameraPopup(QWidget, Observable):
 
     def __init__(self, observer: SolarEclipseController):
@@ -703,6 +689,24 @@ class CameraPopup(QWidget, Observable):
         self.setGeometry(QRect(100, 100, 300, 75))
         self.add_observer(observer)
 
+        layout = QHBoxLayout()
+
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self.refresh_camera_overview)
+
+        sync_button = QPushButton("Synchronise")
+        sync_button.clicked.connect(self.sync)
+
+        layout.addWidget(refresh_button)
+        layout.addWidget(sync_button)
+
+        self.setLayout(layout)
+
+    def refresh_camera_overview(self):
+        print("Refresh camera overview")
+
+    def sync(self):
+        print("Sync camera overview")
 
 class SettingsPopup(QWidget, Observable):
 
