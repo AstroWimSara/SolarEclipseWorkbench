@@ -98,6 +98,8 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
 
     location = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=altitude * u.m)
 
+    location = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=altitude * u.m)
+
     time_start = __calc_time_start(
         location=location,
         time_search_start=time,
@@ -255,7 +257,6 @@ def __distance_contact(location: EarthLocation, time: Time) -> u.Quantity:
 
 
 def main():
-    # Example
     eclipse_date = Time('2024-04-08')
     timings, magnitude = calculate_reference_moments(-104.63525, 24.01491, 1877.3, eclipse_date)
     print ("Magnitude: ", magnitude)
