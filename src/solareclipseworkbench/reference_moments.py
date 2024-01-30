@@ -35,11 +35,14 @@ class ReferenceMomentInfo:
             - altitude: Altitude of the sun at this time.
         """
 
+        utc_offset_timedelta = datetime.utcnow() - datetime.now()
+
         self.time_utc = time_utc
-        self.time_utc.replace(tzinfo=pytz.UTC)
         # TODO Check conversion UTC <-> local
-        timezone = datetime.now().astimezone().tzinfo
-        self.time_local = self.time_utc.astimezone(timezone)
+        # self.time_utc.replace(tzinfo=pytz.UTC)
+        # timezone = datetime.now().astimezone().tzinfo
+        # self.time_local = self.time_utc.astimezone(timezone)
+        self.time_local = self.time_utc - utc_offset_timedelta
 
         self.azimuth = azimuth.degrees
         self.altitude = altitude.degrees
