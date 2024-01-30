@@ -23,20 +23,21 @@ from skyfield.api import load, wgs84, Topos
 from skyfield.units import Angle
 import scipy
 import yaml
+from timezonefinder import TimezoneFinder
 
 class ReferenceMomentInfo:
 
-    def __init__(self, time_utc: datetime, azimuth: Angle, altitude: Angle):
+    def __init__(self, time_utc: datetime, azimuth: Angle, altitude: Angle, timezone: pytz.timezone):
         """ Keep information for the reference moments.
 
         Args:
             - time_utc: Time of the reference moment [UTC]
             - azimuth: Azimuth of the sun at this time.
             - altitude: Altitude of the sun at this time.
+            - timezone: Timezone for the local time
         """
 
         self.time_utc = time_utc
-        timezone = datetime.now().astimezone().tzinfo
         self.time_local = self.time_utc.astimezone(timezone)
 
         self.azimuth = azimuth.degrees
@@ -92,6 +93,8 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
 
     Returns: Dictionary with the reference moments of the solar eclipse, as datetime objects.
     """
+    tf = TimezoneFinder()
+    timezone = pytz.timezone(tf.timezone_at(lng=longitude, lat=latitude))
 
     location = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=altitude * u.m)
 
@@ -133,29 +136,29 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
     partial = np.flatnonzero(amount > 0)
     timings = {}
     alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunrise.utc_datetime()[0])
-    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt)
+    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt, timezone)
     timings['sunrise'] = sunrise
 
     if len(partial) > 0:
         start_partial, end_partial = times[partial[[0, -1]]]
         alt, az = __calculate_alt_az(ts, earth, sunc, loc, start_partial.datetime)
-        c1 = ReferenceMomentInfo(start_partial.datetime.replace(tzinfo=pytz.UTC), az, alt)
+        c1 = ReferenceMomentInfo(start_partial.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
         timings["C1"] = c1
 
         total = np.flatnonzero(amount_minimum == 1)
         if len(total) > 0:
             start_total, end_total = times[total[[0, -1]]]
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, start_total.datetime)
-            c2 = ReferenceMomentInfo(start_total.datetime.replace(tzinfo=pytz.UTC), az, alt)
+            c2 = ReferenceMomentInfo(start_total.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["C2"] = c2
 
             max_time = Time((start_total.unix + end_total.unix) / 2, format="unix").datetime
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, max_time)
-            max = ReferenceMomentInfo(max_time.replace(tzinfo=pytz.UTC), az, alt)
+            max = ReferenceMomentInfo(max_time.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["MAX"] = max
 
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, end_total.datetime)
-            c3 = ReferenceMomentInfo(end_total.datetime.replace(tzinfo=pytz.UTC), az, alt)
+            c3 = ReferenceMomentInfo(end_total.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["C3"] = c3
 
             timings["duration"] = (end_total - start_total).datetime
@@ -163,17 +166,17 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
         else:
             max_time = Time((start_partial.unix + end_partial.unix) / 2, format="unix").datetime
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, max_time)
-            max = ReferenceMomentInfo(max_time.replace(tzinfo=pytz.UTC), az, alt)
+            max = ReferenceMomentInfo(max_time.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["MAX"] = max
         max_loc = location.get_itrs(Time(max_time, format="unix"))
         magnitude = sun.eclipse_amount(max_loc).value / 100
 
         alt, az = __calculate_alt_az(ts, earth, sunc, loc, end_partial.datetime)
-        c4 = ReferenceMomentInfo(end_partial.datetime.replace(tzinfo=pytz.UTC), az, alt)
+        c4 = ReferenceMomentInfo(end_partial.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
         timings["C4"] = c4
 
     alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunset.utc_datetime()[0])
-    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt)
+    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt, timezone)
     timings['sunset'] = sunset
 
     return timings, magnitude
