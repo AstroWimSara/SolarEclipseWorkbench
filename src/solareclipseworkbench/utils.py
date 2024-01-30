@@ -93,9 +93,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
     delta = timedelta(hours=float(hours), minutes=float(minutes), seconds=float(seconds))
 
     if sign == "+":
-        execution_time = ref_moment + delta
+        execution_time = reference_moment + delta
     else:
-        execution_time = ref_moment - delta
+        execution_time = reference_moment - delta
 
     trigger = CronTrigger(year=execution_time.year, month=execution_time.month, day=execution_time.day,
                           hour=execution_time.hour, minute=execution_time.minute,
