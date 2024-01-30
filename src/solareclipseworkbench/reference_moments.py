@@ -10,6 +10,7 @@ Reference moments of a solar eclipse:
 from datetime import datetime
 from pathlib import Path
 
+import pytz
 from astropy.coordinates import EarthLocation
 from astropy.time import Time
 import numpy as np
@@ -22,21 +23,26 @@ from skyfield.api import load, wgs84, Topos
 from skyfield.units import Angle
 import scipy
 import yaml
+from timezonefinder import TimezoneFinder
 
 class ReferenceMomentInfo:
 
-    def __init__(self, time: datetime, azimuth: Angle, altitude: Angle):
+    def __init__(self, time_utc: datetime, azimuth: Angle, altitude: Angle, timezone: pytz.timezone):
         """ Keep information for the reference moments.
 
         Args:
-            - time: Time of the reference moment.
+            - time_utc: Time of the reference moment [UTC]
             - azimuth: Azimuth of the sun at this time.
             - altitude: Altitude of the sun at this time.
+            - timezone: Timezone for the local time
         """
 
-        self.time = time
-        self.azimuth = azimuth
-        self.altitude = altitude
+        self.time_utc = time_utc
+        self.time_local = self.time_utc.astimezone(timezone)
+
+        self.azimuth = azimuth.degrees
+        self.altitude = altitude.degrees
+
 
 def read_reference_moments(
         filename="/Users/sara/private/solareclipseworkbench/softwareDevelopment/solareclipseworkbench/config/reference_moments.yaml") -> dict:
@@ -66,7 +72,7 @@ def read_reference_moments(
     return reference_moments
 
 
-def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
+def calculate_reference_moments(longitude: float, latitude: float, altitude: float, time: Time) -> dict:
     """ Calculate the reference moments of the solar eclipse and return as a dictionary.
 
     The reference moments of a solar eclipse are the following:
@@ -80,20 +86,23 @@ def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
         - sunset: Moment of sun set.
 
     Args:
-        - location: Location of the observer (longitude [°], latitude [°], elevation [m])
+        - longitude: Longitude of the location [degrees]
+        - latitude: Latitude of the location [degrees]
+        - altitude: Altitude of the location [m]
         - time: Date of the eclipse [yyyy-mm-dd]
 
     Returns: Dictionary with the reference moments of the solar eclipse, as datetime objects.
     """
+    tf = TimezoneFinder()
+    timezone = pytz.timezone(tf.timezone_at(lng=longitude, lat=latitude))
+
+    location = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=altitude * u.m)
 
     time_start = __calc_time_start(
         location=location,
         time_search_start=time,
-        time_search_stop=time + 1,
+        time_search_stop=time + 1 * u.day,
     )
-
-    if time_start is None:
-        return {}
 
     eph = load("de421.bsp")
     ts = load.timescale()
@@ -109,6 +118,17 @@ def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
 
     sunrise, y = almanac.find_risings(observer, sunc, date, date + 1)
     sunset, y = almanac.find_settings(observer, sunc, date, date + 1)
+    timings = {}
+    alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunrise.utc_datetime()[0])
+    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt, timezone)
+    timings['sunrise'] = sunrise
+
+    alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunset.utc_datetime()[0])
+    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt, timezone)
+    timings['sunset'] = sunset
+
+    if time_start is None or time_start > sunset.time_utc:
+        return timings, 0
 
     # Define an array of observation times centered around the time of interest
     times = time_start + np.concatenate([np.arange(-200, 14400) * u.s])
@@ -122,50 +142,43 @@ def calculate_reference_moments(location: EarthLocation, time: Time) -> dict:
 
     # Calculate the start/end points of partial/total solar eclipse
     partial = np.flatnonzero(amount > 0)
-    timings = {}
-    alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunrise.utc_datetime()[0])
-    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt)
-    timings['sunrise'] = sunrise
 
     if len(partial) > 0:
         start_partial, end_partial = times[partial[[0, -1]]]
         alt, az = __calculate_alt_az(ts, earth, sunc, loc, start_partial.datetime)
-        c1 = ReferenceMomentInfo(start_partial.datetime, az, alt)
+        c1 = ReferenceMomentInfo(start_partial.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
         timings["C1"] = c1
 
         total = np.flatnonzero(amount_minimum == 1)
         if len(total) > 0:
             start_total, end_total = times[total[[0, -1]]]
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, start_total.datetime)
-            c2 = ReferenceMomentInfo(start_total.datetime, az, alt)
+            c2 = ReferenceMomentInfo(start_total.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["C2"] = c2
 
             max_time = Time((start_total.unix + end_total.unix) / 2, format="unix").datetime
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, max_time)
-            max = ReferenceMomentInfo(max_time, az, alt)
+            max = ReferenceMomentInfo(max_time.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["MAX"] = max
 
             alt, az = __calculate_alt_az(ts, earth, sunc, loc, end_total.datetime)
-            c3 = ReferenceMomentInfo(end_total.datetime, az, alt)
+            c3 = ReferenceMomentInfo(end_total.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["C3"] = c3
 
             timings["duration"] = (end_total - start_total).datetime
             max_time = (start_total.unix + end_total.unix) / 2
         else:
-            max_time = Time((start_partial.unix + end_partial.unix) / 2, format="unix").datetime
-            alt, az = __calculate_alt_az(ts, earth, sunc, loc, max_time)
-            max = ReferenceMomentInfo(max_time, az, alt)
+            max_time = Time((start_partial.unix + end_partial.unix) / 2, format="unix")
+            alt, az = __calculate_alt_az(ts, earth, sunc, loc, max_time.datetime)
+            max = ReferenceMomentInfo(max_time.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
             timings["MAX"] = max
+
         max_loc = location.get_itrs(Time(max_time, format="unix"))
         magnitude = sun.eclipse_amount(max_loc).value / 100
 
         alt, az = __calculate_alt_az(ts, earth, sunc, loc, end_partial.datetime)
-        c4 = ReferenceMomentInfo(end_partial.datetime, az, alt)
+        c4 = ReferenceMomentInfo(end_partial.datetime.replace(tzinfo=pytz.UTC), az, alt, timezone)
         timings["C4"] = c4
-
-    alt, az = __calculate_alt_az(ts, earth, sunc, loc, sunset.utc_datetime()[0])
-    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt)
-    timings['sunset'] = sunset
 
     return timings, magnitude
 
@@ -191,7 +204,7 @@ def __calc_time_start(location: EarthLocation, time_search_start: Time, time_sea
 
     # If we're only looking for a partial eclipse, we can accept a coarser search grid
     step = 1 * u.hr
-
+    
     # Define a grid of times to search for eclipses
     time = Time(np.arange(time_search_start, time_search_stop, step=step))
 
@@ -243,10 +256,17 @@ def __distance_contact(location: EarthLocation, time: Time) -> u.Quantity:
 
 def main():
     # Example
-    location = EarthLocation(lat=24.01491 * u.deg, lon=-104.63525 * u.deg, height=1877.3 * u.m)
     eclipse_date = Time('2024-04-08')
-    ref_moments = calculate_reference_moments(location, eclipse_date)
-    print (ref_moments)
+    timings, magnitude = calculate_reference_moments(-104.63525, 24.01491, 1877.3, eclipse_date)
+    print ("Magnitude: ", magnitude)
+    print ("")
+    print("{:<10} {:<25} {:<25} {:<25} {:<25}".format("Moment", "UTC", "Local time", "Azimuth", "Altitude"))
+    print ("------------------------------------------------------------------------------------------------------------")
+    for key, value in timings.items():
+        if value.__class__ == ReferenceMomentInfo:
+             print("{:<10} {:<25} {:<25} {:<25} {:<25}".format(key, value.time_utc.strftime("%m/%d/%Y %H:%M:%S"), value.time_local.strftime("%m/%d/%Y %H:%M:%S"), value.azimuth, value.altitude))
+        else:
+             print("{:<10} {:<25}".format(key, str(value)))
 
 
 if __name__ == "__main__":
