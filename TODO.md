@@ -5,7 +5,6 @@
 ## TODO
 
 - [ ] Do we also need a command to update the camera status (free memory and battery status)?
-- [ ] Attributions
 
 ## Problems with gphoto2
 
