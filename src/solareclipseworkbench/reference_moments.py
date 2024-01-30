@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytz
 from astropy.coordinates import EarthLocation
-from astropy.time import Time
+from astropy.time import Time, TimeDelta
 import numpy as np
 import astropy.units as u
 from astropy import coordinates, constants
@@ -205,10 +205,10 @@ def __calc_time_start(location: EarthLocation, time_search_start: Time, time_sea
     solar_system_ephemeris.set("de432s")
 
     # If we're only looking for a partial eclipse, we can accept a coarser search grid
-    step = 1 * u.hr
+    step = TimeDelta(1 * u.hr)
     
     # Define a grid of times to search for eclipses
-    time = Time(np.arange(time_search_start, time_search_stop, step=step))
+    time = Time(np.arange(time_search_start.jd, time_search_stop.jd, step.to_value(u.day)), format='jd')
 
     # Find the times that are during an eclipse
     mask_eclipse = __distance_contact(location=location, time=time) < 0
