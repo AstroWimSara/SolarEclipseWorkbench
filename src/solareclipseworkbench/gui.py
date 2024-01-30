@@ -400,7 +400,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.sunset_time_utc_label.setText(
             f"{datetime.datetime.strftime(sunset_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
         self.sunset_time_local_label.setText(
-            f"{datetime.datetime.strftime(sunrise_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            f"{datetime.datetime.strftime(sunset_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
 
 
 class SolarEclipseController(Observer):
