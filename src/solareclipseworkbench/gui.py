@@ -20,6 +20,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from solareclipseworkbench import camera
+from solareclipseworkbench.camera import get_camera_overview
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
@@ -116,9 +117,9 @@ class SolarEclipseModel:
 
         return reference_moments, magnitude
 
-    def set_camera_overview(self):
+    def set_camera_overview(self, camera_overview: dict):
 
-        camera_overview = camera.get_camera_overview()
+        self.camera_overview = camera_overview
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -273,9 +274,15 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(QLabel("Sunset"), 7, 0)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
 
+        camera_overview_group_box = QGroupBox()
+        camera_overview_grid_layout = QGridLayout()
+        camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
+        camera_overview_group_box.setLayout(camera_overview_grid_layout)
+
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addWidget(reference_moments_group_box)
+        hbox.addWidget(camera_overview_group_box)
 
         app_frame.setLayout(hbox)
 
@@ -506,6 +513,8 @@ class SolarEclipseController(Observer):
             return
 
         elif isinstance(changed_object, CameraPopup):
+            camera_overview = changed_object.camera_overview
+            self.model.set_camera_overview(camera_overview)
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -718,6 +727,8 @@ class CameraPopup(QWidget, Observable):
         self.setGeometry(QRect(100, 100, 300, 75))
         self.add_observer(observer)
 
+        self.camera_overview = get_camera_overview()
+
         layout = QHBoxLayout()
 
         refresh_button = QPushButton("Refresh")
@@ -726,16 +737,27 @@ class CameraPopup(QWidget, Observable):
         sync_button = QPushButton("Synchronise")
         sync_button.clicked.connect(self.sync)
 
+        ok_button = QPushButton("OK")
+        sync_button.clicked.connect(self.close)
+
         layout.addWidget(refresh_button)
         layout.addWidget(sync_button)
+        layout.addWidget(ok_button)
 
         self.setLayout(layout)
 
     def refresh_camera_overview(self):
         print("Refresh camera overview")
 
+        self.camera_overview: dict = get_camera_overview()
+        self.notify_observers(self)
+
+        self.close()
+
     def sync(self):
         print("Sync camera overview")
+        self.close()
+
 
 class SettingsPopup(QWidget, Observable):
 
