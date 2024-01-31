@@ -346,10 +346,14 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc.setText(
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
-    def show_reference_moments(self, reference_moments: dict):
-        suffix = ""
-        # if self.time_format == "12 hours":
-        #     suffix = " am" if current_time_utc.hour < 12 else " pm"
+    def show_reference_moments(self, reference_moments: dict, magnitude: float):
+
+        if magnitude == 0:
+            self.eclipse_type.setText("No eclipse")
+        elif magnitude == 1:
+            self.eclipse_type.setText("Total eclipse")
+        else:
+            self.eclipse_type.setText(f"Partial eclipse (magnitude: {round(magnitude, 2)})")
 
         suffix = ""
 
