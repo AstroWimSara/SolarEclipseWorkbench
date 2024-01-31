@@ -84,17 +84,37 @@ class SolarEclipseModel:
 
     def get_reference_moments(self):
 
-        reference_moments, _ = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
-                                                           self.eclipse_date)
-        self.c1_info = reference_moments["C1"]
-        self.c2_info = reference_moments["C2"]
-        self.max_info = reference_moments["MAX"]
-        self.c3_info = reference_moments["C3"]
-        self.c4_info = reference_moments["C4"]
+        reference_moments, magnitude = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
+                                                                   self.eclipse_date)
+
+        # No eclipse
+
+        if magnitude == 0:
+            self.c1_info = None
+            self.c2_info = None
+            self.max_info = None
+            self.c3_info = None
+            self.c4_info = None
+
+        # Partial / total eclipse
+
+        elif magnitude > 0:
+            self.c1_info = reference_moments["C1"]
+            self.c2_info = None
+            self.max_info = reference_moments["MAX"]
+            self.c3_info = None
+            self.c4_info = reference_moments["C4"]
+
+        # Total eclipse
+
+        if magnitude == 1:
+            self.c2_info = reference_moments["C2"]
+            self.c3_info = reference_moments["C3"]
+
         self.sunrise_info = reference_moments["sunrise"]
         self.sunset_info = reference_moments["sunset"]
 
-        return reference_moments
+        return reference_moments, magnitude
 
     def set_camera_overview(self):
 
@@ -337,54 +357,85 @@ class SolarEclipseView(QMainWindow, Observable):
         #     f"{datetime.datetime.strftime(current_time_local, TIME_FORMATS[self.time_format])}{suffix}")
         # self.time_label_utc.setText(
         #     f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        suffix = ""
 
         # First contact
 
-        c1_info: ReferenceMomentInfo = reference_moments["C1"]
-        self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c1_time_local_label.setText(
-            f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
-        self.c1_altitude_label.setText(str(int(c1_info.altitude)))
+        if "C1" in reference_moments:
+            c1_info: ReferenceMomentInfo = reference_moments["C1"]
+            self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c1_time_local_label.setText(
+                f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
+            self.c1_altitude_label.setText(str(int(c1_info.altitude)))
+        else:
+            self.c1_time_utc_label.setText("")
+            self.c1_time_local_label.setText("")
+            self.c1_azimuth_label.setText("")
+            self.c1_altitude_label.setText("")
 
         # Second contact
 
-        c2_info: ReferenceMomentInfo = reference_moments["C2"]
-        self.c2_time_utc_label.setText(
-            f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c2_time_local_label.setText(
-            f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
-        self.c2_altitude_label.setText(str(int(c2_info.altitude)))
+        if "C2" in reference_moments:
+            c2_info: ReferenceMomentInfo = reference_moments["C2"]
+            self.c2_time_utc_label.setText(
+                f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c2_time_local_label.setText(
+                f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
+            self.c2_altitude_label.setText(str(int(c2_info.altitude)))
+        else:
+            self.c2_time_utc_label.setText("")
+            self.c2_time_local_label.setText("")
+            self.c2_azimuth_label.setText("")
+            self.c2_altitude_label.setText("")
 
         # Maximum eclipse
 
-        max_info: ReferenceMomentInfo = reference_moments["MAX"]
-        self.max_time_utc_label.setText(
-            f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.max_time_local_label.setText(
-            f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.max_azimuth_label.setText(str(int(max_info.azimuth)))
-        self.max_altitude_label.setText(str(int(max_info.altitude)))
+        if "MAX" in reference_moments:
+            max_info: ReferenceMomentInfo = reference_moments["MAX"]
+            self.max_time_utc_label.setText(
+                f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.max_time_local_label.setText(
+                f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.max_azimuth_label.setText(str(int(max_info.azimuth)))
+            self.max_altitude_label.setText(str(int(max_info.altitude)))
+        else:
+            self.max_time_utc_label.setText("")
+            self.max_time_local_label.setText("")
+            self.max_azimuth_label.setText("")
+            self.max_altitude_label.setText("")
 
         # Third contact
 
-        c3_info: ReferenceMomentInfo = reference_moments["C3"]
-        self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c3_time_local_label.setText(
-            f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
-        self.c3_altitude_label.setText(str(int(c3_info.altitude)))
+        if "C3" in reference_moments:
+            c3_info: ReferenceMomentInfo = reference_moments["C3"]
+            self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c3_time_local_label.setText(
+                f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
+            self.c3_altitude_label.setText(str(int(c3_info.altitude)))
+        else:
+            self.c3_time_utc_label.setText("")
+            self.c3_time_local_label.setText("")
+            self.c3_azimuth_label.setText("")
+            self.c3_altitude_label.setText("")
 
         # Fourth contact
 
-        c4_info: ReferenceMomentInfo = reference_moments["C4"]
-        self.c4_time_utc_label.setText(
-            f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c4_time_local_label.setText(
-            f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
-        self.c4_altitude_label.setText(str(int(c4_info.altitude)))
+        if "C4" in reference_moments:
+            c4_info: ReferenceMomentInfo = reference_moments["C4"]
+            self.c4_time_utc_label.setText(
+                f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c4_time_local_label.setText(
+                f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
+            self.c4_altitude_label.setText(str(int(c4_info.altitude)))
+        else:
+            self.c4_time_utc_label.setText("")
+            self.c4_time_local_label.setText("")
+            self.c4_azimuth_label.setText("")
+            self.c4_altitude_label.setText("")
 
         # Sunrise
 
@@ -540,8 +591,8 @@ class SolarEclipseController(Observer):
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                reference_moments = self.model.get_reference_moments()
-                self.view.show_reference_moments(reference_moments)
+                reference_moments, magnitude = self.model.get_reference_moments()
+                self.view.show_reference_moments(reference_moments, magnitude)
 
         elif text == "Camera(s)":
             # TODO
