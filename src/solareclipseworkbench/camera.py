@@ -291,12 +291,14 @@ def get_camera_overview() -> dict:
     camera_names = get_cameras()
 
     for camera_name in camera_names:
+        try:
+            battery_level = get_battery_level(camera_name[0])
+            free_space = get_free_space(camera_name[0])
+            total_space = get_space(camera_name[0])
 
-        battery_level = get_battery_level(camera_name[0])
-        free_space = get_free_space(camera_name[0])
-        total_space = get_space(camera_name[0])
-
-        camera_overview[camera_name[0]] = CameraInfo(camera_name, battery_level, free_space, total_space)
+            camera_overview[camera_name[0]] = CameraInfo(camera_name, battery_level, free_space, total_space)
+        except gp.GPhoto2Error as error:
+            logging.warning(f"Photo2Error occurred for {camera_name[0]} ({error.string})")
 
     return camera_overview
 
