@@ -126,7 +126,6 @@ class SolarEclipseView(QMainWindow, Observable):
     def __init__(self):
 
         super().__init__()
-        # self.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.png")))
 
         self.controller = None
 
@@ -183,6 +182,8 @@ class SolarEclipseView(QMainWindow, Observable):
         self.latitude_label.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
         self.altitude_label = QLabel()
 
+        self.eclipse_type = QLabel()
+
         self.init_ui()
 
     def init_ui(self):
@@ -208,11 +209,6 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_grid_layout.addWidget(self.time_label_local, 2, 1)
         place_time_grid_layout.addWidget(self.time_label_utc, 2, 2)
 
-        # place_time_layout.addLayout(date_layout)
-        # place_time_layout.addLayout(time_layout)
-
-        # self.place_time_frame.setLayout(place_time_layout)
-        # self.place_time_frame.setLayout(grid)
         place_time_group_box.setLayout(place_time_grid_layout)
         vbox_left.addWidget(place_time_group_box)
 
@@ -231,6 +227,8 @@ class SolarEclipseView(QMainWindow, Observable):
         eclipse_date_grid_layout = QGridLayout()
         eclipse_date_grid_layout.addWidget(self.eclipse_date_label, 0, 0)
         eclipse_date_grid_layout.addWidget(self.eclipse_date, 0, 1)
+        eclipse_date_grid_layout.addWidget(QLabel("Eclipse type"), 1, 0)
+        eclipse_date_grid_layout.addWidget(self.eclipse_type, 1, 1)
 
         eclipse_date_group_box.setLayout(eclipse_date_grid_layout)
         vbox_left.addWidget(eclipse_date_group_box)
@@ -353,10 +351,6 @@ class SolarEclipseView(QMainWindow, Observable):
         # if self.time_format == "12 hours":
         #     suffix = " am" if current_time_utc.hour < 12 else " pm"
 
-        # self.time_label_local.setText(
-        #     f"{datetime.datetime.strftime(current_time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        # self.time_label_utc.setText(
-        #     f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
         suffix = ""
 
         # First contact
@@ -581,12 +575,10 @@ class SolarEclipseController(Observer):
 
         if text == "Location":
             self.location_popup = LocationPopup(self)
-            # self.location_popup.setGeometry(QRect(100, 100, 400, 200))
             self.location_popup.show()
 
         elif text == "Date":
             self.eclipse_popup = EclipsePopup(self)
-            # eclipse_popup.setGeometry(QRect(100, 100, 400, 200))
             self.eclipse_popup.show()
 
         elif text == "Reference moments":
@@ -620,24 +612,6 @@ def main():
     view.show()
 
     return app.exec()
-
-class VLine(QFrame):
-    """Presents a simple Vertical Bar that can be used in e.g. the status bar."""
-
-    def __init__(self):
-        super().__init__()
-        self.setFrameShape(QFrame.VLine | QFrame.Sunken)
-
-
-class HLine(QFrame):
-    """Presents a simple Horizontal Bar that can be used to separate widgets."""
-
-    def __init__(self):
-        super().__init__()
-        self.setLineWidth(0)
-        self.setMidLineWidth(1)
-        self.setFrameShape(QFrame.HLine | QFrame.Sunken)
-
 
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
