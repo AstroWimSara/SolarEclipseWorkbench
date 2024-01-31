@@ -277,7 +277,7 @@ def __set_datetime(config) -> bool:
     return False
 
 
-def get_camera_overview():
+def get_camera_overview() -> dict:
     """ Returns a dictionary with information of the connected cameras.
 
     The keys in the dictionary are the camera names and the values (the camera information) contains information about
@@ -301,7 +301,7 @@ def get_camera_overview():
     return camera_overview
 
 
-class CameraInfo():
+class CameraInfo:
 
     def __init__(self, camera_name: str, battery_level: float, free_space: float, total_space: float) -> None:
         """ Create a new CameraInfo object.
