@@ -20,6 +20,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from solareclipseworkbench import camera
+from solareclipseworkbench.camera import get_camera_overview
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
@@ -84,21 +85,41 @@ class SolarEclipseModel:
 
     def get_reference_moments(self):
 
-        reference_moments, _ = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
-                                                           self.eclipse_date)
-        self.c1_info = reference_moments["C1"]
-        self.c2_info = reference_moments["C2"]
-        self.max_info = reference_moments["MAX"]
-        self.c3_info = reference_moments["C3"]
-        self.c4_info = reference_moments["C4"]
+        reference_moments, magnitude = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
+                                                                   self.eclipse_date)
+
+        # No eclipse
+
+        if magnitude == 0:
+            self.c1_info = None
+            self.c2_info = None
+            self.max_info = None
+            self.c3_info = None
+            self.c4_info = None
+
+        # Partial / total eclipse
+
+        elif magnitude > 0:
+            self.c1_info = reference_moments["C1"]
+            self.c2_info = None
+            self.max_info = reference_moments["MAX"]
+            self.c3_info = None
+            self.c4_info = reference_moments["C4"]
+
+        # Total eclipse
+
+        if magnitude == 1:
+            self.c2_info = reference_moments["C2"]
+            self.c3_info = reference_moments["C3"]
+
         self.sunrise_info = reference_moments["sunrise"]
         self.sunset_info = reference_moments["sunset"]
 
-        return reference_moments
+        return reference_moments, magnitude
 
-    def set_camera_overview(self):
+    def set_camera_overview(self, camera_overview: dict):
 
-        camera_overview = camera.get_camera_overview()
+        self.camera_overview = camera_overview
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -106,7 +127,6 @@ class SolarEclipseView(QMainWindow, Observable):
     def __init__(self):
 
         super().__init__()
-        # self.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.png")))
 
         self.controller = None
 
@@ -163,6 +183,8 @@ class SolarEclipseView(QMainWindow, Observable):
         self.latitude_label.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
         self.altitude_label = QLabel()
 
+        self.eclipse_type = QLabel()
+
         self.init_ui()
 
     def init_ui(self):
@@ -188,11 +210,6 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_grid_layout.addWidget(self.time_label_local, 2, 1)
         place_time_grid_layout.addWidget(self.time_label_utc, 2, 2)
 
-        # place_time_layout.addLayout(date_layout)
-        # place_time_layout.addLayout(time_layout)
-
-        # self.place_time_frame.setLayout(place_time_layout)
-        # self.place_time_frame.setLayout(grid)
         place_time_group_box.setLayout(place_time_grid_layout)
         vbox_left.addWidget(place_time_group_box)
 
@@ -211,6 +228,8 @@ class SolarEclipseView(QMainWindow, Observable):
         eclipse_date_grid_layout = QGridLayout()
         eclipse_date_grid_layout.addWidget(self.eclipse_date_label, 0, 0)
         eclipse_date_grid_layout.addWidget(self.eclipse_date, 0, 1)
+        eclipse_date_grid_layout.addWidget(QLabel("Eclipse type"), 1, 0)
+        eclipse_date_grid_layout.addWidget(self.eclipse_type, 1, 1)
 
         eclipse_date_group_box.setLayout(eclipse_date_grid_layout)
         vbox_left.addWidget(eclipse_date_group_box)
@@ -255,9 +274,15 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(QLabel("Sunset"), 7, 0)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
 
+        camera_overview_group_box = QGroupBox()
+        camera_overview_grid_layout = QGridLayout()
+        camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
+        camera_overview_group_box.setLayout(camera_overview_grid_layout)
+
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addWidget(reference_moments_group_box)
+        hbox.addWidget(camera_overview_group_box)
 
         app_frame.setLayout(hbox)
 
@@ -328,63 +353,94 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc.setText(
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
-    def show_reference_moments(self, reference_moments: dict):
-        suffix = ""
-        # if self.time_format == "12 hours":
-        #     suffix = " am" if current_time_utc.hour < 12 else " pm"
+    def show_reference_moments(self, reference_moments: dict, magnitude: float):
 
-        # self.time_label_local.setText(
-        #     f"{datetime.datetime.strftime(current_time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        # self.time_label_utc.setText(
-        #     f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        if magnitude == 0:
+            self.eclipse_type.setText("No eclipse")
+        elif magnitude == 1:
+            self.eclipse_type.setText("Total eclipse")
+        else:
+            self.eclipse_type.setText(f"Partial eclipse (magnitude: {round(magnitude, 2)})")
+
+        suffix = ""
 
         # First contact
 
-        c1_info: ReferenceMomentInfo = reference_moments["C1"]
-        self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c1_time_local_label.setText(
-            f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
-        self.c1_altitude_label.setText(str(int(c1_info.altitude)))
+        if "C1" in reference_moments:
+            c1_info: ReferenceMomentInfo = reference_moments["C1"]
+            self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c1_time_local_label.setText(
+                f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
+            self.c1_altitude_label.setText(str(int(c1_info.altitude)))
+        else:
+            self.c1_time_utc_label.setText("")
+            self.c1_time_local_label.setText("")
+            self.c1_azimuth_label.setText("")
+            self.c1_altitude_label.setText("")
 
         # Second contact
 
-        c2_info: ReferenceMomentInfo = reference_moments["C2"]
-        self.c2_time_utc_label.setText(
-            f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c2_time_local_label.setText(
-            f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
-        self.c2_altitude_label.setText(str(int(c2_info.altitude)))
+        if "C2" in reference_moments:
+            c2_info: ReferenceMomentInfo = reference_moments["C2"]
+            self.c2_time_utc_label.setText(
+                f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c2_time_local_label.setText(
+                f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
+            self.c2_altitude_label.setText(str(int(c2_info.altitude)))
+        else:
+            self.c2_time_utc_label.setText("")
+            self.c2_time_local_label.setText("")
+            self.c2_azimuth_label.setText("")
+            self.c2_altitude_label.setText("")
 
         # Maximum eclipse
 
-        max_info: ReferenceMomentInfo = reference_moments["MAX"]
-        self.max_time_utc_label.setText(
-            f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.max_time_local_label.setText(
-            f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.max_azimuth_label.setText(str(int(max_info.azimuth)))
-        self.max_altitude_label.setText(str(int(max_info.altitude)))
+        if "MAX" in reference_moments:
+            max_info: ReferenceMomentInfo = reference_moments["MAX"]
+            self.max_time_utc_label.setText(
+                f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.max_time_local_label.setText(
+                f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.max_azimuth_label.setText(str(int(max_info.azimuth)))
+            self.max_altitude_label.setText(str(int(max_info.altitude)))
+        else:
+            self.max_time_utc_label.setText("")
+            self.max_time_local_label.setText("")
+            self.max_azimuth_label.setText("")
+            self.max_altitude_label.setText("")
 
         # Third contact
 
-        c3_info: ReferenceMomentInfo = reference_moments["C3"]
-        self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c3_time_local_label.setText(
-            f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
-        self.c3_altitude_label.setText(str(int(c3_info.altitude)))
+        if "C3" in reference_moments:
+            c3_info: ReferenceMomentInfo = reference_moments["C3"]
+            self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c3_time_local_label.setText(
+                f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
+            self.c3_altitude_label.setText(str(int(c3_info.altitude)))
+        else:
+            self.c3_time_utc_label.setText("")
+            self.c3_time_local_label.setText("")
+            self.c3_azimuth_label.setText("")
+            self.c3_altitude_label.setText("")
 
         # Fourth contact
 
-        c4_info: ReferenceMomentInfo = reference_moments["C4"]
-        self.c4_time_utc_label.setText(
-            f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c4_time_local_label.setText(
-            f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
-        self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
-        self.c4_altitude_label.setText(str(int(c4_info.altitude)))
+        if "C4" in reference_moments:
+            c4_info: ReferenceMomentInfo = reference_moments["C4"]
+            self.c4_time_utc_label.setText(
+                f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c4_time_local_label.setText(
+                f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
+            self.c4_altitude_label.setText(str(int(c4_info.altitude)))
+        else:
+            self.c4_time_utc_label.setText("")
+            self.c4_time_local_label.setText("")
+            self.c4_azimuth_label.setText("")
+            self.c4_altitude_label.setText("")
 
         # Sunrise
 
@@ -457,6 +513,8 @@ class SolarEclipseController(Observer):
             return
 
         elif isinstance(changed_object, CameraPopup):
+            camera_overview = changed_object.camera_overview
+            self.model.set_camera_overview(camera_overview)
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -530,18 +588,16 @@ class SolarEclipseController(Observer):
 
         if text == "Location":
             self.location_popup = LocationPopup(self)
-            # self.location_popup.setGeometry(QRect(100, 100, 400, 200))
             self.location_popup.show()
 
         elif text == "Date":
             self.eclipse_popup = EclipsePopup(self)
-            # eclipse_popup.setGeometry(QRect(100, 100, 400, 200))
             self.eclipse_popup.show()
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                reference_moments = self.model.get_reference_moments()
-                self.view.show_reference_moments(reference_moments)
+                reference_moments, magnitude = self.model.get_reference_moments()
+                self.view.show_reference_moments(reference_moments, magnitude)
 
         elif text == "Camera(s)":
             # TODO
@@ -569,24 +625,6 @@ def main():
     view.show()
 
     return app.exec()
-
-class VLine(QFrame):
-    """Presents a simple Vertical Bar that can be used in e.g. the status bar."""
-
-    def __init__(self):
-        super().__init__()
-        self.setFrameShape(QFrame.VLine | QFrame.Sunken)
-
-
-class HLine(QFrame):
-    """Presents a simple Horizontal Bar that can be used to separate widgets."""
-
-    def __init__(self):
-        super().__init__()
-        self.setLineWidth(0)
-        self.setMidLineWidth(1)
-        self.setFrameShape(QFrame.HLine | QFrame.Sunken)
-
 
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
@@ -689,6 +727,8 @@ class CameraPopup(QWidget, Observable):
         self.setGeometry(QRect(100, 100, 300, 75))
         self.add_observer(observer)
 
+        self.camera_overview = get_camera_overview()
+
         layout = QHBoxLayout()
 
         refresh_button = QPushButton("Refresh")
@@ -697,16 +737,27 @@ class CameraPopup(QWidget, Observable):
         sync_button = QPushButton("Synchronise")
         sync_button.clicked.connect(self.sync)
 
+        ok_button = QPushButton("OK")
+        sync_button.clicked.connect(self.close)
+
         layout.addWidget(refresh_button)
         layout.addWidget(sync_button)
+        layout.addWidget(ok_button)
 
         self.setLayout(layout)
 
     def refresh_camera_overview(self):
         print("Refresh camera overview")
 
+        self.camera_overview: dict = get_camera_overview()
+        self.notify_observers(self)
+
+        self.close()
+
     def sync(self):
         print("Sync camera overview")
+        self.close()
+
 
 class SettingsPopup(QWidget, Observable):
 
