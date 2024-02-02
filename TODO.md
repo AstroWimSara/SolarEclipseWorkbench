@@ -4,7 +4,9 @@
 
 ## TODO
 
-- [ ] Warning while calculating the reference moments
+- [ ] Annular eclipses
+  - [ ] C2 and C3 are not calculated
+  - [ ] Update GUI
 - [ ] Do we also need a command to update the camera status (free memory and battery status)?
 
 ## Problems with gphoto2
