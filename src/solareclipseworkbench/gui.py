@@ -700,6 +700,8 @@ class LocationPopup(QWidget, Observable):
         self.setGeometry(QRect(100, 100, 1000, 800))
         self.add_observer(observer)
 
+        model = observer.model
+
         layout = QVBoxLayout()
 
         grid_layout = QGridLayout()
@@ -710,6 +712,8 @@ class LocationPopup(QWidget, Observable):
         self.longitude.setValidator(longitude_validator)
         self.longitude.setToolTip("Positive values: East of Greenwich meridian; "
                                   "Negative values: West of Greenwich meridian")
+        if model.longitude:
+            self.longitude.setText(str(model.longitude))
         grid_layout.addWidget(self.longitude, 0, 1)
 
         grid_layout.addWidget(QLabel("Latitude [°]"), 1, 0)
@@ -718,6 +722,8 @@ class LocationPopup(QWidget, Observable):
         latitude_validator.setRange(-90, 90, 5)
         self.latitude.setValidator(latitude_validator)
         self.latitude.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
+        if model.latitude:
+            self.latitude.setText(str(model.latitude))
         grid_layout.addWidget(self.latitude, 1, 1)
 
         grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
@@ -725,6 +731,8 @@ class LocationPopup(QWidget, Observable):
         altitude_validator = QDoubleValidator()
         self.altitude.setValidator(altitude_validator)
         grid_layout.addWidget(self.altitude, 2, 1)
+        if model.altitude:
+            self.altitude.setText(str(model.altitude))
         layout.addLayout(grid_layout)
 
         plot_button = QPushButton("Plot")
