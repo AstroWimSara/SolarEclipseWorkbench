@@ -11,12 +11,11 @@ COMMANDS = {
 }
 
 
-def observe_solar_eclipse(ref_moments_filename: str, commands_filename: str) -> BackgroundScheduler:
+def observe_solar_eclipse(reference_moments: dict, commands_filename: str) -> BackgroundScheduler:
     """ Observe (and photograph) the solar eclipse, as per given files.
 
     Args:
-        - ref_moments_filename: Name of the file that specifies the timing of the reference moments (C1,..., C4, and
-                                maximum eclipse)
+        - reference_moments: Timing of the reference moments (C1,..., C4, and maximum eclipse)
         - commands_filename: Name of the configuration file that specifies which commands have to be executed at which
                              moment during the solar eclipse
 
@@ -24,10 +23,6 @@ def observe_solar_eclipse(ref_moments_filename: str, commands_filename: str) -> 
     """
 
     scheduler = start_scheduler()
-
-    # Read timing of the reference moments
-
-    reference_moments = read_reference_moments(ref_moments_filename)
 
     # Schedule commands
 
