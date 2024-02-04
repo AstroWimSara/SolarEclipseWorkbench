@@ -79,7 +79,7 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
     func_name = cmd_str_split[0].lstrip()
     ref_moment = cmd_str_split[1].lstrip()
     sign = cmd_str_split[2].lstrip()    # + or -
-    hours, minutes, seconds = cmd_str_split[3].lstrip().split(":")   # mm:ss.ss
+    hours, minutes, seconds = cmd_str_split[3].lstrip().split(":")   # hh:mm:ss.ss
     description = cmd_str_split[-1].lstrip()
 
     logging.info(f"Scheduling {func_name} at {ref_moment}{sign}{cmd_str_split[3].lstrip()}")
