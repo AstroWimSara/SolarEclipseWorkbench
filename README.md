@@ -7,6 +7,7 @@
   - [Table of contents](#table-of-contents)
   - [Installation instructions](#installation-instructions)
   - [Running Solar Eclipse Workbench](#running-solar-eclipse-workbench)
+    - [GPS](#gps)
 
 
 ## Installation instructions
