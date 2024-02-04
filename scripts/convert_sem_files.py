@@ -22,7 +22,7 @@ def main(input: str, output: str) -> None:
         if not line:
             break
         # Drop empty lines and comments (starting with #)
-        if not line.startswith('#') and not len(line.strip()) == 0: 
+        if not line.startswith('#') and not len(line) == 0: 
             # FOR loops in the Solar Eclipse Maestro scripts
             if line.startswith('FOR'):
                 _, _, direction, interval, number_of_steps = line.split(",")
