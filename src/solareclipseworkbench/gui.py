@@ -85,12 +85,12 @@ class SolarEclipseModel:
 
     def get_reference_moments(self):
 
-        reference_moments, magnitude = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
+        reference_moments, magnitude, type = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
                                                                    self.eclipse_date)
 
         # No eclipse
 
-        if magnitude == 0:
+        if type == "No eclipse":
             self.c1_info = None
             self.c2_info = None
             self.max_info = None
@@ -99,7 +99,7 @@ class SolarEclipseModel:
 
         # Partial / total eclipse
 
-        elif magnitude > 0:
+        elif type == "Partial":
             self.c1_info = reference_moments["C1"]
             self.c2_info = None
             self.max_info = reference_moments["MAX"]
@@ -108,14 +108,17 @@ class SolarEclipseModel:
 
         # Total eclipse
 
-        if magnitude == 1:
+        else:
+            self.c1_info = reference_moments["C1"]
             self.c2_info = reference_moments["C2"]
+            self.max_info = reference_moments["MAX"]
             self.c3_info = reference_moments["C3"]
+            self.c4_info = reference_moments["C4"]
 
         self.sunrise_info = reference_moments["sunrise"]
         self.sunset_info = reference_moments["sunset"]
 
-        return reference_moments, magnitude
+        return reference_moments, magnitude, type
 
     def set_camera_overview(self, camera_overview: dict):
 
@@ -353,14 +356,14 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc.setText(
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
-    def show_reference_moments(self, reference_moments: dict, magnitude: float):
+    def show_reference_moments(self, reference_moments: dict, magnitude: float, type: str):
 
-        if magnitude == 0:
-            self.eclipse_type.setText("No eclipse")
-        elif magnitude == 1:
-            self.eclipse_type.setText("Total eclipse")
+        if type == "Partial" or type == "Annular":
+            self.eclipse_type.setText(type + f" eclipse (magnitude: {round(magnitude, 2)})")
+        elif type == "No eclipse":
+            self.eclipse_type.setText(type)
         else:
-            self.eclipse_type.setText(f"Partial eclipse (magnitude: {round(magnitude, 2)})")
+            self.eclipse_type.setText(type + " eclipse")
 
         suffix = ""
 
@@ -596,8 +599,8 @@ class SolarEclipseController(Observer):
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                reference_moments, magnitude = self.model.get_reference_moments()
-                self.view.show_reference_moments(reference_moments, magnitude)
+                reference_moments, magnitude, type = self.model.get_reference_moments()
+                self.view.show_reference_moments(reference_moments, magnitude, type)
 
         elif text == "Camera(s)":
             # TODO
