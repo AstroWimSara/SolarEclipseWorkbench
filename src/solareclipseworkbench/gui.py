@@ -85,12 +85,12 @@ class SolarEclipseModel:
 
     def get_reference_moments(self):
 
-        reference_moments, magnitude, type = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
-                                                                   self.eclipse_date)
+        reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
+                                                                                 self.altitude, self.eclipse_date)
 
         # No eclipse
 
-        if type == "No eclipse":
+        if eclipse_type == "No eclipse":
             self.c1_info = None
             self.c2_info = None
             self.max_info = None
@@ -99,7 +99,7 @@ class SolarEclipseModel:
 
         # Partial / total eclipse
 
-        elif type == "Partial":
+        elif eclipse_type == "Partial":
             self.c1_info = reference_moments["C1"]
             self.c2_info = None
             self.max_info = reference_moments["MAX"]
@@ -118,7 +118,7 @@ class SolarEclipseModel:
         self.sunrise_info = reference_moments["sunrise"]
         self.sunset_info = reference_moments["sunset"]
 
-        return reference_moments, magnitude, type
+        return reference_moments, magnitude, eclipse_type
 
     def set_camera_overview(self, camera_overview: dict):
 
