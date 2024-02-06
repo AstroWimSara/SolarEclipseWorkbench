@@ -974,7 +974,10 @@ class LocationPlot(FigureCanvas):
 
         world = geopandas.read_file(get_path("naturalearth.land"))
         # Crop -> min longitude, min latitude, max longitude, max latitude
-        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)     # TODO
+        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)
+
+        self.ax.set_aspect("equal")
+
         self.draw()
 
     def plot_location(self, longitude: float, latitude: float):
@@ -994,6 +997,8 @@ class LocationPlot(FigureCanvas):
         )
         self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude), crs="EPSG:4326")
         self.gdf.plot(ax=self.ax, color="red")
+
+        self.ax.set_aspect("equal")
 
         self.draw()
         self.location_is_drawn = True
