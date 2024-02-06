@@ -28,6 +28,8 @@ def plot_location(longitude: float, latitude: float):
     ax = world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black")
 
     gdf.plot(ax=ax, color="red")
+
+    ax.set_aspect("equal")
     plt.show()
 
 
