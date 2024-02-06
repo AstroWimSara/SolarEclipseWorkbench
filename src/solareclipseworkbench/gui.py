@@ -162,6 +162,13 @@ class SolarEclipseView(QMainWindow, Observable):
         self.c4_time_utc_label = QLabel()
         self.sunrise_time_utc_label = QLabel()
         self.sunset_time_utc_label = QLabel()
+        self.c1_countdown_label = QLabel()
+        self.c2_countdown_label = QLabel()
+        self.max_countdown_label = QLabel()
+        self.c3_countdown_label = QLabel()
+        self.c4_countdown_label = QLabel()
+        self.sunrise_countdown_label = QLabel()
+        self.sunset_countdown_label = QLabel()
         self.c1_azimuth_label = QLabel()
         self.c2_azimuth_label = QLabel()
         self.max_azimuth_label = QLabel()
@@ -256,6 +263,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.sunrise_time_utc_label, 6, 2)
         reference_moments_grid_layout.addWidget(self.sunset_time_utc_label, 7, 2)
         reference_moments_grid_layout.addWidget(QLabel("Countdown"), 0, 3)
+        reference_moments_grid_layout.addWidget(self.c1_countdown_label, 1, 3)
+        reference_moments_grid_layout.addWidget(self.c2_countdown_label, 2, 3)
+        reference_moments_grid_layout.addWidget(self.max_countdown_label, 3, 3)
+        reference_moments_grid_layout.addWidget(self.c3_countdown_label, 4, 3)
+        reference_moments_grid_layout.addWidget(self.c4_countdown_label, 5, 3)
+        reference_moments_grid_layout.addWidget(self.sunrise_countdown_label, 6, 3)
+        reference_moments_grid_layout.addWidget(self.sunset_countdown_label, 7, 3)
         reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]"), 0, 4)
         reference_moments_grid_layout.addWidget(self.c1_azimuth_label, 1, 4)
         reference_moments_grid_layout.addWidget(self.c2_azimuth_label, 2, 4)
@@ -339,7 +353,11 @@ class SolarEclipseView(QMainWindow, Observable):
         sender = self.sender()
         self.notify_observers(sender)
 
-    def update_time(self, current_time_local: datetime.datetime, current_time_utc: datetime.datetime):
+    def update_time(self, current_time_local: datetime.datetime, current_time_utc: datetime.datetime,
+                    countdown_c1: datetime.timedelta, countdown_c2: datetime.timedelta,
+                    countdown_max: datetime.timedelta, countdown_c3: datetime.timedelta,
+                    countdown_c4: datetime.timedelta, countdown_sunrise: datetime.timedelta,
+                    countdown_sunset: datetime.timedelta):
 
         self.eclipse_date_label.setText(f"Eclipse date [{self.date_format}]")
 
@@ -356,17 +374,56 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc.setText(
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
-    def show_reference_moments(self, reference_moments: dict, magnitude: float, type: str):
-
-        if type == "Partial" or type == "Annular":
-            self.eclipse_type.setText(type + f" eclipse (magnitude: {round(magnitude, 2)})")
-        elif type == "No eclipse":
-            self.eclipse_type.setText(type)
+        if countdown_c1:
+            self.c1_countdown_label.setText(str(countdown_from_timedelta(countdown_c1)))
         else:
-            self.eclipse_type.setText(type + " eclipse")
+            self.c1_countdown_label.setText("")
+        if countdown_c2:
+            self.c2_countdown_label.setText(str(countdown_from_timedelta(countdown_c2)))
+        else:
+            self.c2_countdown_label.setText("")
+        if countdown_max:
+            self.max_countdown_label.setText(str(countdown_from_timedelta(countdown_max)))
+        else:
+            self.max_countdown_label.setText("")
+        if countdown_c3:
+            self.c3_countdown_label.setText(str(countdown_from_timedelta(countdown_c3)))
+        else:
+            self.c3_countdown_label.setText("")
+        if countdown_c4:
+            self.c4_countdown_label.setText(str(countdown_from_timedelta(countdown_c4)))
+        else:
+            self.c4_countdown_label.setText("")
+        if countdown_sunrise:
+            self.sunrise_countdown_label.setText(str(countdown_from_timedelta(countdown_sunrise)))
+        else:
+            self.sunrise_countdown_label.setText("")
+        if countdown_sunset:
+            self.sunset_countdown_label.setText(str(countdown_from_timedelta(countdown_sunset)))
+        else:
+            self.sunset_countdown_label.setText("")
+
+        # model: SolarEclipseModel = self.observers[0].model
+        # eclipse_data: Time = model.eclipse_date
+        # eclipse_data
+        #
+        # if self.c1_time_utc_label.text() != "":
+        #     c1_utc_dt = datetime.datetime.strptime(self.c1_time_utc_label.text(), TIME_FORMATS[self.time_format])
+        #     c1_utc_dt.year = self.observers[0].model
+        #     print(f"Label text: {self.c1_time_utc_label.text()==''}")
+        #     print(datetime.datetime.strptime(self.c1_time_utc_label.text(), TIME_FORMATS[self.time_format]))
+        #     # datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])
+
+    def show_reference_moments(self, reference_moments: dict, magnitude: float, eclipse_type: str):
+
+        if eclipse_type == "Partial" or eclipse_type == "Annular":
+            self.eclipse_type.setText(eclipse_type + f" eclipse (magnitude: {round(magnitude, 2)})")
+        elif eclipse_type == "No eclipse":
+            self.eclipse_type.setText(eclipse_type)
+        else:
+            self.eclipse_type.setText(eclipse_type + " eclipse")
 
         suffix = ""
-        # TODO
 
         # First contact
 
@@ -490,6 +547,23 @@ class SolarEclipseView(QMainWindow, Observable):
         self.sunset_time_local_label.setText(
             f"{datetime.datetime.strftime(sunset_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
 
+    def show_camera_overview(self, camera_overview: dict):
+        raise NotImplementedError
+
+
+def countdown_from_timedelta(offset: datetime.timedelta):
+    days, hours, minutes, seconds = offset.days, offset.seconds // 3600, (offset.seconds // 60) % 60, offset.seconds % 60
+
+    countdown = ""
+    if days > 0:
+        countdown += f" {days}d "
+    if hours > 0:
+        countdown += f"{hours:02d}:"
+
+    countdown += f"{minutes:02d}:{seconds:02d}"
+
+    return countdown
+
 
 class SolarEclipseController(Observer):
 
@@ -518,7 +592,16 @@ class SolarEclipseController(Observer):
         self.model.local_time = current_time_local
         self.model.utc_time = current_time_utc
 
-        self.view.update_time(current_time_local, current_time_utc)
+        countdown_c1 = self.model.c1_info.time_utc - current_time_utc if self.model.c1_info else None
+        countdown_c2 = self.model.c2_info.time_utc - current_time_utc if self.model.c2_info else None
+        countdown_max = self.model.max_info.time_utc - current_time_utc if self.model.max_info else None
+        countdown_c3 = self.model.c3_info.time_utc - current_time_utc if self.model.c3_info else None
+        countdown_c4 = self.model.c4_info.time_utc - current_time_utc if self.model.c4_info else None
+        countdown_sunrise = self.model.sunrise_info.time_utc - current_time_utc if self.model.sunrise_info else None
+        countdown_sunset = self.model.sunset_info.time_utc - current_time_utc if self.model.sunset_info else None
+
+        self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
+                              countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
 
     def do(self, actions):
         pass
@@ -692,6 +775,7 @@ def main():
     view.show()
 
     return app.exec()
+
 
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
