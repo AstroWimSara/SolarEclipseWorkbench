@@ -746,8 +746,8 @@ class SolarEclipseController(Observer):
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                reference_moments, magnitude, type = self.model.get_reference_moments()
-                self.view.show_reference_moments(reference_moments, magnitude, type)
+                reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
+                self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
 
         elif text == "Camera(s)":
             # TODO
