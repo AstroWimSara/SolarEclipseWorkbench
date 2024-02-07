@@ -73,9 +73,7 @@ def main(input: str, output: str) -> None:
                             else:
                                 time_delta = str(timedelta(seconds=abs(time_delta))) + ".0"
                             # Write the take_picture command to the output file.
-                            outputfile.write(command + ", " + ref_moment + ", " + sign + ", " + time_delta + ", " 
-                                            + camera_name + ", " + exposure + ", " + aperture + ", " + iso + ", " 
-                                            + comment.strip() + " (Iter. " + str(iteration) + ")" + '\n')
+                            outputfile.write(f"{command}, {ref_moment}, {sign}, {time_delta}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()} (Iter. {iteration})\"\n")
                         iteration = iteration + 1
 
                     line = inputfile.readline()
@@ -95,15 +93,13 @@ def main(input: str, output: str) -> None:
                 else:
                     sound_file = ref_moment + "_IN_" + sound_file
                 # Write the voice_prompt command to the output file.
-                outputfile.write("voice_prompt, " + ref_moment + ", " + before_after + ", " + delta_datetime + ", "
-                                 + sound_file + '\n')
+                comment = comment.strip('\n')
+                outputfile.write(f"voice_prompt, {ref_moment}, {before_after}, {delta_datetime}, {sound_file}, \"{comment}\"\n")
             elif command[0] == "TAKEPIC":
                 _, ref_moment, before_after, delta, camera_name, exposure, aperture, iso, _, _, _, _, comment = line.split(",")
                 delta_datetime = _get_delta_datetime(delta)
                 # Write the take_picture command to the output file.
-                outputfile.write("take_picture, " + ref_moment + ", " + before_after + ", " + delta_datetime + ", "
-                                + camera_name + ", " + exposure + ", " + aperture + ", " + iso + ", "
-                                + comment.strip() + '\n') 
+                outputfile.write(f"take_picture, {ref_moment}, {before_after}, {delta_datetime}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()}\"\n")
     outputfile.close()
 
 
