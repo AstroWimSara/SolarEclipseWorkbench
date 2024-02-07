@@ -48,19 +48,25 @@ class SolarEclipseModel:
 
     def __init__(self):
 
+        # Location
+
         self.is_location_set = False
-        self.is_eclipse_date_set = False
-
-        self.eclipse_date: Time = None
-
-        self.local_time: datetime.datetime = None
-        self.utc_time: datetime.datetime = None
-
         self.longitude: float = None
         self.latitude: float = None
         self.altitude: float = None
 
-        # self.reference_moments: dict = None
+        # Eclipse date
+
+        self.is_eclipse_date_set = False
+        self.eclipse_date:Time = None
+
+        # Time
+
+        self.local_time: datetime.datetime = None
+        self.utc_time: datetime.datetime = None
+
+        # Reference moments
+
         self.c1_info: ReferenceMomentInfo = None
         self.c2_info: ReferenceMomentInfo = None
         self.max_info: ReferenceMomentInfo = None
@@ -378,46 +384,43 @@ class SolarEclipseView(QMainWindow, Observable):
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
         if countdown_c1:
-            self.c1_countdown_label.setText(str(countdown_from_timedelta(countdown_c1)))
+            self.c1_countdown_label.setText(str(format_countdown(countdown_c1)))
         else:
             self.c1_countdown_label.setText("")
         if countdown_c2:
-            self.c2_countdown_label.setText(str(countdown_from_timedelta(countdown_c2)))
+            self.c2_countdown_label.setText(str(format_countdown(countdown_c2)))
         else:
             self.c2_countdown_label.setText("")
         if countdown_max:
-            self.max_countdown_label.setText(str(countdown_from_timedelta(countdown_max)))
+            self.max_countdown_label.setText(str(format_countdown(countdown_max)))
         else:
             self.max_countdown_label.setText("")
         if countdown_c3:
-            self.c3_countdown_label.setText(str(countdown_from_timedelta(countdown_c3)))
+            self.c3_countdown_label.setText(str(format_countdown(countdown_c3)))
         else:
             self.c3_countdown_label.setText("")
         if countdown_c4:
-            self.c4_countdown_label.setText(str(countdown_from_timedelta(countdown_c4)))
+            self.c4_countdown_label.setText(str(format_countdown(countdown_c4)))
         else:
             self.c4_countdown_label.setText("")
         if countdown_sunrise:
-            self.sunrise_countdown_label.setText(str(countdown_from_timedelta(countdown_sunrise)))
+            self.sunrise_countdown_label.setText(str(format_countdown(countdown_sunrise)))
         else:
             self.sunrise_countdown_label.setText("")
         if countdown_sunset:
-            self.sunset_countdown_label.setText(str(countdown_from_timedelta(countdown_sunset)))
+            self.sunset_countdown_label.setText(str(format_countdown(countdown_sunset)))
         else:
             self.sunset_countdown_label.setText("")
 
-        # model: SolarEclipseModel = self.observers[0].model
-        # eclipse_data: Time = model.eclipse_date
-        # eclipse_data
-        #
-        # if self.c1_time_utc_label.text() != "":
-        #     c1_utc_dt = datetime.datetime.strptime(self.c1_time_utc_label.text(), TIME_FORMATS[self.time_format])
-        #     c1_utc_dt.year = self.observers[0].model
-        #     print(f"Label text: {self.c1_time_utc_label.text()==''}")
-        #     print(datetime.datetime.strptime(self.c1_time_utc_label.text(), TIME_FORMATS[self.time_format]))
-        #     # datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])
-
     def show_reference_moments(self, reference_moments: dict, magnitude: float, eclipse_type: str):
+        """ Display the given reference moments, magnitude, and eclipse type.
+
+        Args:
+            - reference_moments: Dictionary with the reference moments (C1, C2, maximum eclipse, C3, C4, sunrise, and
+                                 sunset)
+            - magnitude: Eclipse magnitude (0: no eclipse, 1: total eclipse)
+            - eclipse_type: Eclipse type (total / annular / partial / no eclispe)
+        """
 
         if eclipse_type == "Partial" or eclipse_type == "Annular":
             self.eclipse_type.setText(eclipse_type + f" eclipse (magnitude: {round(magnitude, 2)})")
@@ -554,18 +557,10 @@ class SolarEclipseView(QMainWindow, Observable):
         raise NotImplementedError
 
 
-def countdown_from_timedelta(offset: datetime.timedelta):
-    days, hours, minutes, seconds = offset.days, offset.seconds // 3600, (offset.seconds // 60) % 60, offset.seconds % 60
-
-    countdown = ""
-    if days > 0:
-        countdown += f" {days}d "
-    if hours > 0:
-        countdown += f"{hours:02d}:"
-
-    countdown += f"{minutes:02d}:{seconds:02d}"
-
-    return countdown
+        Args:
+            - camera_overview: Dictionary with an overview of the connected cameras
+        """
+        raise NotImplementedError
 
 
 class SolarEclipseController(Observer):
@@ -1005,6 +1000,48 @@ class LocationPlot(FigureCanvas):
 
         self.draw()
         self.location_is_drawn = True
+
+
+def format_countdown(countdown: datetime.timedelta):
+    """ Format the given countdown.
+
+    Args:
+        - countdown: Countdown as datetime
+
+    Returns: Formatted countdown, with the days (if any), hours (if any), minutes, and seconds.
+    """
+
+    formatted_countdown = ""
+    days = countdown.days
+
+    if days > 0:
+        formatted_countdown += f" {days}d "
+
+    hours = countdown.seconds // 3600
+    if hours > 0:
+        formatted_countdown += f"{hours:02d}:"
+
+    minutes, seconds = (countdown.seconds // 60) % 60, countdown.seconds % 60
+    formatted_countdown += f"{minutes:02d}:{seconds:02d}"
+
+    return formatted_countdown
+
+
+def main():
+
+    args = list(sys.argv)
+    # args[1:1] = ["-stylesheet", str(styles_location)]
+    app = QApplication(args)
+    app.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.svg")))
+    app.setApplicationName("Solar Eclipse Workbench")
+
+    model = SolarEclipseModel()
+    view = SolarEclipseView()
+    controller = SolarEclipseController(model, view)
+
+    view.show()
+
+    return app.exec()
 
 
 if __name__ == "__main__":
