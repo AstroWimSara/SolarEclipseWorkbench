@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-from solareclipseworkbench import voice_prompt, take_picture
+from solareclipseworkbench import voice_prompt, take_picture, camera
 from solareclipseworkbench.camera import CameraSettings
 from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 
@@ -14,7 +14,7 @@ COMMANDS = {
 }
 
 
-def observe_solar_eclipse(ref_moments: ReferenceMomentInfo, commands_filename: str, simulated_c1: datetime) -> BackgroundScheduler:
+def observe_solar_eclipse(ref_moments: ReferenceMomentInfo, commands_filename: str, cameras: dict, simulated_c1: datetime) -> BackgroundScheduler:
     """ Observe (and photograph) the solar eclipse, as per given files.
 
     Args:
@@ -22,6 +22,7 @@ def observe_solar_eclipse(ref_moments: ReferenceMomentInfo, commands_filename: s
                                 maximum eclipse)
         - commands_filename: Name of the configuration file that specifies which commands have to be executed at which
                              moment during the solar eclipse
+        - cameras: Dictionary of camera names and camera objects
         - simulated_c1: Simulated date and time for C1.  Can be used to simulate the solar eclipse.  
                         None if no simulation should be used.
 
@@ -32,7 +33,7 @@ def observe_solar_eclipse(ref_moments: ReferenceMomentInfo, commands_filename: s
 
     # Schedule commands
 
-    schedule_commands(commands_filename, scheduler, ref_moments, simulated_c1)
+    schedule_commands(commands_filename, scheduler, ref_moments, cameras, simulated_c1)
 
     return scheduler
 
@@ -49,7 +50,7 @@ def start_scheduler():
     return scheduler
 
 
-def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_moments: ReferenceMomentInfo, simulated_c1: datetime):
+def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_moments: ReferenceMomentInfo, cameras: dict, simulated_c1: datetime):
     """ Schedule commands as specified in the given file.
 
     Args:
@@ -58,6 +59,7 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
         - scheduler: Background scheduler to use to schedule the commands
         - reference_moments: Dictionary with the reference moments (1st - 4th contact and maximum eclipse), with
                              respect to which the commands are scheduled
+        - cameras: Dictionary of camera names and camera objects
         - simulated_c1: datetime with the time to simulate C1. None if no simulation is to be used.
 
     Returns: Scheduler that is used to schedule the commands.
@@ -65,16 +67,17 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
 
     with open(filename, "r") as file:
         for cmd_str in file:
-            schedule_command(scheduler, reference_moments, cmd_str, simulated_c1)
+            schedule_command(scheduler, reference_moments, cmd_str, cameras, simulated_c1)
 
 
-def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str: str, simulated_c1: datetime):
+def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str: str, cameras: dict, simulated_c1: datetime):
     """ Schedule the given command with the given scheduler and reference moments.
 
     Args:
         - scheduler: Background scheduler to use to schedule the command
         - reference_moments: Dictionary with the reference moments of the solar eclipse, as ReferenceMomentInfo objects.
         - cmd_str: Command string
+        - cameras: Dictionary of camera names and camera objects
         - simulated_c1: datetime with the time to simulate C1. None if no simulation is to be used.
     """
 
@@ -91,8 +94,11 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
 
     if func_name == "take_picture":
         settings = CameraSettings(args[1].strip(), args[2].strip(), args[3].strip())
-        new_args = [args[0].strip(), settings]
+        # new_args = [cameras[args[0].strip()], settings]
+        new_args = ["test", settings]
         args = new_args
+        camera.take_picture(new_args[0], new_args[1])
+        exit()
 
     func = COMMANDS[func_name]
 

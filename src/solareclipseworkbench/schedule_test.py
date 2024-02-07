@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.utils import observe_solar_eclipse
 import pytz
+import camera
 
 
 def main():
@@ -13,10 +14,17 @@ def main():
 
     # filename = "/Users/wim/GitHub/SolarEclipseWorkbench/config/scripts/voice_prompts.txt"
     filename = "/Users/wim/GitHub/SolarEclipseWorkbench/config/scripts/test.txt"
-    # C1 in 2 minutes
-    simulated_start = datetime.now(pytz.utc) + timedelta(minutes=2) 
 
-    scheduler = observe_solar_eclipse(timings, filename, simulated_start)
+    # camera_names = camera.get_cameras()
+    # print(camera_names)
+    # cameras = {}
+    # for camera_name in camera_names:
+    #     cameras[camera_name[0]] = camera.get_camera(camera_name[0])
+
+    # C1 in 2 minutes
+    simulated_start = datetime.now(pytz.utc) + timedelta(minutes=2)
+
+    scheduler = observe_solar_eclipse(timings, filename, {}, simulated_start)
 
     print(scheduler.get_jobs())
 

@@ -38,39 +38,41 @@ def take_picture(camera: Camera, camera_settings: CameraSettings):
     """
 
     context = gp.gp_context_new()
-    config = gp.check_result(gp.gp_camera_get_config(camera, context))
-
+    camera_new = get_camera("Canon EOS R")
+    print(get_battery_level(camera_new))
+    config = gp.check_result(gp.gp_camera_get_config(camera_new, context))
+    print(config)
     iso = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'iso'))
     gp.check_result(gp.gp_widget_set_value(iso, str(camera_settings.iso)))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.check_result(gp.gp_camera_set_config(camera_new, config, context))
 
     # Set aperture
     aperture = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'aperture'))
-    gp.check_result(gp.gp_widget_set_value(aperture, str(camera_settings.aperture)))
+    gp.gp_widget_set_value(aperture, str(camera_settings.aperture))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.gp_camera_set_config(camera_new, config, context)
 
     # Set shutter speed
     shutter_speed = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
-    gp.check_result(gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed)))
+    gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.gp_camera_set_config(camera_new, config, context)
 
     # find the capture target config item (to save to the memory card)
     capture_target = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'capturetarget'))
     # set value
     value = gp.check_result(gp.gp_widget_get_choice(capture_target, 1))
-    gp.check_result(gp.gp_widget_set_value(capture_target, value))
+    gp.gp_widget_set_value(capture_target, value)
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.gp_camera_set_config(camera_new, config, context)
 
     # Take picture
-    camera.capture(gp.GP_CAPTURE_IMAGE)
+    camera_new.capture(gp.GP_CAPTURE_IMAGE, context)
 
 
 def get_cameras() -> list:
@@ -267,6 +269,14 @@ def __set_datetime(config) -> bool:
     return False
 
 
+def get_camera_dict() -> dict:
+    camera_names = get_cameras()
+    cameras = dict()
+    for camera_name in camera_names:
+        cameras[camera_name[0]] = get_camera(camera_name[0])
+    return cameras
+
+
 def get_camera_overview() -> dict:
     """ Returns a dictionary with information of the connected cameras.
 
@@ -362,7 +372,6 @@ def main():
         try:
             camera_object = get_camera(camera[0])
 
-
             # Get general info
             print(f"{camera[0]}: {get_battery_level(camera_object)} - {get_free_space(camera_object)} GB of {get_space(camera_object)} GB free.")
 
@@ -381,7 +390,7 @@ def main():
 
             # Take picture
             camera_settings = CameraSettings("1/4000", 5.6, 200)
-            take_picture("Canon EOS R", camera_settings)
+            take_picture(camera_object, camera_settings)
         except gphoto2.GPhoto2Error:
             print("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
 
