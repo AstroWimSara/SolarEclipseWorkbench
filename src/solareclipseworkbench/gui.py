@@ -75,21 +75,45 @@ class SolarEclipseModel:
         self.sunrise_info: ReferenceMomentInfo = None
         self.sunset_info: ReferenceMomentInfo = None
 
+        # Camera(s)
+
         self.camera_overview: dict = None
 
     def set_position(self, longitude: float, latitude: float, altitude: float):
+        """ Set the geographical position of the observing location.
+
+        Args:
+            - longitude: Longitude of the location [degrees]
+            - latitude: Latitude of the location [degrees]
+            - altitude: Altitude of the location [meters]
+        """
+
         self.longitude = longitude
         self.latitude = latitude
         self.altitude = altitude
 
         self.is_location_set = True
 
-    def set_eclipse_date(self, eclipse_date: datetime.datetime):
+    def set_eclipse_date(self, eclipse_date: Time):
+        """ Set the eclipse date.
+
+        Args:
+            - eclipse_date: Eclipse date
+        """
+
         self.eclipse_date = eclipse_date
 
         self.is_eclipse_date_set = True
 
     def get_reference_moments(self):
+        """ Calculate and return timing of reference moments, eclipse magnitude, and eclipse type.
+
+        Returns:
+            - Dictionary with the information about the reference moments (C1, C2, maximum eclipse, C3, C4, sunrise,
+              and sunset)
+            - Magnitude of the eclipse (0: no eclipse, 1: total eclipse)
+            - Eclipse type (total / annular / partial / no eclipse)
+        """
 
         reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
                                                                                  self.altitude, self.eclipse_date)
@@ -146,6 +170,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_format = list(TIME_FORMATS.keys())[0]
 
         self.toolbar = None
+
 
         self.place_time_frame = QFrame()
 
@@ -359,6 +384,8 @@ class SolarEclipseView(QMainWindow, Observable):
         self.toolbar.addAction(settings_action)
 
     def on_toolbar_button_click(self):
+        """ Action triggered when a toolbar button is clicked."""
+
         sender = self.sender()
         self.notify_observers(sender)
 
@@ -367,6 +394,19 @@ class SolarEclipseView(QMainWindow, Observable):
                     countdown_max: datetime.timedelta, countdown_c3: datetime.timedelta,
                     countdown_c4: datetime.timedelta, countdown_sunrise: datetime.timedelta,
                     countdown_sunset: datetime.timedelta):
+        """ Update the displayed current time and countdown clocks.
+
+        Args:
+            - current_time_local: Current time in local timezone
+            - current_time_utc: Current time in UTC timezone
+            - countdown_c1: Countdown clock to C1
+            - countdown_c2: Countdown clock to C2
+            - countdown_max: Countdown clock to maximum eclipse
+            - countdown_c3: Countdown clock to C3
+            - countdown_c4: Countdown clock to C4
+            - countdown_sunrise: Countdown clock to sunrise
+            - countdown_sunset: Countdown clock to sunset
+        """
 
         self.eclipse_date_label.setText(f"Eclipse date [{self.date_format}]")
 
@@ -758,25 +798,25 @@ class SolarEclipseController(Observer):
             self.settings_popup.show()
 
 
-def main():
-
-    args = list(sys.argv)
-    # args[1:1] = ["-stylesheet", str(styles_location)]
-    app = QApplication(args)
-    app.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.svg")))
-    app.setApplicationName("Solar Eclipse Workbench")
-
-    model = SolarEclipseModel()
-    view = SolarEclipseView()
-    controller = SolarEclipseController(model, view)
-
-    view.show()
-
-    return app.exec()
-
-
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
+        """ Initialisation of a pop-up window for setting the observing location.
+
+        A pop-up window is shown, in which the user can choose the following information about the observing location:
+
+            - Longitude [degrees];
+            - Latitude [degrees];
+            - Altitude [meters].
+
+        When pressing the "Plot" button, this location will be displayed on a world map (as a red dot). When pressing
+        the "OK" button, the given controller will be notified about this.
+
+        If the location had already been set before, this will be shown in the text boxes.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified about the selection of a new location.
+        """
+
         QWidget.__init__(self)
         self.setWindowTitle("Location")
         self.setGeometry(QRect(100, 100, 1000, 800))
@@ -833,10 +873,13 @@ class LocationPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def plot_location(self):
-        print("Plotting location...")
+        """ Plot the selected location on the world map."""
+
         self.location_plot.plot_location(longitude=float(self.longitude.text()), latitude=float(self.latitude.text()))
 
     def accept_location(self):
+        """ Notify the observer about the selection of a new location and close the pop-up window."""
+
         self.notify_observers(self)
         self.close()
 
@@ -844,6 +887,18 @@ class LocationPopup(QWidget, Observable):
 class EclipsePopup(QWidget, Observable):
 
     def __init__(self, observer: SolarEclipseController):
+        """ Initialisation of a pop-up window for setting the eclipse date.
+
+        A pop-up window is shown, in which the user can choose the date of the eclipse.
+
+        When pressing the "OK" button, the given controller will be notified about this.
+
+        If the eclipse date had already been set before, this will be shown in the combobox.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified about the selection of a new location.
+        """
+
         QWidget.__init__(self)
         self.setWindowTitle("Eclipse date")
         self.setGeometry(QRect(100, 100, 400, 75))
@@ -871,6 +926,7 @@ class EclipsePopup(QWidget, Observable):
         self.setLayout(layout)
 
     def load_eclipse_date(self):
+        """ Notify the observer about the selection of a new eclipse date and close the pop-up window."""
 
         self.notify_observers(self)
         self.close()
@@ -913,12 +969,23 @@ class CameraPopup(QWidget, Observable):
 
     def sync(self):
         print("Sync camera overview")
+        # TODO model -> sync_camera_time
         self.close()
 
 
 class SettingsPopup(QWidget, Observable):
 
     def __init__(self, observer: SolarEclipseController):
+        """ A pop-up window is shown, in which the user can choose the settings.
+
+        When pressing the "OK" button, the given controller will be notified about this.
+
+        If the setting had already been set before, this will be shown in the comboboxes.
+
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified about the settings.
+        """
         QWidget.__init__(self)
         self.setWindowTitle("Settings")
         self.setGeometry(QRect(100, 100, 300, 75))
@@ -947,10 +1014,14 @@ class SettingsPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def accept_settings(self):
+        """ Notify the observer about the settings changes and close the pop-up window."""
+
         self.notify_observers(self)
         self.close()
 
     def cancel_settings(self):
+        """ Close the pop-up window without accepting any settings changes."""
+
         self.close()
 
 
@@ -958,6 +1029,8 @@ class LocationPlot(FigureCanvas):
     """ Display the world with the selected location overplotted in red."""
 
     def __init__(self, parent=None, dpi=100):
+        """ Plot a world map."""
+
         self.figure = Figure(dpi=dpi)
         self.ax = self.figure.add_subplot(111, aspect='equal')
 
@@ -979,13 +1052,15 @@ class LocationPlot(FigureCanvas):
         self.draw()
 
     def plot_location(self, longitude: float, latitude: float):
+        """ Indicate the given location on the world map with a red dot.
+
+        Args:
+            - longitude: Longitude of the location [degrees]
+            - latitude: Latitude of the location [degrees]
+        """
 
         if self.location_is_drawn:
-            self.gdf.plot(ax=self.ax, color="white")    # TODO
-        #     self.location.
-        #     self.location.remove()
-        #     print("Remove previous location")
-        #     self.ax.lines[-1].remove()
+            self.gdf.plot(ax=self.ax, color="white")
 
         df = pd.DataFrame(
             {
