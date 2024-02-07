@@ -85,12 +85,12 @@ class SolarEclipseModel:
 
     def get_reference_moments(self):
 
-        reference_moments, magnitude, type = calculate_reference_moments(self.longitude, self.latitude, self.altitude,
-                                                                   self.eclipse_date)
+        reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
+                                                                                 self.altitude, self.eclipse_date)
 
         # No eclipse
 
-        if type == "No eclipse":
+        if eclipse_type == "No eclipse":
             self.c1_info = None
             self.c2_info = None
             self.max_info = None
@@ -99,7 +99,7 @@ class SolarEclipseModel:
 
         # Partial / total eclipse
 
-        elif type == "Partial":
+        elif eclipse_type == "Partial":
             self.c1_info = reference_moments["C1"]
             self.c2_info = None
             self.max_info = reference_moments["MAX"]
@@ -118,7 +118,7 @@ class SolarEclipseModel:
         self.sunrise_info = reference_moments["sunrise"]
         self.sunset_info = reference_moments["sunset"]
 
-        return reference_moments, magnitude, type
+        return reference_moments, magnitude, eclipse_type
 
     def set_camera_overview(self, camera_overview: dict):
 
@@ -162,6 +162,13 @@ class SolarEclipseView(QMainWindow, Observable):
         self.c4_time_utc_label = QLabel()
         self.sunrise_time_utc_label = QLabel()
         self.sunset_time_utc_label = QLabel()
+        self.c1_countdown_label = QLabel()
+        self.c2_countdown_label = QLabel()
+        self.max_countdown_label = QLabel()
+        self.c3_countdown_label = QLabel()
+        self.c4_countdown_label = QLabel()
+        self.sunrise_countdown_label = QLabel()
+        self.sunset_countdown_label = QLabel()
         self.c1_azimuth_label = QLabel()
         self.c2_azimuth_label = QLabel()
         self.max_azimuth_label = QLabel()
@@ -256,6 +263,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.sunrise_time_utc_label, 6, 2)
         reference_moments_grid_layout.addWidget(self.sunset_time_utc_label, 7, 2)
         reference_moments_grid_layout.addWidget(QLabel("Countdown"), 0, 3)
+        reference_moments_grid_layout.addWidget(self.c1_countdown_label, 1, 3)
+        reference_moments_grid_layout.addWidget(self.c2_countdown_label, 2, 3)
+        reference_moments_grid_layout.addWidget(self.max_countdown_label, 3, 3)
+        reference_moments_grid_layout.addWidget(self.c3_countdown_label, 4, 3)
+        reference_moments_grid_layout.addWidget(self.c4_countdown_label, 5, 3)
+        reference_moments_grid_layout.addWidget(self.sunrise_countdown_label, 6, 3)
+        reference_moments_grid_layout.addWidget(self.sunset_countdown_label, 7, 3)
         reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]"), 0, 4)
         reference_moments_grid_layout.addWidget(self.c1_azimuth_label, 1, 4)
         reference_moments_grid_layout.addWidget(self.c2_azimuth_label, 2, 4)
@@ -279,7 +293,10 @@ class SolarEclipseView(QMainWindow, Observable):
 
         camera_overview_group_box = QGroupBox()
         camera_overview_grid_layout = QGridLayout()
-        camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
+        # camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
+        camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
+        camera_overview_grid_layout.addWidget(QLabel("Battery level"), 0, 1)
+        camera_overview_grid_layout.addWidget(QLabel("Free memory"), 0, 2)
         camera_overview_group_box.setLayout(camera_overview_grid_layout)
 
         hbox = QHBoxLayout()
@@ -339,7 +356,11 @@ class SolarEclipseView(QMainWindow, Observable):
         sender = self.sender()
         self.notify_observers(sender)
 
-    def update_time(self, current_time_local: datetime.datetime, current_time_utc: datetime.datetime):
+    def update_time(self, current_time_local: datetime.datetime, current_time_utc: datetime.datetime,
+                    countdown_c1: datetime.timedelta, countdown_c2: datetime.timedelta,
+                    countdown_max: datetime.timedelta, countdown_c3: datetime.timedelta,
+                    countdown_c4: datetime.timedelta, countdown_sunrise: datetime.timedelta,
+                    countdown_sunset: datetime.timedelta):
 
         self.eclipse_date_label.setText(f"Eclipse date [{self.date_format}]")
 
@@ -356,14 +377,54 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_label_utc.setText(
             f"{datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])}{suffix}")
 
-    def show_reference_moments(self, reference_moments: dict, magnitude: float, type: str):
-
-        if type == "Partial" or type == "Annular":
-            self.eclipse_type.setText(type + f" eclipse (magnitude: {round(magnitude, 2)})")
-        elif type == "No eclipse":
-            self.eclipse_type.setText(type)
+        if countdown_c1:
+            self.c1_countdown_label.setText(str(countdown_from_timedelta(countdown_c1)))
         else:
-            self.eclipse_type.setText(type + " eclipse")
+            self.c1_countdown_label.setText("")
+        if countdown_c2:
+            self.c2_countdown_label.setText(str(countdown_from_timedelta(countdown_c2)))
+        else:
+            self.c2_countdown_label.setText("")
+        if countdown_max:
+            self.max_countdown_label.setText(str(countdown_from_timedelta(countdown_max)))
+        else:
+            self.max_countdown_label.setText("")
+        if countdown_c3:
+            self.c3_countdown_label.setText(str(countdown_from_timedelta(countdown_c3)))
+        else:
+            self.c3_countdown_label.setText("")
+        if countdown_c4:
+            self.c4_countdown_label.setText(str(countdown_from_timedelta(countdown_c4)))
+        else:
+            self.c4_countdown_label.setText("")
+        if countdown_sunrise:
+            self.sunrise_countdown_label.setText(str(countdown_from_timedelta(countdown_sunrise)))
+        else:
+            self.sunrise_countdown_label.setText("")
+        if countdown_sunset:
+            self.sunset_countdown_label.setText(str(countdown_from_timedelta(countdown_sunset)))
+        else:
+            self.sunset_countdown_label.setText("")
+
+        # model: SolarEclipseModel = self.observers[0].model
+        # eclipse_data: Time = model.eclipse_date
+        # eclipse_data
+        #
+        # if self.c1_time_utc_label.text() != "":
+        #     c1_utc_dt = datetime.datetime.strptime(self.c1_time_utc_label.text(), TIME_FORMATS[self.time_format])
+        #     c1_utc_dt.year = self.observers[0].model
+        #     print(f"Label text: {self.c1_time_utc_label.text()==''}")
+        #     print(datetime.datetime.strptime(self.c1_time_utc_label.text(), TIME_FORMATS[self.time_format]))
+        #     # datetime.datetime.strftime(current_time_utc, TIME_FORMATS[self.time_format])
+
+    def show_reference_moments(self, reference_moments: dict, magnitude: float, eclipse_type: str):
+
+        if eclipse_type == "Partial" or eclipse_type == "Annular":
+            self.eclipse_type.setText(eclipse_type + f" eclipse (magnitude: {round(magnitude, 2)})")
+        elif eclipse_type == "No eclipse":
+            self.eclipse_type.setText(eclipse_type)
+        else:
+            self.eclipse_type.setText(eclipse_type + " eclipse")
 
         suffix = ""
 
@@ -371,7 +432,11 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C1" in reference_moments:
             c1_info: ReferenceMomentInfo = reference_moments["C1"]
+            if self.time_format == "12 hours":
+                suffix = " am" if c1_info.time_utc.hour < 12 else " pm"
             self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            if self.time_format == "12 hours":
+                suffix = " am" if c1_info.time_local.hour < 12 else " pm"
             self.c1_time_local_label.setText(
                 f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
             self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
@@ -386,8 +451,12 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C2" in reference_moments:
             c2_info: ReferenceMomentInfo = reference_moments["C2"]
+            if self.time_format == "12 hours":
+                suffix = " am" if c2_info.time_utc.hour < 12 else " pm"
             self.c2_time_utc_label.setText(
                 f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            if self.time_format == "12 hours":
+                suffix = " am" if c2_info.time_local.hour < 12 else " pm"
             self.c2_time_local_label.setText(
                 f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
             self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
@@ -402,8 +471,12 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "MAX" in reference_moments:
             max_info: ReferenceMomentInfo = reference_moments["MAX"]
+            if self.time_format == "12 hours":
+                suffix = " am" if max_info.time_utc.hour < 12 else " pm"
             self.max_time_utc_label.setText(
                 f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            if self.time_format == "12 hours":
+                suffix = " am" if max_info.time_local.hour < 12 else " pm"
             self.max_time_local_label.setText(
                 f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
             self.max_azimuth_label.setText(str(int(max_info.azimuth)))
@@ -418,7 +491,11 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C3" in reference_moments:
             c3_info: ReferenceMomentInfo = reference_moments["C3"]
+            if self.time_format == "12 hours":
+                suffix = " am" if c3_info.time_utc.hour < 12 else " pm"
             self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            if self.time_format == "12 hours":
+                suffix = " am" if c3_info.time_local.hour < 12 else " pm"
             self.c3_time_local_label.setText(
                 f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
             self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
@@ -433,8 +510,12 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C4" in reference_moments:
             c4_info: ReferenceMomentInfo = reference_moments["C4"]
+            if self.time_format == "12 hours":
+                suffix = " am" if c4_info.time_utc.hour < 12 else " pm"
             self.c4_time_utc_label.setText(
                 f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+            if self.time_format == "12 hours":
+                suffix = " am" if c4_info.time_local.hour < 12 else " pm"
             self.c4_time_local_label.setText(
                 f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
             self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
@@ -448,18 +529,43 @@ class SolarEclipseView(QMainWindow, Observable):
         # Sunrise
 
         sunrise_info: ReferenceMomentInfo = reference_moments["sunrise"]
+        if self.time_format == "12 hours":
+            suffix = " am" if sunrise_info.time_utc.hour < 12 else " pm"
         self.sunrise_time_utc_label.setText(
             f"{datetime.datetime.strftime(sunrise_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        if self.time_format == "12 hours":
+            suffix = " am" if sunrise_info.time_local.hour < 12 else " pm"
         self.sunrise_time_local_label.setText(
             f"{datetime.datetime.strftime(sunrise_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
 
         # Sunset
 
         sunset_info: ReferenceMomentInfo = reference_moments["sunset"]
+        if self.time_format == "12 hours":
+            suffix = " am" if sunset_info.time_utc.hour < 12 else " pm"
         self.sunset_time_utc_label.setText(
             f"{datetime.datetime.strftime(sunset_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
+        if self.time_format == "12 hours":
+            suffix = " am" if sunset_info.time_local.hour < 12 else " pm"
         self.sunset_time_local_label.setText(
             f"{datetime.datetime.strftime(sunset_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+
+    def show_camera_overview(self, camera_overview: dict):
+        raise NotImplementedError
+
+
+def countdown_from_timedelta(offset: datetime.timedelta):
+    days, hours, minutes, seconds = offset.days, offset.seconds // 3600, (offset.seconds // 60) % 60, offset.seconds % 60
+
+    countdown = ""
+    if days > 0:
+        countdown += f" {days}d "
+    if hours > 0:
+        countdown += f"{hours:02d}:"
+
+    countdown += f"{minutes:02d}:{seconds:02d}"
+
+    return countdown
 
 
 class SolarEclipseController(Observer):
@@ -489,7 +595,16 @@ class SolarEclipseController(Observer):
         self.model.local_time = current_time_local
         self.model.utc_time = current_time_utc
 
-        self.view.update_time(current_time_local, current_time_utc)
+        countdown_c1 = self.model.c1_info.time_utc - current_time_utc if self.model.c1_info else None
+        countdown_c2 = self.model.c2_info.time_utc - current_time_utc if self.model.c2_info else None
+        countdown_max = self.model.max_info.time_utc - current_time_utc if self.model.max_info else None
+        countdown_c3 = self.model.c3_info.time_utc - current_time_utc if self.model.c3_info else None
+        countdown_c4 = self.model.c4_info.time_utc - current_time_utc if self.model.c4_info else None
+        countdown_sunrise = self.model.sunrise_info.time_utc - current_time_utc if self.model.sunrise_info else None
+        countdown_sunset = self.model.sunset_info.time_utc - current_time_utc if self.model.sunset_info else None
+
+        self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
+                              countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
 
     def do(self, actions):
         pass
@@ -531,59 +646,94 @@ class SolarEclipseController(Observer):
 
             if self.model.c1_info:
                 c1_time_utc = self.model.c1_info.time_utc
+                c1_time_local = self.model.c1_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if c1_time_utc.hour < 12 else " pm"
                 self.view.c1_time_utc_label.setText(
                     f"{datetime.datetime.strftime(c1_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_local.hour < 12 else " pm"
+                self.view.c1_time_local_label.setText(
+                    f"{datetime.datetime.strftime(c1_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             if self.model.c2_info:
                 c2_time_utc = self.model.c2_info.time_utc
+                c2_time_local = self.model.c2_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if c2_time_utc.hour < 12 else " pm"
                 self.view.c2_time_utc_label.setText(
                     f"{datetime.datetime.strftime(c2_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c2_time_local.hour < 12 else " pm"
+                self.view.c2_time_local_label.setText(
+                    f"{datetime.datetime.strftime(c2_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             if self.model.max_info:
                 max_time_utc = self.model.max_info.time_utc
+                max_time_local = self.model.max_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if max_time_utc.hour < 12 else " pm"
                 self.view.max_time_utc_label.setText(
                     f"{datetime.datetime.strftime(max_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_local.hour < 12 else " pm"
+                self.view.max_time_local_label.setText(
+                    f"{datetime.datetime.strftime(max_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             if self.model.c3_info:
                 c3_time_utc = self.model.c3_info.time_utc
+                c3_time_local = self.model.c3_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if c3_time_utc.hour < 12 else " pm"
                 self.view.c3_time_utc_label.setText(
                     f"{datetime.datetime.strftime(c3_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_local.hour < 12 else " pm"
+                self.view.c3_time_local_label.setText(
+                    f"{datetime.datetime.strftime(c3_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             if self.model.c4_info:
                 c4_time_utc = self.model.c4_info.time_utc
+                c4_time_local = self.model.c4_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if c4_time_utc.hour < 12 else " pm"
                 self.view.c4_time_utc_label.setText(
                     f"{datetime.datetime.strftime(c4_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_local.hour < 12 else " pm"
+                self.view.c4_time_local_label.setText(
+                    f"{datetime.datetime.strftime(c4_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             if self.model.sunrise_info:
                 sunrise_time_utc = self.model.sunrise_info.time_utc
+                sunrise_time_local = self.model.sunrise_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if sunrise_time_utc.hour < 12 else " pm"
                 self.view.sunrise_time_utc_label.setText(
                     f"{datetime.datetime.strftime(sunrise_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_local.hour < 12 else " pm"
+                self.view.sunrise_time_local_label.setText(
+                    f"{datetime.datetime.strftime(sunrise_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             if self.model.sunset_info:
                 sunset_time_utc = self.model.sunset_info.time_utc
+                sunset_time_local = self.model.sunset_info.time_local
                 suffix = ""
                 if time_format == "12 hours":
                     suffix = " am" if sunset_time_utc.hour < 12 else " pm"
                 self.view.sunset_time_utc_label.setText(
                     f"{datetime.datetime.strftime(sunset_time_utc, TIME_FORMATS[time_format])}{suffix}")
+                if time_format == "12 hours":
+                    suffix = " am" if c1_time_local.hour < 12 else " pm"
+                self.view.sunset_time_local_label.setText(
+                    f"{datetime.datetime.strftime(sunset_time_local, TIME_FORMATS[time_format])}{suffix}")
 
             return
 
@@ -599,8 +749,8 @@ class SolarEclipseController(Observer):
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                reference_moments, magnitude, type = self.model.get_reference_moments()
-                self.view.show_reference_moments(reference_moments, magnitude, type)
+                reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
+                self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
 
         elif text == "Camera(s)":
             # TODO
@@ -629,12 +779,15 @@ def main():
 
     return app.exec()
 
+
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
         QWidget.__init__(self)
         self.setWindowTitle("Location")
         self.setGeometry(QRect(100, 100, 1000, 800))
         self.add_observer(observer)
+
+        model = observer.model
 
         layout = QVBoxLayout()
 
@@ -646,6 +799,8 @@ class LocationPopup(QWidget, Observable):
         self.longitude.setValidator(longitude_validator)
         self.longitude.setToolTip("Positive values: East of Greenwich meridian; "
                                   "Negative values: West of Greenwich meridian")
+        if model.longitude:
+            self.longitude.setText(str(model.longitude))
         grid_layout.addWidget(self.longitude, 0, 1)
 
         grid_layout.addWidget(QLabel("Latitude [°]"), 1, 0)
@@ -654,6 +809,8 @@ class LocationPopup(QWidget, Observable):
         latitude_validator.setRange(-90, 90, 5)
         self.latitude.setValidator(latitude_validator)
         self.latitude.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
+        if model.latitude:
+            self.latitude.setText(str(model.latitude))
         grid_layout.addWidget(self.latitude, 1, 1)
 
         grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
@@ -661,6 +818,8 @@ class LocationPopup(QWidget, Observable):
         altitude_validator = QDoubleValidator()
         self.altitude.setValidator(altitude_validator)
         grid_layout.addWidget(self.altitude, 2, 1)
+        if model.altitude:
+            self.altitude.setText(str(model.altitude))
         layout.addLayout(grid_layout)
 
         plot_button = QPushButton("Plot")
@@ -818,7 +977,10 @@ class LocationPlot(FigureCanvas):
 
         world = geopandas.read_file(get_path("naturalearth.land"))
         # Crop -> min longitude, min latitude, max longitude, max latitude
-        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)     # TODO
+        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)
+
+        self.ax.set_aspect("equal")
+
         self.draw()
 
     def plot_location(self, longitude: float, latitude: float):
@@ -838,6 +1000,8 @@ class LocationPlot(FigureCanvas):
         )
         self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude), crs="EPSG:4326")
         self.gdf.plot(ax=self.ax, color="red")
+
+        self.ax.set_aspect("equal")
 
         self.draw()
         self.location_is_drawn = True
