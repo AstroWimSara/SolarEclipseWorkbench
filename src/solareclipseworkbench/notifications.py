@@ -3,6 +3,7 @@ from pathlib import Path
 from pydub import AudioSegment
 from pydub.playback import play
 
+
 class Notifications(str, Enum):
     """ Enumeration of notifications that will be used for the voice prompt."""
 
@@ -80,6 +81,7 @@ class Notifications(str, Enum):
     C4_IN_2_SECONDS = "2.wav"   
     C4_IN_1_SECOND = "1.wav"
     C4 = "c4.wav"
+
 
 def voice_prompt(notification: str) -> None:
     """ Voice prompt of the given notification.

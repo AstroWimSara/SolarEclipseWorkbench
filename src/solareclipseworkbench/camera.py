@@ -1,8 +1,12 @@
 import locale
 import logging
 import time
+
+import gphoto2
 import gphoto2 as gp
 from datetime import datetime
+
+from gphoto2 import Camera
 
 
 class CameraError(Exception):
@@ -25,52 +29,50 @@ class CameraSettings:
         self.iso = iso
 
 
-def take_picture(camera_name: str, camera_settings: CameraSettings, description: str):
+def take_picture(camera: Camera, camera_settings: CameraSettings):
     """ Take a picture with the selected camera 
     
     Args: 
         - camera_name: Name of the camera
         - camera_settings: Settings of the camera (exposure, f, iso)
-        - description: Description of the picture
     """
 
-    camera = get_camera(camera_name)
     context = gp.gp_context_new()
-    config = gp.check_result(gp.gp_camera_get_config(camera, context))
-
+    camera_new = get_camera("Canon EOS R")
+    print(get_battery_level(camera_new))
+    config = gp.check_result(gp.gp_camera_get_config(camera_new, context))
+    print(config)
     iso = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'iso'))
     gp.check_result(gp.gp_widget_set_value(iso, str(camera_settings.iso)))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.check_result(gp.gp_camera_set_config(camera_new, config, context))
 
     # Set aperture
     aperture = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'aperture'))
-    gp.check_result(gp.gp_widget_set_value(aperture, str(camera_settings.aperture)))
+    gp.gp_widget_set_value(aperture, str(camera_settings.aperture))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.gp_camera_set_config(camera_new, config, context)
 
     # Set shutter speed
     shutter_speed = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
-    gp.check_result(gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed)))
+    gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.gp_camera_set_config(camera_new, config, context)
 
     # find the capture target config item (to save to the memory card)
     capture_target = gp.check_result(
         gp.gp_widget_get_child_by_name(config, 'capturetarget'))
     # set value
     value = gp.check_result(gp.gp_widget_get_choice(capture_target, 1))
-    gp.check_result(gp.gp_widget_set_value(capture_target, value))
+    gp.gp_widget_set_value(capture_target, value)
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera, config))
+    gp.gp_camera_set_config(camera_new, config, context)
 
     # Take picture
-    camera.capture(gp.GP_CAPTURE_IMAGE)
-
-    camera.exit() 
+    camera_new.capture(gp.GP_CAPTURE_IMAGE, context)
 
 
 def get_cameras() -> list:
@@ -131,80 +133,75 @@ def get_camera(camera_name: str):
     camera.init()
     return camera
 
-def get_free_space(camera_name: str) -> float:
+
+def get_free_space(camera: Camera) -> float:
     """ Return the free space on the card of the selected camera 
     
     Args: 
-        - camera_name: Name of the camera
+        - camera: Camera object
 
     Returns: Free space on the card of the camera [GB]
     """
-
-    camera = get_camera(camera_name)
     return round(camera.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
 
-def get_space(camera_name: str) -> float:
+
+def get_space(camera: Camera) -> float:
     """ Return the size of the memory card of the selected camera 
     
     Args: 
-        - camera_name: Name of the camera
+        - camera: Camera object
 
     Returns: Size of memory card of the camera [GB]
     """
 
-    camera = get_camera(camera_name)
     return round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)
 
 
-def get_shooting_mode(camera_name: str) -> str:
+def get_shooting_mode(camera: Camera) -> str:
     """ Return the shooting mode of the selected camera. Should be "Manual".
     
     Args: 
-        - camera_name: Name of the camera
+        - camera: Camera object
 
     Returns: Shooting mode of the camera
     """
 
-    camera = get_camera(camera_name)
     return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
 
 
-def get_focus_mode(camera_name: str) -> str:
+def get_focus_mode(camera: Camera) -> str:
     """ Return the focus mode of the selected camera. Should be "Manual"
     
     Args: 
-        - camera_name: Name of the camera
+        - camera: Camera object
 
     Returns: Focus mode of the camera
     """
 
-    camera = get_camera(camera_name)
     return camera.get_config().get_child_by_name('focusmode').get_value()
 
 
-def get_battery_level(camera_name: str) -> str:
+def get_battery_level(camera: Camera) -> str:
     """ Return the battery level of the selected camera 
     
     Args: 
-        - camera_name: Name of the camera
+        - camera: Name of the camera
 
     Returns: Current battery level of the camera [%]
     """
 
-    camera = get_camera(camera_name)
     return camera.get_config().get_child_by_name('batterylevel').get_value()
 
 
-def get_time(camera_name: str) -> str:
+def get_time(camera: Camera) -> str:
     """ Returns the current time of the selected camera
 
     Args: 
-        - camera_name: Name of the camera
+        - camera: Camera object
 
     Returns: Current time of the camera
     """
 
-    camera = get_camera(camera_name)
     # get configuration tree
     config = camera.get_config()
     # find the date/time setting config item and get it
@@ -212,7 +209,7 @@ def get_time(camera_name: str) -> str:
     #   Canon EOS - 'datetime'
     #   PTP - 'd034'
     for name, fmt in (('datetime', '%Y-%m-%d %H:%M:%S'),
-                      ('d034',     None)):
+                      ('d034', None)):
         now = datetime.now()
         ok, datetime_config = gp.gp_widget_get_child_by_name(config, name)
         if ok >= gp.GP_OK:
@@ -231,7 +228,7 @@ def get_time(camera_name: str) -> str:
             if err.days < 0:
                 err = -err
                 lead_lag = 'ahead'
-                logging.info('Camera clock is ahead by',)
+                logging.info('Camera clock is ahead by', )
             else:
                 lead_lag = 'behind'
             logging.warning('Camera clock is %s by %d days and %d seconds' % (
@@ -239,15 +236,13 @@ def get_time(camera_name: str) -> str:
             break
     else:
         logging.warning('Unknown date/time config item')
-    # clean up
-    camera.exit()
+
     return camera_time.isoformat(' ')
 
 
-def set_time(camera_name: str) -> None:
+def set_time(camera: Camera) -> None:
     """ Set the computer time on the selected camera """
 
-    camera = get_camera(camera_name)
     # get configuration tree
     config = camera.get_config()
 
@@ -256,9 +251,6 @@ def set_time(camera_name: str) -> None:
         camera.set_config(config)
     else:
         logging.error('Could not set date & time')
-
-    # clean up
-    camera.exit()
 
 
 def __set_datetime(config) -> bool:
@@ -277,6 +269,14 @@ def __set_datetime(config) -> bool:
     return False
 
 
+def get_camera_dict() -> dict:
+    camera_names = get_cameras()
+    cameras = dict()
+    for camera_name in camera_names:
+        cameras[camera_name[0]] = get_camera(camera_name[0])
+    return cameras
+
+
 def get_camera_overview() -> dict:
     """ Returns a dictionary with information of the connected cameras.
 
@@ -291,21 +291,23 @@ def get_camera_overview() -> dict:
     camera_names = get_cameras()
 
     for camera_name in camera_names:
+        camera = get_camera(camera_name[0])
         try:
-            battery_level = get_battery_level(camera_name[0])
-            free_space = get_free_space(camera_name[0])
-            total_space = get_space(camera_name[0])
+            battery_level = get_battery_level(camera)
+            free_space = get_free_space(camera)
+            total_space = get_space(camera)
 
             camera_overview[camera_name[0]] = CameraInfo(camera_name, battery_level, free_space, total_space)
+            camera.exit()
         except gp.GPhoto2Error as error:
-            logging.warning(f"Photo2Error occurred for {camera_name[0]} ({error.string})")
+            logging.error("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
 
     return camera_overview
 
 
 class CameraInfo:
 
-    def __init__(self, camera_name: str, battery_level: float, free_space: float, total_space: float) -> None:
+    def __init__(self, camera_name: str, battery_level: str, free_space: float, total_space: float) -> None:
         """ Create a new CameraInfo object.
 
         Args:
@@ -325,9 +327,9 @@ class CameraInfo:
 
         Returns: Name of the camera.
         """
-        return self.camera_name
+        return self.camera_name[0]
 
-    def get_battery_level(self) -> float:
+    def get_battery_level(self) -> str:
         """ Returns the battery level of the camera.
 
         Returns: Battery level of the camera [%].
@@ -356,3 +358,42 @@ class CameraInfo:
         Returns: Total space on the memory card of the camera [GB].
         """
         return self.total_space
+
+
+def main():
+    # Get cameras
+    cameras = get_cameras()
+
+    # Get all information for the gui
+    get_camera_overview()
+
+    # Get battery and free space
+    for camera in cameras:
+        try:
+            camera_object = get_camera(camera[0])
+
+            # Get general info
+            print(f"{camera[0]}: {get_battery_level(camera_object)} - {get_free_space(camera_object)} GB of {get_space(camera_object)} GB free.")
+
+            # Check if the lens and the camera are set to manual
+            if get_shooting_mode(camera_object) != "Manual":
+                print("Set the camera in Manual mode!")
+                exit()
+
+            if get_focus_mode(camera_object) != "Manual":
+                print("Set the lens in Manual mode!")
+                exit()
+
+            # Set the correct time
+            print (get_time(camera_object))
+            set_time(camera_object)
+
+            # Take picture
+            camera_settings = CameraSettings("1/4000", 5.6, 200)
+            take_picture(camera_object, camera_settings)
+        except gphoto2.GPhoto2Error:
+            print("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
+
+
+if __name__ == "__main__":
+    main()
