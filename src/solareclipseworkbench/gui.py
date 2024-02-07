@@ -11,16 +11,15 @@ from pathlib import Path
 import geopandas
 import pandas as pd
 from PyQt6.QtCore import QTimer, QRect
-from PyQt6.QtGui import QIcon, QAction, QPainter, QDoubleValidator
+from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QLineEdit, QSizePolicy
+    QGroupBox, QComboBox, QPushButton, QLineEdit
 from astropy.time import Time
 from geodatasets import get_path
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from solareclipseworkbench import camera
-from solareclipseworkbench.camera import get_camera_overview
+from solareclipseworkbench.camera import get_camera_overview, set_time
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
@@ -37,6 +36,7 @@ ECLIPSE_DATES = ["08/04/2024", "02/10/2024", "29/03/2025", "21/09/2025", "17/02/
 TIME_FORMATS = {
     "24 hours": "%H:%M:%S",
     "12 hours": "%I:%M:%S"}
+
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
     "dd/mm/yyyy": "%d/%m/%Y",
