@@ -1093,7 +1093,7 @@ def format_countdown(countdown: datetime.timedelta):
         formatted_countdown += f" {days}d "
 
     hours = countdown.seconds // 3600
-    if hours > 0:
+    if days > 0 or hours > 0:
         formatted_countdown += f"{hours:02d}:"
 
     minutes, seconds = (countdown.seconds // 60) % 60, countdown.seconds % 60
