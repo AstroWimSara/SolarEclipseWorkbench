@@ -323,12 +323,12 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
 
         camera_overview_group_box = QGroupBox()
-        camera_overview_grid_layout = QGridLayout()
         # camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
-        camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
-        camera_overview_grid_layout.addWidget(QLabel("Battery level"), 0, 1)
-        camera_overview_grid_layout.addWidget(QLabel("Free memory"), 0, 2)
-        camera_overview_group_box.setLayout(camera_overview_grid_layout)
+        self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
+        self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
+        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
+        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
+        camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
 
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
