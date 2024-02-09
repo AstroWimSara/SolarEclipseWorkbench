@@ -70,8 +70,7 @@ def read_reference_moments(
     return reference_moments
 
 
-def calculate_reference_moments(longitude: float, latitude: float, altitude: float, time: Time) -> tuple[dict[
-    str, ReferenceMomentInfo | timedelta], int, str]:
+def calculate_reference_moments(longitude: float, latitude: float, altitude: float, time: Time) -> (dict, int, str):
     """ Calculate the reference moments of the solar eclipse and return as a dictionary.
 
     The reference moments of a solar eclipse are the following:

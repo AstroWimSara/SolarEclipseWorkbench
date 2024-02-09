@@ -16,10 +16,12 @@ from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, 
     QGroupBox, QComboBox, QPushButton, QLineEdit
 from astropy.time import Time
 from geodatasets import get_path
+from gphoto2 import Camera, GPhoto2Error
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from solareclipseworkbench.camera import get_camera_overview, set_time
+from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
+    get_shooting_mode, get_focus_mode
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
@@ -58,7 +60,7 @@ class SolarEclipseModel:
         # Eclipse date
 
         self.is_eclipse_date_set = False
-        self.eclipse_date:Time = None
+        self.eclipse_date: Time = None
 
         # Time
 
@@ -151,8 +153,20 @@ class SolarEclipseModel:
         return reference_moments, magnitude, eclipse_type
 
     def set_camera_overview(self, camera_overview: dict):
+        """ Set the camera overview to the given dictionary.
+
+        Args:
+            - camera_overview: Dictionary containing the camera overview
+        """
 
         self.camera_overview = camera_overview
+
+    def sync_camera_time(self):
+        """ Set the time of all connected cameras to the time of the computer."""
+
+        raise NotImplementedError
+        # for camera in self.camera_overview:
+        #     set_time(camera)
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -170,7 +184,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_format = list(TIME_FORMATS.keys())[0]
 
         self.toolbar = None
-
 
         self.place_time_frame = QFrame()
 
@@ -225,6 +238,8 @@ class SolarEclipseView(QMainWindow, Observable):
         self.altitude_label = QLabel()
 
         self.eclipse_type = QLabel()
+
+        self.camera_overview_grid_layout = QGridLayout()
 
         self.init_ui()
 
@@ -323,12 +338,12 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
 
         camera_overview_group_box = QGroupBox()
-        camera_overview_grid_layout = QGridLayout()
         # camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
-        camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
-        camera_overview_grid_layout.addWidget(QLabel("Battery level"), 0, 1)
-        camera_overview_grid_layout.addWidget(QLabel("Free memory"), 0, 2)
-        camera_overview_group_box.setLayout(camera_overview_grid_layout)
+        self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
+        self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
+        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
+        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
+        camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
 
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
@@ -594,13 +609,46 @@ class SolarEclipseView(QMainWindow, Observable):
             f"{datetime.datetime.strftime(sunset_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
 
     def show_camera_overview(self, camera_overview: dict):
-        raise NotImplementedError
-
+        """ Display the overview of connected cameras.
 
         Args:
             - camera_overview: Dictionary with an overview of the connected cameras
         """
-        raise NotImplementedError
+
+        # Clear the widget
+
+        for widget_index in reversed(range(self.camera_overview_grid_layout.count())):
+            # if not widget_index % 3:
+            self.camera_overview_grid_layout.itemAt(widget_index).widget().setParent(None)
+
+        self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
+        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
+        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
+
+        camera_index = 1
+        for camera_name, camera in camera_overview.items():
+
+            try:
+                battery_level = get_battery_level(camera).rstrip("%")       # TODO Strip off percentage sign
+                free_space_gb = get_free_space(camera)
+                total_space = get_space(camera)
+
+                # shooting_mode = get_shooting_mode(camera)
+                # focus_mode = get_focus_mode(camera)
+
+                free_space_percentage = int(free_space_gb / total_space * 100)
+
+                self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
+                self.camera_overview_grid_layout.addWidget(QLabel(str(battery_level)), camera_index, 1)
+                self.camera_overview_grid_layout.addWidget(QLabel(str(free_space_gb)), camera_index, 2)
+                self.camera_overview_grid_layout.addWidget(QLabel(str(free_space_percentage)), camera_index, 3)
+            except GPhoto2Error:
+                self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
+                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 1)
+                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 2)
+                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 3)
+
+            camera_index += 1
 
 
 class SolarEclipseController(Observer):
@@ -623,6 +671,7 @@ class SolarEclipseController(Observer):
         self.time_display_timer.start()
 
     def update_time(self):
+        """ Update the displayed current time and countdown clocks."""
 
         current_time_local = datetime.datetime.now()
         current_time_utc = current_time_local.astimezone(tz=datetime.timezone.utc)
@@ -668,6 +717,7 @@ class SolarEclipseController(Observer):
         elif isinstance(changed_object, CameraPopup):
             camera_overview = changed_object.camera_overview
             self.model.set_camera_overview(camera_overview)
+            self.view.show_camera_overview(camera_overview)
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -940,20 +990,21 @@ class CameraPopup(QWidget, Observable):
         self.setGeometry(QRect(100, 100, 300, 75))
         self.add_observer(observer)
 
-        self.camera_overview = get_camera_overview()
+        self.camera_overview = get_camera_dict()
+        self.notify_observers(self)
 
         layout = QHBoxLayout()
 
-        refresh_button = QPushButton("Refresh")
-        refresh_button.clicked.connect(self.refresh_camera_overview)
+        # refresh_button = QPushButton("Refresh")
+        # refresh_button.clicked.connect(self.refresh_camera_overview)
 
         sync_button = QPushButton("Synchronise")
         sync_button.clicked.connect(self.sync)
 
         ok_button = QPushButton("OK")
-        sync_button.clicked.connect(self.close)
+        ok_button.clicked.connect(self.cancel)
 
-        layout.addWidget(refresh_button)
+        # layout.addWidget(refresh_button)
         layout.addWidget(sync_button)
         layout.addWidget(ok_button)
 
@@ -962,7 +1013,7 @@ class CameraPopup(QWidget, Observable):
     def refresh_camera_overview(self):
         print("Refresh camera overview")
 
-        self.camera_overview: dict = get_camera_overview()
+        self.camera_overview: dict = get_camera_dict()
         self.notify_observers(self)
 
         self.close()
@@ -970,6 +1021,9 @@ class CameraPopup(QWidget, Observable):
     def sync(self):
         print("Sync camera overview")
         # TODO model -> sync_camera_time
+        self.close()
+
+    def cancel(self):
         self.close()
 
 
