@@ -29,50 +29,37 @@ class CameraSettings:
         self.iso = iso
 
 
-def take_picture(camera: Camera, camera_settings: CameraSettings):
+def take_picture(camera: Camera, camera_settings: CameraSettings) -> gphoto2:
     """ Take a picture with the selected camera 
     
     Args: 
-        - camera_name: Name of the camera
+        - camera_name: Camera object
         - camera_settings: Settings of the camera (exposure, f, iso)
     """
 
     context = gp.gp_context_new()
-    camera_new = get_camera("Canon EOS R")
-    print(get_battery_level(camera_new))
-    config = gp.check_result(gp.gp_camera_get_config(camera_new, context))
-    print(config)
-    iso = gp.check_result(
-        gp.gp_widget_get_child_by_name(config, 'iso'))
-    gp.check_result(gp.gp_widget_set_value(iso, str(camera_settings.iso)))
+    config = gp.check_result(gp.gp_camera_get_config(camera, context))
+
+    iso = gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso'))
+    gp.gp_widget_set_value(iso, str(camera_settings.iso))
     # set config
-    gp.check_result(gp.gp_camera_set_config(camera_new, config, context))
+    gp.gp_camera_set_config(camera, config, context)
 
     # Set aperture
-    aperture = gp.check_result(
-        gp.gp_widget_get_child_by_name(config, 'aperture'))
+    aperture = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture'))
+    print(aperture.get_value(), camera_settings.aperture)
     gp.gp_widget_set_value(aperture, str(camera_settings.aperture))
     # set config
-    gp.gp_camera_set_config(camera_new, config, context)
+    gp.gp_camera_set_config(camera, config, context)
 
     # Set shutter speed
-    shutter_speed = gp.check_result(
-        gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+    shutter_speed = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
     gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed))
     # set config
-    gp.gp_camera_set_config(camera_new, config, context)
-
-    # find the capture target config item (to save to the memory card)
-    capture_target = gp.check_result(
-        gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-    # set value
-    value = gp.check_result(gp.gp_widget_get_choice(capture_target, 1))
-    gp.gp_widget_set_value(capture_target, value)
-    # set config
-    gp.gp_camera_set_config(camera_new, config, context)
+    gp.gp_camera_set_config(camera, config, context)
 
     # Take picture
-    camera_new.capture(gp.GP_CAPTURE_IMAGE, context)
+    camera.capture(gp.GP_CAPTURE_IMAGE, context)
 
 
 def get_cameras() -> list:
@@ -129,8 +116,23 @@ def get_camera(camera_name: str):
     idx = abilities_list.lookup_model(camera_name)
     camera.set_abilities(abilities_list[idx])
 
+    context = gp.gp_context_new()
+
     # Initialize the camera
-    camera.init()
+    try:
+        camera.init(context)
+
+        # find the capture target config item (to save to the memory card)
+        config = gp.check_result(gp.gp_camera_get_config(camera, context))
+        capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+        # set value
+        value = gp.check_result(gp.gp_widget_get_choice(capture_target, 1))
+        gp.gp_widget_set_value(capture_target, value)
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+    except gphoto2.GPhoto2Error:
+        pass
+
     return camera
 
 
@@ -270,6 +272,9 @@ def __set_datetime(config) -> bool:
 
 
 def get_camera_dict() -> dict:
+    """ Get a dictionary of camera names and their GPhoto2 camera object
+    Returns: Dictionary of camera names and their GPhoto2 camera object
+    """
     camera_names = get_cameras()
     cameras = dict()
     for camera_name in camera_names:
@@ -390,7 +395,15 @@ def main():
 
             # Take picture
             camera_settings = CameraSettings("1/4000", 5.6, 200)
+
             take_picture(camera_object, camera_settings)
+
+            camera_settings = CameraSettings("1/200", 6.3, 400)
+
+            take_picture(camera_object, camera_settings)
+
+            camera_object.exit()
+
         except gphoto2.GPhoto2Error:
             print("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
 
