@@ -390,6 +390,14 @@ class SolarEclipseView(QMainWindow, Observable):
         camera_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(camera_action)
 
+        # Configuration file
+
+        file_action = QAction("File", self)
+        file_action.setStatusTip("File")
+        file_action.setIcon(QIcon(str(ICON_PATH / "folder.png")))
+        file_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(file_action)
+
         # Settings
 
         settings_action = QAction("Settings", self)
@@ -662,7 +670,7 @@ class SolarEclipseController(Observer):
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
-        self.camera_popup: CameraPopup = None
+        # self.camera_popup: CameraPopup = None
         self.settings_popup: SettingsPopup = None
 
         self.time_display_timer = QTimer()
@@ -714,11 +722,11 @@ class SolarEclipseController(Observer):
             self.view.eclipse_date.setText(changed_object.eclipse_combobox.currentText())
             return
 
-        elif isinstance(changed_object, CameraPopup):
-            camera_overview = changed_object.camera_overview
-            self.model.set_camera_overview(camera_overview)
-            self.view.show_camera_overview(camera_overview)
-            return
+        # elif isinstance(changed_object, CameraPopup):
+        #     camera_overview = changed_object.camera_overview
+        #     self.model.set_camera_overview(camera_overview)
+        #     self.view.show_camera_overview(camera_overview)
+        #     return
 
         elif isinstance(changed_object, SettingsPopup):
             date_format = changed_object.date_combobox.currentText()
@@ -838,14 +846,25 @@ class SolarEclipseController(Observer):
                 self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
 
         elif text == "Camera(s)":
-            # TODO
-            print("Camera(s)")
-            self.camera_popup = CameraPopup(self)
-            self.camera_popup.show()
+            self.update_camera_overview()
+            # camera_overview: dict = get_camera_dict()
+            # self.model.set_camera_overview(camera_overview)
+            # self.view.show_camera_overview(camera_overview)
+
+            # self.camera_popup = CameraPopup(self)
+            # self.camera_popup.show()
+
+        elif text == "File":
+            print("File")
 
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
             self.settings_popup.show()
+
+    def update_camera_overview(self):
+        camera_overview: dict = get_camera_dict()
+        self.model.set_camera_overview(camera_overview)
+        self.view.show_camera_overview(camera_overview)
 
 
 class LocationPopup(QWidget, Observable):
@@ -1171,6 +1190,10 @@ def main():
     view.show()
 
     return app.exec()
+
+
+def update_camera_state(controller: SolarEclipseController):
+    controller.update_camera_overview()
 
 
 if __name__ == "__main__":
