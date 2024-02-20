@@ -4,10 +4,24 @@
 
 ## TODO
 
-- [ ] Annular eclipses
-  - [ ] C2 and C3 are not calculated
-  - [ ] Update GUI
+### Camera
+
+- [X] Crash if you execute two times get_camera_dict
+- [ ] Taking two pictures with an interval of 1 second fails
+  - [X] Set the capturetarget when connecting to camera
+  - [ ] Test with only take_picture -> if this doesn't work, then we will not be able to take a picture every second.
+  - [ ] Try to do all settings in one command
+  - [ ] Check if something has changed.  Only update settings if there was a change.
+- [ ] All commands from Solar Eclipse Maestro: http://xjubier.free.fr/en/site_pages/solar_eclipses/Solar_Eclipse_Maestro_Help/pgs2/btoc6.html
 - [ ] Do we also need a command to update the camera status (free memory and battery status)?
+
+### Notifications
+
+- [X] Notifications need ffmpeg installed...
+
+### General
+
+- [ ] Rework schedule_test to be the main script to execute Solar Eclipse Workbench.  With option to set the date, location, script, gui, ...
 
 ## Problems with gphoto2
 

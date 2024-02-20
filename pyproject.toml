@@ -20,9 +20,10 @@ jplephem = "^2.21"
 gpsdclient = "^1.3.2"
 skyfield = "^1.47"
 skyfield-data = "^5.0.0"
-pydub = "^0.25.1"
 timezonefinder = "^6.2.0"
 astronomy-engine = "^2.1.19"
+pyobjc = "^10.1"
+playsound = {git = "https://github.com/taconi/playsound.git"}
 
 
 [build-system]

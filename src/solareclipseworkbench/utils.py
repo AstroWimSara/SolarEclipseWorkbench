@@ -93,12 +93,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
     args = cmd_str_split[4:-1]
 
     if func_name == "take_picture":
-        settings = CameraSettings(args[1].strip(), args[2].strip(), args[3].strip())
-        # new_args = [cameras[args[0].strip()], settings]
-        new_args = ["test", settings]
+        settings = CameraSettings(args[1].strip(), float(args[2].strip()), int(args[3].strip()))
+        new_args = [cameras[args[0].strip()], settings]
         args = new_args
-        camera.take_picture(new_args[0], new_args[1])
-        exit()
 
     func = COMMANDS[func_name]
 

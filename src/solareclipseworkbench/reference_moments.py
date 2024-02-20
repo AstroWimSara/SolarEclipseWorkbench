@@ -7,7 +7,7 @@ Reference moments of a solar eclipse:
     - C4: Fourth contact;
     - MAX: Maximum eclipse.
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pytz

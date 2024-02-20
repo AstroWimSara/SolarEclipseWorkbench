@@ -1,7 +1,6 @@
 from enum import Enum
 from pathlib import Path
-from pydub import AudioSegment
-from pydub.playback import play
+from playsound import playsound
 
 
 class Notifications(str, Enum):
@@ -92,8 +91,7 @@ def voice_prompt(notification: str) -> None:
         - notification: Notification
     """
     SOUND_PATH = Path(__file__).parent.resolve() / ".." / ".." / "sound"
-    song = AudioSegment.from_wav(str(SOUND_PATH) + "/" + Notifications[notification.lstrip()].value)
-    play(song)
+    playsound(str(SOUND_PATH) + "/" + Notifications[notification.lstrip()].value)
 
 
 def main():
