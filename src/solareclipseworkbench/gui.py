@@ -178,9 +178,33 @@ class SolarEclipseModel:
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
 
-        raise NotImplementedError
-        # for camera in self.camera_overview:
-        #     set_time(camera)
+        for camera_name, camera in self.camera_overview.items():
+
+            logging.info(f"Syncing time for camera {camera_name}")
+            set_time(camera)
+
+    def check_camera_state(self):
+        """ Check whether the focus mode and shooting mode of all connected cameras is set to 'Manual'.
+
+        For the camera(s) for which the focus mode and/or shooting mode is not set to 'Manual', a warning message is
+        logged.
+        """
+
+        for camera_name, camera in self.camera_overview.items():
+
+            # Focus mode
+
+            focus_mode = get_focus_mode(camera)
+            if focus_mode.lower() != "manual":
+                logging.warning(f"The focus mode for camera {camera_name} should be set to 'Manual' "
+                                f"(is '{focus_mode}')")
+
+            # Shooting mode
+
+            shooting_mode = get_shooting_mode(camera)
+            if shooting_mode.lower() != "manual":
+                logging.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
+                                f"(is '{shooting_mode}')")
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -907,6 +931,8 @@ class SolarEclipseController(Observer):
 
         elif text == "Camera(s)":
             self.update_camera_overview()
+            self.sync_camera_time()
+            self.check_camera_state()
 
         elif text == "File":
             print("File")
@@ -916,12 +942,26 @@ class SolarEclipseController(Observer):
             self.settings_popup.show()
 
     def update_camera_overview(self):
+        """ Update the camera overview in the model and the view."""
+
         camera_overview: dict = get_camera_dict()
 
         self.model.set_camera_overview(camera_overview)
+        self.view.show_camera_overview(camera_overview)
+
+    def sync_camera_time(self):
+        """ Set the time of all connected cameras to the time of the computer."""
+
         self.model.sync_camera_time()
 
-        self.view.show_camera_overview(camera_overview)
+    def check_camera_state(self):
+        """ Check whether the focus mode and shooting mode of all connected cameras is set to 'Manual'.
+
+        For the camera(s) for which the focus mode and/or shooting mode is not set to 'Manual', a warning message is
+        logged.
+        """
+
+        self.model.check_camera_state()
 
 
 class LocationPopup(QWidget, Observable):
@@ -1204,8 +1244,22 @@ def main():
     return app.exec()
 
 
-def update_camera_state(controller: SolarEclipseController):
+def sync_cameras(controller: SolarEclipseController):
+    """ Synchronise the cameras for the given controller.
+
+    This consists of the following steps:
+
+        - Update the camera overview in the model and the view of the given controller;
+        - Set the time of all connected cameras to the time of the computer;
+        - Check whether the focus mode and shooting mode of all connected cameras is set to 'Manual'.
+
+    Args:
+        - controller: Controller of the Solar Eclipse Workbench UI
+    """
+
     controller.update_camera_overview()
+    controller.sync_camera_time()
+    controller.check_camera_state()
 
 
 if __name__ == "__main__":
