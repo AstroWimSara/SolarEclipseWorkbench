@@ -22,8 +22,8 @@ skyfield = "^1.47"
 skyfield-data = "^5.0.0"
 timezonefinder = "^6.2.0"
 astronomy-engine = "^2.1.19"
-pyobjc = "^10.1"
 playsound = {git = "https://github.com/taconi/playsound.git"}
+pyqt6 = "^6.6.1"
 
 
 [build-system]
