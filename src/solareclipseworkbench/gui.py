@@ -178,9 +178,33 @@ class SolarEclipseModel:
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
 
-        raise NotImplementedError
-        # for camera in self.camera_overview:
-        #     set_time(camera)
+        for camera_name, camera in self.camera_overview.items():
+
+            logging.info(f"Syncing time for camera {camera_name}")
+            set_time(camera)
+
+    def check_camera_state(self):
+        """ Check whether the focus mode and shooting mode of all connected cameras is set to 'Manual'.
+
+        For the camera(s) for which the focus mode and/or shooting mode is not set to 'Manual', a warning message is
+        logged.
+        """
+
+        for camera_name, camera in self.camera_overview.items():
+
+            # Focus mode
+
+            focus_mode = get_focus_mode(camera)
+            if focus_mode.lower() != "manual":
+                logging.warning(f"The focus mode for camera {camera_name} should be set to 'Manual' "
+                                f"(is '{focus_mode}')")
+
+            # Shooting mode
+
+            shooting_mode = get_shooting_mode(camera)
+            if shooting_mode.lower() != "manual":
+                logging.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
+                                f"(is '{shooting_mode}')")
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -919,6 +943,9 @@ class SolarEclipseController(Observer):
         camera_overview: dict = get_camera_dict()
 
         self.model.set_camera_overview(camera_overview)
+    def sync_camera_time(self):
+        """ Set the time of all connected cameras to the time of the computer."""
+
         self.model.sync_camera_time()
 
         self.view.show_camera_overview(camera_overview)
