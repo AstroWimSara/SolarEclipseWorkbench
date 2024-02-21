@@ -4,7 +4,9 @@
     - View: SolarEclipseView
     - Controller: SolarEclipseController
 """
+
 import datetime
+import logging
 import sys
 from pathlib import Path
 
@@ -16,12 +18,12 @@ from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, 
     QGroupBox, QComboBox, QPushButton, QLineEdit
 from astropy.time import Time
 from geodatasets import get_path
-from gphoto2 import Camera, GPhoto2Error
+from gphoto2 import GPhoto2Error
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
-    get_shooting_mode, get_focus_mode
+    get_shooting_mode, get_focus_mode, set_time
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
@@ -47,8 +49,20 @@ DATE_FORMATS = {
 
 
 class SolarEclipseModel:
+    """ Model for the Solar Eclipse Workbench UI in the MVC pattern. """
 
     def __init__(self):
+        """ Initialisation of the model of the Solar Eclipse Workbench UI.
+
+        This model keeps stock of the following information:
+
+            - The longitude, latitude, and altitude of the location at which the solar eclipse will be observed;
+            - The date of the eclipse that will be observed;
+            - The current time (local time + UTC);
+            - The information of the reference moments (C1, C2, maximum eclipse, C3, C4, sunrise, and sunset) of the
+              solar eclipse: time (local time + UTC), azimuth, and altitude;
+            - A dictionary with the connected cameras.
+        """
 
         # Location
 
@@ -170,8 +184,30 @@ class SolarEclipseModel:
 
 
 class SolarEclipseView(QMainWindow, Observable):
+    """ View for the Solar Eclipse Workbench UI in the MVC pattern. """
 
     def __init__(self):
+        """ Initialisation of the view of the Solar Eclipse Workbench UI.
+
+        This view is responsible for:
+
+            - Visualisation of:
+                - The current date ant time (local time + UTC);
+                - The location at which the solar eclipse will be observed (longitude, latitude, and altitude);
+                - The date and type (total/partial/annular) of the observed eclipse;
+                - The information of the reference moments (C1, C2, maximum eclipse, C3, C4, sunrise, and sunset) of the
+                  observed solar eclipse: time (local time + UTC), azimuth, and altitude;
+                - The information about the connected cameras: camera name, battery level, and free memory;
+            - Bringing up a pop-up window in which the location at which the solar eclipse will be observed (longitude,
+              latitude, and altitude) can be chosen and visualised;
+            - Bringing up a pop-up in which the date of the solar eclipse can be selected from a drop-down menu;
+            - Load the information of the reference moments of the observed solar eclipse;
+            - Load the information about the connected cameras and synchronises their time to the time of the computer
+              they are connected to;
+            - Load the configuration file to schedule the tasks (voice prompts, taking pictures, updating the camera
+              state);
+            - Choose the time and date format.
+        """
 
         super().__init__()
 
@@ -244,6 +280,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.init_ui()
 
     def init_ui(self):
+        """ Add all components to the UI. """
 
         app_frame = QFrame()
         app_frame.setObjectName("AppFrame")
@@ -338,7 +375,6 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
 
         camera_overview_group_box = QGroupBox()
-        # camera_overview_grid_layout.addWidget(QLabel("No camera connected/detected yet \nPress the camera icon in the toolbox to update"))
         self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
         self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
@@ -355,6 +391,20 @@ class SolarEclipseView(QMainWindow, Observable):
         self.setCentralWidget(app_frame)
 
     def add_toolbar(self):
+        """ Create the toolbar of the UI.
+
+        The toolbar has buttons for:
+
+            - Bringing up a pop-up window in which the location at which the solar eclipse will be observed (longitude,
+              latitude, and altitude) can be chosen and visualised;
+            - Bringing up a pop-up in which the date of the solar eclipse can be selected from a drop-down menu;
+            - Loading the information of the reference moments of the observed solar eclipse;
+            - Loading the information about the connected cameras and synchronises their time to the time of the
+              computer they are connected to;
+            - Loading the configuration file to schedule the tasks (voice prompts, taking pictures, updating the camera
+              state);
+            - Bringing up a pop-up window in which you can choose the time and date format.
+        """
 
         self.toolbar = self.addToolBar('MainToolbar')
 
@@ -660,8 +710,15 @@ class SolarEclipseView(QMainWindow, Observable):
 
 
 class SolarEclipseController(Observer):
+    """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
 
     def __init__(self, model: SolarEclipseModel, view: SolarEclipseView):
+        """ Initialisation of the controller of the Solar Eclipse Workbench UI.
+
+        Args:
+            - model: Model for the Solar Eclipse Workbench UI
+            - view: View for the Solar Eclipse Workbench UI
+        """
 
         self.model = model
 
@@ -670,7 +727,6 @@ class SolarEclipseController(Observer):
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
-        # self.camera_popup: CameraPopup = None
         self.settings_popup: SettingsPopup = None
 
         self.time_display_timer = QTimer()
@@ -702,6 +758,16 @@ class SolarEclipseController(Observer):
         pass
 
     def update(self, changed_object):
+        """ Take action when a notification is received from an observable.
+
+        The following notifications can be received:
+
+            - Change in location at which the solar eclipse will be observed;
+            - Change in date at which the solar eclipse will be observed;
+            - Change in date and/or time format;
+            - One of the buttons in the toolbar of the view is clicked.
+
+        """
 
         if isinstance(changed_object, LocationPopup):
             longitude = float(changed_object.longitude.text())
@@ -721,12 +787,6 @@ class SolarEclipseController(Observer):
 
             self.view.eclipse_date.setText(changed_object.eclipse_combobox.currentText())
             return
-
-        # elif isinstance(changed_object, CameraPopup):
-        #     camera_overview = changed_object.camera_overview
-        #     self.model.set_camera_overview(camera_overview)
-        #     self.view.show_camera_overview(camera_overview)
-        #     return
 
         elif isinstance(changed_object, SettingsPopup):
             date_format = changed_object.date_combobox.currentText()
@@ -847,12 +907,6 @@ class SolarEclipseController(Observer):
 
         elif text == "Camera(s)":
             self.update_camera_overview()
-            # camera_overview: dict = get_camera_dict()
-            # self.model.set_camera_overview(camera_overview)
-            # self.view.show_camera_overview(camera_overview)
-
-            # self.camera_popup = CameraPopup(self)
-            # self.camera_popup.show()
 
         elif text == "File":
             print("File")
@@ -863,7 +917,10 @@ class SolarEclipseController(Observer):
 
     def update_camera_overview(self):
         camera_overview: dict = get_camera_dict()
+
         self.model.set_camera_overview(camera_overview)
+        self.model.sync_camera_time()
+
         self.view.show_camera_overview(camera_overview)
 
 
@@ -998,51 +1055,6 @@ class EclipsePopup(QWidget, Observable):
         """ Notify the observer about the selection of a new eclipse date and close the pop-up window."""
 
         self.notify_observers(self)
-        self.close()
-
-
-class CameraPopup(QWidget, Observable):
-
-    def __init__(self, observer: SolarEclipseController):
-        QWidget.__init__(self)
-        self.setWindowTitle("Camera(s)")
-        self.setGeometry(QRect(100, 100, 300, 75))
-        self.add_observer(observer)
-
-        self.camera_overview = get_camera_dict()
-        self.notify_observers(self)
-
-        layout = QHBoxLayout()
-
-        # refresh_button = QPushButton("Refresh")
-        # refresh_button.clicked.connect(self.refresh_camera_overview)
-
-        sync_button = QPushButton("Synchronise")
-        sync_button.clicked.connect(self.sync)
-
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(self.cancel)
-
-        # layout.addWidget(refresh_button)
-        layout.addWidget(sync_button)
-        layout.addWidget(ok_button)
-
-        self.setLayout(layout)
-
-    def refresh_camera_overview(self):
-        print("Refresh camera overview")
-
-        self.camera_overview: dict = get_camera_dict()
-        self.notify_observers(self)
-
-        self.close()
-
-    def sync(self):
-        print("Sync camera overview")
-        # TODO model -> sync_camera_time
-        self.close()
-
-    def cancel(self):
         self.close()
 
 
