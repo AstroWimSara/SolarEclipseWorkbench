@@ -931,6 +931,8 @@ class SolarEclipseController(Observer):
 
         elif text == "Camera(s)":
             self.update_camera_overview()
+            self.sync_camera_time()
+            self.check_camera_state()
 
         elif text == "File":
             print("File")
@@ -940,9 +942,13 @@ class SolarEclipseController(Observer):
             self.settings_popup.show()
 
     def update_camera_overview(self):
+        """ Update the camera overview in the model and the view."""
+
         camera_overview: dict = get_camera_dict()
 
         self.model.set_camera_overview(camera_overview)
+        self.view.show_camera_overview(camera_overview)
+
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
 
@@ -1238,8 +1244,22 @@ def main():
     return app.exec()
 
 
-def update_camera_state(controller: SolarEclipseController):
+def sync_cameras(controller: SolarEclipseController):
+    """ Synchronise the cameras for the given controller.
+
+    This consists of the following steps:
+
+        - Update the camera overview in the model and the view of the given controller;
+        - Set the time of all connected cameras to the time of the computer;
+        - Check whether the focus mode and shooting mode of all connected cameras is set to 'Manual'.
+
+    Args:
+        - controller: Controller of the Solar Eclipse Workbench UI
+    """
+
     controller.update_camera_overview()
+    controller.sync_camera_time()
+    controller.check_camera_state()
 
 
 if __name__ == "__main__":
