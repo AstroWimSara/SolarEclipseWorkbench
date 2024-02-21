@@ -948,7 +948,14 @@ class SolarEclipseController(Observer):
 
         self.model.sync_camera_time()
 
-        self.view.show_camera_overview(camera_overview)
+    def check_camera_state(self):
+        """ Check whether the focus mode and shooting mode of all connected cameras is set to 'Manual'.
+
+        For the camera(s) for which the focus mode and/or shooting mode is not set to 'Manual', a warning message is
+        logged.
+        """
+
+        self.model.check_camera_state()
 
 
 class LocationPopup(QWidget, Observable):
