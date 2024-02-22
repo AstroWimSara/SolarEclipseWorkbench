@@ -1053,6 +1053,7 @@ class LocationPopup(QWidget, Observable):
         grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
         self.altitude = QLineEdit()
         altitude_validator = QDoubleValidator()
+        altitude_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         self.altitude.setValidator(altitude_validator)
         grid_layout.addWidget(self.altitude, 2, 1)
         if model.altitude:
