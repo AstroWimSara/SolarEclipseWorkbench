@@ -83,6 +83,8 @@ class SolarEclipseModel:
 
         # Reference moments
 
+        self.reference_moments = None
+
         self.c1_info: ReferenceMomentInfo = None
         self.c2_info: ReferenceMomentInfo = None
         self.max_info: ReferenceMomentInfo = None
@@ -131,8 +133,8 @@ class SolarEclipseModel:
             - Eclipse type (total / annular / partial / no eclipse)
         """
 
-        reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
-                                                                                 self.altitude, self.eclipse_date)
+        self.reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
+                                                                                      self.altitude, self.eclipse_date)
 
         # No eclipse
 
@@ -146,25 +148,25 @@ class SolarEclipseModel:
         # Partial / total eclipse
 
         elif eclipse_type == "Partial":
-            self.c1_info = reference_moments["C1"]
+            self.c1_info = self.reference_moments["C1"]
             self.c2_info = None
-            self.max_info = reference_moments["MAX"]
+            self.max_info = self.reference_moments["MAX"]
             self.c3_info = None
-            self.c4_info = reference_moments["C4"]
+            self.c4_info = self.reference_moments["C4"]
 
         # Total eclipse
 
         else:
-            self.c1_info = reference_moments["C1"]
-            self.c2_info = reference_moments["C2"]
-            self.max_info = reference_moments["MAX"]
-            self.c3_info = reference_moments["C3"]
-            self.c4_info = reference_moments["C4"]
+            self.c1_info = self.reference_moments["C1"]
+            self.c2_info = self.reference_moments["C2"]
+            self.max_info = self.reference_moments["MAX"]
+            self.c3_info = self.reference_moments["C3"]
+            self.c4_info = self.reference_moments["C4"]
 
-        self.sunrise_info = reference_moments["sunrise"]
-        self.sunset_info = reference_moments["sunset"]
+        self.sunrise_info = self.reference_moments["sunrise"]
+        self.sunset_info = self.reference_moments["sunset"]
 
-        return reference_moments, magnitude, eclipse_type
+        return self.reference_moments, magnitude, eclipse_type
 
     def set_camera_overview(self, camera_overview: dict):
         """ Set the camera overview to the given dictionary.
@@ -252,43 +254,43 @@ class SolarEclipseView(QMainWindow, Observable):
         self.eclipse_date = QLabel(f"")
 
         self.reference_moments_widget = QWidget()
-        self.c1_time_local_label = QLabel()
-        self.c2_time_local_label = QLabel()
-        self.max_time_local_label = QLabel()
-        self.c3_time_local_label = QLabel()
-        self.c4_time_local_label = QLabel()
-        self.sunrise_time_local_label = QLabel()
-        self.sunset_time_local_label = QLabel()
-        self.c1_time_utc_label = QLabel()
-        self.c2_time_utc_label = QLabel()
-        self.max_time_utc_label = QLabel()
-        self.c3_time_utc_label = QLabel()
-        self.c4_time_utc_label = QLabel()
-        self.sunrise_time_utc_label = QLabel()
-        self.sunset_time_utc_label = QLabel()
-        self.c1_countdown_label = QLabel()
-        self.c2_countdown_label = QLabel()
-        self.max_countdown_label = QLabel()
-        self.c3_countdown_label = QLabel()
-        self.c4_countdown_label = QLabel()
-        self.sunrise_countdown_label = QLabel()
-        self.sunset_countdown_label = QLabel()
-        self.c1_azimuth_label = QLabel()
-        self.c2_azimuth_label = QLabel()
-        self.max_azimuth_label = QLabel()
-        self.c3_azimuth_label = QLabel()
-        self.c4_azimuth_label = QLabel()
-        self.c1_altitude_label = QLabel()
-        self.c2_altitude_label = QLabel()
-        self.max_altitude_label = QLabel()
-        self.c3_altitude_label = QLabel()
-        self.c4_altitude_label = QLabel()
+        self.c1_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunrise_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunset_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunrise_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunset_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunrise_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunset_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
 
         self.date_label = QLabel(f"Date [{self.date_format}]")
-        self.date_label_local = QLabel()
-        self.time_label_local = QLabel()
-        self.date_label_utc = QLabel()
-        self.time_label_utc = QLabel()
+        self.date_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.time_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.date_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.time_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
 
         self.longitude_label = QLabel()
         self.longitude_label.setToolTip(
@@ -736,18 +738,23 @@ class SolarEclipseView(QMainWindow, Observable):
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
 
-    def __init__(self, model: SolarEclipseModel, view: SolarEclipseView):
+    def __init__(self, model: SolarEclipseModel, view: SolarEclipseView, is_simulator: bool):
         """ Initialisation of the controller of the Solar Eclipse Workbench UI.
 
         Args:
             - model: Model for the Solar Eclipse Workbench UI
             - view: View for the Solar Eclipse Workbench UI
+            - is_simulator: Indicates whether the UI should be started in simulator mode
         """
 
         self.model = model
 
         self.view = view
         self.view.add_observer(self)
+
+        self.is_simulator = is_simulator
+
+        self.scheduler = None
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
@@ -935,7 +942,30 @@ class SolarEclipseController(Observer):
             self.check_camera_state()
 
         elif text == "File":
-            print("File")
+            filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "", "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
+
+            from solareclipseworkbench.utils import observe_solar_eclipse
+
+            if self.is_simulator:
+                simulated_start = datetime.datetime.now(pytz.utc) + datetime.timedelta(minutes=2)   # TODO
+            else:
+                simulated_start = None
+            self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
+                                                                        self.model.camera_overview, self,
+                                                                        simulated_start)
+            job: Job
+            for job in self.scheduler.get_jobs():
+                self.view.jobs_overview.append(f"{job.next_run_time}: {job.name}")
+
+        elif text == "Stop":
+            print("Shutdown scheduler")
+            try:
+                self.scheduler.shutdown()
+                self.view.jobs_overview.clear()
+                print(self.scheduler.get_jobs())
+            except SchedulerNotRunningError:
+                # Scheduler not running
+                pass
 
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
@@ -1230,6 +1260,7 @@ def format_countdown(countdown: datetime.timedelta):
 def main():
 
     args = list(sys.argv)
+    is_simulator = "--sim" in args or "--simulator" in args
     # args[1:1] = ["-stylesheet", str(styles_location)]
     app = QApplication(args)
     app.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.svg")))
@@ -1237,7 +1268,7 @@ def main():
 
     model = SolarEclipseModel()
     view = SolarEclipseView()
-    controller = SolarEclipseController(model, view)
+    controller = SolarEclipseController(model, view, is_simulator=is_simulator)
 
     view.show()
 
