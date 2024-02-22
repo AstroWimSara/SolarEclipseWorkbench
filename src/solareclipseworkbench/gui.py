@@ -12,10 +12,14 @@ from pathlib import Path
 
 import geopandas
 import pandas as pd
-from PyQt6.QtCore import QTimer, QRect
+import pytz
+from PyQt6.QtCore import QTimer, QRect, Qt
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QLineEdit
+    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTextBrowser
+from apscheduler.job import Job
+from apscheduler.schedulers import SchedulerNotRunningError
+from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
 from geodatasets import get_path
 from gphoto2 import GPhoto2Error
@@ -302,6 +306,9 @@ class SolarEclipseView(QMainWindow, Observable):
         self.eclipse_type = QLabel()
 
         self.camera_overview_grid_layout = QGridLayout()
+        self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.jobs_overview = QTextBrowser()
 
         self.init_ui()
 
@@ -407,12 +414,30 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
         camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
 
+        # TODO
+        # camera_scroll = QScrollArea()
+        # camera_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        # camera_scroll.setWidget(camera_overview_group_box)
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addWidget(reference_moments_group_box)
+        # hbox.addWidget(camera_scroll)
         hbox.addWidget(camera_overview_group_box)
 
-        app_frame.setLayout(hbox)
+        scroll = QScrollArea()
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidgetResizable(True)
+
+        scroll.setWidget(self.jobs_overview)
+
+        global_layout = QVBoxLayout()
+        global_layout.addLayout(hbox)
+
+        global_layout.addWidget(scroll)
+
+        # app_frame.setLayout(hbox)
+        app_frame.setLayout(global_layout)
 
         self.setCentralWidget(app_frame)
 
