@@ -738,6 +738,7 @@ class SolarEclipseView(QMainWindow, Observable):
             # if not widget_index % 3:
             self.camera_overview_grid_layout.itemAt(widget_index).widget().setParent(None)
 
+        self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
         self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
