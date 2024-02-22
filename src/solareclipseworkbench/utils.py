@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-from solareclipseworkbench import voice_prompt, take_picture, sync_cameras
+from solareclipseworkbench import voice_prompt, take_picture, take_burst, sync_cameras
 from solareclipseworkbench.camera import CameraSettings
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.reference_moments import ReferenceMomentInfo
@@ -12,6 +12,7 @@ from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 COMMANDS = {
     'voice_prompt': voice_prompt,
     'take_picture': take_picture,
+    'take_burst': take_burst,
     'sync_cameras': sync_cameras
 }
 
@@ -103,6 +104,10 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
     if func_name == "take_picture":
         settings = CameraSettings(args[1].strip(), float(args[2].strip()), int(args[3].strip()))
         new_args = [cameras[args[0].strip()], settings]
+        args = new_args
+    elif func_name == "take_burst":
+        settings = CameraSettings(args[1].strip(), float(args[2].strip()), int(args[3].strip()))
+        new_args = [cameras[args[0].strip()], settings, float(args[4].strip())]
         args = new_args
     elif func_name == "sync_cameras":
         args = [controller]
