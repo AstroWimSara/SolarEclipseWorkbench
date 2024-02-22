@@ -474,6 +474,14 @@ class SolarEclipseView(QMainWindow, Observable):
         file_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(file_action)
 
+        # Shutdown scheduler
+
+        shutdown_scheduler_action = QAction("Stop", self)
+        shutdown_scheduler_action.setStatusTip("Shut down scheduler")
+        shutdown_scheduler_action.setIcon(QIcon(str(ICON_PATH / "stop.png")))
+        shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(shutdown_scheduler_action)
+
         # Settings
 
         settings_action = QAction("Settings", self)
