@@ -12,10 +12,14 @@ from pathlib import Path
 
 import geopandas
 import pandas as pd
-from PyQt6.QtCore import QTimer, QRect
+import pytz
+from PyQt6.QtCore import QTimer, QRect, Qt
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QLineEdit
+    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTextBrowser
+from apscheduler.job import Job
+from apscheduler.schedulers import SchedulerNotRunningError
+from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
 from geodatasets import get_path
 from gphoto2 import GPhoto2Error
@@ -83,6 +87,8 @@ class SolarEclipseModel:
 
         # Reference moments
 
+        self.reference_moments = None
+
         self.c1_info: ReferenceMomentInfo = None
         self.c2_info: ReferenceMomentInfo = None
         self.max_info: ReferenceMomentInfo = None
@@ -131,8 +137,8 @@ class SolarEclipseModel:
             - Eclipse type (total / annular / partial / no eclipse)
         """
 
-        reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
-                                                                                 self.altitude, self.eclipse_date)
+        self.reference_moments, magnitude, eclipse_type = calculate_reference_moments(self.longitude, self.latitude,
+                                                                                      self.altitude, self.eclipse_date)
 
         # No eclipse
 
@@ -146,25 +152,25 @@ class SolarEclipseModel:
         # Partial / total eclipse
 
         elif eclipse_type == "Partial":
-            self.c1_info = reference_moments["C1"]
+            self.c1_info = self.reference_moments["C1"]
             self.c2_info = None
-            self.max_info = reference_moments["MAX"]
+            self.max_info = self.reference_moments["MAX"]
             self.c3_info = None
-            self.c4_info = reference_moments["C4"]
+            self.c4_info = self.reference_moments["C4"]
 
         # Total eclipse
 
         else:
-            self.c1_info = reference_moments["C1"]
-            self.c2_info = reference_moments["C2"]
-            self.max_info = reference_moments["MAX"]
-            self.c3_info = reference_moments["C3"]
-            self.c4_info = reference_moments["C4"]
+            self.c1_info = self.reference_moments["C1"]
+            self.c2_info = self.reference_moments["C2"]
+            self.max_info = self.reference_moments["MAX"]
+            self.c3_info = self.reference_moments["C3"]
+            self.c4_info = self.reference_moments["C4"]
 
-        self.sunrise_info = reference_moments["sunrise"]
-        self.sunset_info = reference_moments["sunset"]
+        self.sunrise_info = self.reference_moments["sunrise"]
+        self.sunset_info = self.reference_moments["sunset"]
 
-        return reference_moments, magnitude, eclipse_type
+        return self.reference_moments, magnitude, eclipse_type
 
     def set_camera_overview(self, camera_overview: dict):
         """ Set the camera overview to the given dictionary.
@@ -252,43 +258,43 @@ class SolarEclipseView(QMainWindow, Observable):
         self.eclipse_date = QLabel(f"")
 
         self.reference_moments_widget = QWidget()
-        self.c1_time_local_label = QLabel()
-        self.c2_time_local_label = QLabel()
-        self.max_time_local_label = QLabel()
-        self.c3_time_local_label = QLabel()
-        self.c4_time_local_label = QLabel()
-        self.sunrise_time_local_label = QLabel()
-        self.sunset_time_local_label = QLabel()
-        self.c1_time_utc_label = QLabel()
-        self.c2_time_utc_label = QLabel()
-        self.max_time_utc_label = QLabel()
-        self.c3_time_utc_label = QLabel()
-        self.c4_time_utc_label = QLabel()
-        self.sunrise_time_utc_label = QLabel()
-        self.sunset_time_utc_label = QLabel()
-        self.c1_countdown_label = QLabel()
-        self.c2_countdown_label = QLabel()
-        self.max_countdown_label = QLabel()
-        self.c3_countdown_label = QLabel()
-        self.c4_countdown_label = QLabel()
-        self.sunrise_countdown_label = QLabel()
-        self.sunset_countdown_label = QLabel()
-        self.c1_azimuth_label = QLabel()
-        self.c2_azimuth_label = QLabel()
-        self.max_azimuth_label = QLabel()
-        self.c3_azimuth_label = QLabel()
-        self.c4_azimuth_label = QLabel()
-        self.c1_altitude_label = QLabel()
-        self.c2_altitude_label = QLabel()
-        self.max_altitude_label = QLabel()
-        self.c3_altitude_label = QLabel()
-        self.c4_altitude_label = QLabel()
+        self.c1_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunrise_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunset_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunrise_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunset_time_utc_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunrise_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.sunset_countdown_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_azimuth_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c1_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c2_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.max_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c3_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.c4_altitude_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
 
         self.date_label = QLabel(f"Date [{self.date_format}]")
-        self.date_label_local = QLabel()
-        self.time_label_local = QLabel()
-        self.date_label_utc = QLabel()
-        self.time_label_utc = QLabel()
+        self.date_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.time_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.date_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.time_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
 
         self.longitude_label = QLabel()
         self.longitude_label.setToolTip(
@@ -300,6 +306,9 @@ class SolarEclipseView(QMainWindow, Observable):
         self.eclipse_type = QLabel()
 
         self.camera_overview_grid_layout = QGridLayout()
+        self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.jobs_overview = QTextBrowser()
 
         self.init_ui()
 
@@ -316,8 +325,8 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_group_box = QGroupBox()
         place_time_grid_layout = QGridLayout()
 
-        place_time_grid_layout.addWidget(QLabel("Local"), 0, 1)
-        place_time_grid_layout.addWidget(QLabel("UTC"), 0, 2)
+        place_time_grid_layout.addWidget(QLabel("Local", alignment=Qt.AlignmentFlag.AlignRight), 0, 1)
+        place_time_grid_layout.addWidget(QLabel("UTC", alignment=Qt.AlignmentFlag.AlignRight), 0, 2)
 
         place_time_grid_layout.addWidget(self.date_label, 1, 0)
         place_time_grid_layout.addWidget(self.date_label_local, 1, 1)
@@ -353,7 +362,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         reference_moments_group_box = QGroupBox()
         reference_moments_grid_layout = QGridLayout()
-        reference_moments_grid_layout.addWidget(QLabel("Time (local)"), 0, 1)
+        reference_moments_grid_layout.addWidget(QLabel("Time (local)", alignment=Qt.AlignmentFlag.AlignRight), 0, 1)
         reference_moments_grid_layout.addWidget(self.c1_time_local_label, 1, 1)
         reference_moments_grid_layout.addWidget(self.c2_time_local_label, 2, 1)
         reference_moments_grid_layout.addWidget(self.max_time_local_label, 3, 1)
@@ -361,7 +370,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_time_local_label, 5, 1)
         reference_moments_grid_layout.addWidget(self.sunrise_time_local_label, 6, 1)
         reference_moments_grid_layout.addWidget(self.sunset_time_local_label, 7, 1)
-        reference_moments_grid_layout.addWidget(QLabel("Time (UTC)"), 0, 2)
+        reference_moments_grid_layout.addWidget(QLabel("Time (UTC)", alignment=Qt.AlignmentFlag.AlignRight), 0, 2)
         reference_moments_grid_layout.addWidget(self.c1_time_utc_label, 1, 2)
         reference_moments_grid_layout.addWidget(self.c2_time_utc_label, 2, 2)
         reference_moments_grid_layout.addWidget(self.max_time_utc_label, 3, 2)
@@ -369,7 +378,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_time_utc_label, 5, 2)
         reference_moments_grid_layout.addWidget(self.sunrise_time_utc_label, 6, 2)
         reference_moments_grid_layout.addWidget(self.sunset_time_utc_label, 7, 2)
-        reference_moments_grid_layout.addWidget(QLabel("Countdown"), 0, 3)
+        reference_moments_grid_layout.addWidget(QLabel("Countdown", alignment=Qt.AlignmentFlag.AlignRight), 0, 3)
         reference_moments_grid_layout.addWidget(self.c1_countdown_label, 1, 3)
         reference_moments_grid_layout.addWidget(self.c2_countdown_label, 2, 3)
         reference_moments_grid_layout.addWidget(self.max_countdown_label, 3, 3)
@@ -377,13 +386,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_countdown_label, 5, 3)
         reference_moments_grid_layout.addWidget(self.sunrise_countdown_label, 6, 3)
         reference_moments_grid_layout.addWidget(self.sunset_countdown_label, 7, 3)
-        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]"), 0, 4)
+        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]", alignment=Qt.AlignmentFlag.AlignRight), 0, 4)
         reference_moments_grid_layout.addWidget(self.c1_azimuth_label, 1, 4)
         reference_moments_grid_layout.addWidget(self.c2_azimuth_label, 2, 4)
         reference_moments_grid_layout.addWidget(self.max_azimuth_label, 3, 4)
         reference_moments_grid_layout.addWidget(self.c3_azimuth_label, 4, 4)
         reference_moments_grid_layout.addWidget(self.c4_azimuth_label, 5, 4)
-        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]"), 0, 5)
+        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]", alignment=Qt.AlignmentFlag.AlignRight), 0, 5)
         reference_moments_grid_layout.addWidget(self.c1_altitude_label, 1, 5)
         reference_moments_grid_layout.addWidget(self.c2_altitude_label, 2, 5)
         reference_moments_grid_layout.addWidget(self.max_altitude_label, 3, 5)
@@ -405,12 +414,30 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
         camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
 
+        # TODO
+        # camera_scroll = QScrollArea()
+        # camera_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        # camera_scroll.setWidget(camera_overview_group_box)
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addWidget(reference_moments_group_box)
+        # hbox.addWidget(camera_scroll)
         hbox.addWidget(camera_overview_group_box)
 
-        app_frame.setLayout(hbox)
+        scroll = QScrollArea()
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidgetResizable(True)
+
+        scroll.setWidget(self.jobs_overview)
+
+        global_layout = QVBoxLayout()
+        global_layout.addLayout(hbox)
+
+        global_layout.addWidget(scroll)
+
+        # app_frame.setLayout(hbox)
+        app_frame.setLayout(global_layout)
 
         self.setCentralWidget(app_frame)
 
@@ -471,6 +498,14 @@ class SolarEclipseView(QMainWindow, Observable):
         file_action.setIcon(QIcon(str(ICON_PATH / "folder.png")))
         file_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(file_action)
+
+        # Shutdown scheduler
+
+        shutdown_scheduler_action = QAction("Stop", self)
+        shutdown_scheduler_action.setStatusTip("Shut down scheduler")
+        shutdown_scheduler_action.setIcon(QIcon(str(ICON_PATH / "stop.png")))
+        shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(shutdown_scheduler_action)
 
         # Settings
 
@@ -703,6 +738,7 @@ class SolarEclipseView(QMainWindow, Observable):
             # if not widget_index % 3:
             self.camera_overview_grid_layout.itemAt(widget_index).widget().setParent(None)
 
+        self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
         self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
@@ -721,14 +757,20 @@ class SolarEclipseView(QMainWindow, Observable):
                 free_space_percentage = int(free_space_gb / total_space * 100)
 
                 self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
-                self.camera_overview_grid_layout.addWidget(QLabel(str(battery_level)), camera_index, 1)
-                self.camera_overview_grid_layout.addWidget(QLabel(str(free_space_gb)), camera_index, 2)
-                self.camera_overview_grid_layout.addWidget(QLabel(str(free_space_percentage)), camera_index, 3)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel(str(battery_level), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 1)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel(str(free_space_gb), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 2)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel(str(free_space_percentage), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 3)
             except GPhoto2Error:
                 self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
-                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 1)
-                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 2)
-                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 3)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 1)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 2)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 3)
 
             camera_index += 1
 
@@ -736,18 +778,23 @@ class SolarEclipseView(QMainWindow, Observable):
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
 
-    def __init__(self, model: SolarEclipseModel, view: SolarEclipseView):
+    def __init__(self, model: SolarEclipseModel, view: SolarEclipseView, is_simulator: bool):
         """ Initialisation of the controller of the Solar Eclipse Workbench UI.
 
         Args:
             - model: Model for the Solar Eclipse Workbench UI
             - view: View for the Solar Eclipse Workbench UI
+            - is_simulator: Indicates whether the UI should be started in simulator mode
         """
 
         self.model = model
 
         self.view = view
         self.view.add_observer(self)
+
+        self.is_simulator = is_simulator
+
+        self.scheduler = None
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
@@ -935,7 +982,30 @@ class SolarEclipseController(Observer):
             self.check_camera_state()
 
         elif text == "File":
-            print("File")
+            filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "", "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
+
+            from solareclipseworkbench.utils import observe_solar_eclipse
+
+            if self.is_simulator:
+                simulated_start = datetime.datetime.now(pytz.utc) + datetime.timedelta(minutes=2)   # TODO
+            else:
+                simulated_start = None
+            self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
+                                                                        self.model.camera_overview, self,
+                                                                        simulated_start)
+            job: Job
+            for job in self.scheduler.get_jobs():
+                self.view.jobs_overview.append(f"{job.next_run_time}: {job.name}")
+
+        elif text == "Stop":
+            print("Shutdown scheduler")
+            try:
+                self.scheduler.shutdown()
+                self.view.jobs_overview.clear()
+                print(self.scheduler.get_jobs())
+            except SchedulerNotRunningError:
+                # Scheduler not running
+                pass
 
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
@@ -1017,6 +1087,7 @@ class LocationPopup(QWidget, Observable):
         grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
         self.altitude = QLineEdit()
         altitude_validator = QDoubleValidator()
+        altitude_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         self.altitude.setValidator(altitude_validator)
         grid_layout.addWidget(self.altitude, 2, 1)
         if model.altitude:
@@ -1230,6 +1301,7 @@ def format_countdown(countdown: datetime.timedelta):
 def main():
 
     args = list(sys.argv)
+    is_simulator = "--sim" in args or "--simulator" in args
     # args[1:1] = ["-stylesheet", str(styles_location)]
     app = QApplication(args)
     app.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.svg")))
@@ -1237,7 +1309,7 @@ def main():
 
     model = SolarEclipseModel()
     view = SolarEclipseView()
-    controller = SolarEclipseController(model, view)
+    controller = SolarEclipseController(model, view, is_simulator=is_simulator)
 
     view.show()
 
