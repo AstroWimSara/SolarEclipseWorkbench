@@ -318,8 +318,8 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_group_box = QGroupBox()
         place_time_grid_layout = QGridLayout()
 
-        place_time_grid_layout.addWidget(QLabel("Local"), 0, 1)
-        place_time_grid_layout.addWidget(QLabel("UTC"), 0, 2)
+        place_time_grid_layout.addWidget(QLabel("Local", alignment=Qt.AlignmentFlag.AlignRight), 0, 1)
+        place_time_grid_layout.addWidget(QLabel("UTC", alignment=Qt.AlignmentFlag.AlignRight), 0, 2)
 
         place_time_grid_layout.addWidget(self.date_label, 1, 0)
         place_time_grid_layout.addWidget(self.date_label_local, 1, 1)
@@ -355,7 +355,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         reference_moments_group_box = QGroupBox()
         reference_moments_grid_layout = QGridLayout()
-        reference_moments_grid_layout.addWidget(QLabel("Time (local)"), 0, 1)
+        reference_moments_grid_layout.addWidget(QLabel("Time (local)", alignment=Qt.AlignmentFlag.AlignRight), 0, 1)
         reference_moments_grid_layout.addWidget(self.c1_time_local_label, 1, 1)
         reference_moments_grid_layout.addWidget(self.c2_time_local_label, 2, 1)
         reference_moments_grid_layout.addWidget(self.max_time_local_label, 3, 1)
@@ -363,7 +363,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_time_local_label, 5, 1)
         reference_moments_grid_layout.addWidget(self.sunrise_time_local_label, 6, 1)
         reference_moments_grid_layout.addWidget(self.sunset_time_local_label, 7, 1)
-        reference_moments_grid_layout.addWidget(QLabel("Time (UTC)"), 0, 2)
+        reference_moments_grid_layout.addWidget(QLabel("Time (UTC)", alignment=Qt.AlignmentFlag.AlignRight), 0, 2)
         reference_moments_grid_layout.addWidget(self.c1_time_utc_label, 1, 2)
         reference_moments_grid_layout.addWidget(self.c2_time_utc_label, 2, 2)
         reference_moments_grid_layout.addWidget(self.max_time_utc_label, 3, 2)
@@ -371,7 +371,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_time_utc_label, 5, 2)
         reference_moments_grid_layout.addWidget(self.sunrise_time_utc_label, 6, 2)
         reference_moments_grid_layout.addWidget(self.sunset_time_utc_label, 7, 2)
-        reference_moments_grid_layout.addWidget(QLabel("Countdown"), 0, 3)
+        reference_moments_grid_layout.addWidget(QLabel("Countdown", alignment=Qt.AlignmentFlag.AlignRight), 0, 3)
         reference_moments_grid_layout.addWidget(self.c1_countdown_label, 1, 3)
         reference_moments_grid_layout.addWidget(self.c2_countdown_label, 2, 3)
         reference_moments_grid_layout.addWidget(self.max_countdown_label, 3, 3)
@@ -379,13 +379,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_countdown_label, 5, 3)
         reference_moments_grid_layout.addWidget(self.sunrise_countdown_label, 6, 3)
         reference_moments_grid_layout.addWidget(self.sunset_countdown_label, 7, 3)
-        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]"), 0, 4)
+        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]", alignment=Qt.AlignmentFlag.AlignRight), 0, 4)
         reference_moments_grid_layout.addWidget(self.c1_azimuth_label, 1, 4)
         reference_moments_grid_layout.addWidget(self.c2_azimuth_label, 2, 4)
         reference_moments_grid_layout.addWidget(self.max_azimuth_label, 3, 4)
         reference_moments_grid_layout.addWidget(self.c3_azimuth_label, 4, 4)
         reference_moments_grid_layout.addWidget(self.c4_azimuth_label, 5, 4)
-        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]"), 0, 5)
+        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]", alignment=Qt.AlignmentFlag.AlignRight), 0, 5)
         reference_moments_grid_layout.addWidget(self.c1_altitude_label, 1, 5)
         reference_moments_grid_layout.addWidget(self.c2_altitude_label, 2, 5)
         reference_moments_grid_layout.addWidget(self.max_altitude_label, 3, 5)
@@ -723,14 +723,20 @@ class SolarEclipseView(QMainWindow, Observable):
                 free_space_percentage = int(free_space_gb / total_space * 100)
 
                 self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
-                self.camera_overview_grid_layout.addWidget(QLabel(str(battery_level)), camera_index, 1)
-                self.camera_overview_grid_layout.addWidget(QLabel(str(free_space_gb)), camera_index, 2)
-                self.camera_overview_grid_layout.addWidget(QLabel(str(free_space_percentage)), camera_index, 3)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel(str(battery_level), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 1)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel(str(free_space_gb), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 2)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel(str(free_space_percentage), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 3)
             except GPhoto2Error:
                 self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
-                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 1)
-                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 2)
-                self.camera_overview_grid_layout.addWidget(QLabel("N.A."), camera_index, 3)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 1)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 2)
+                self.camera_overview_grid_layout.addWidget(
+                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 3)
 
             camera_index += 1
 
