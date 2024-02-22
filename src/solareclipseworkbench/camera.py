@@ -37,29 +37,55 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> gphoto2:
         - camera_settings: Settings of the camera (exposure, f, iso)
     """
 
-    context = gp.gp_context_new()
-    config = gp.check_result(gp.gp_camera_get_config(camera, context))
-
-    iso = gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso'))
-    gp.gp_widget_set_value(iso, str(camera_settings.iso))
-    # set config
-    gp.gp_camera_set_config(camera, config, context)
-
-    # Set aperture
-    aperture = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture'))
-    print(aperture.get_value(), camera_settings.aperture)
-    gp.gp_widget_set_value(aperture, str(camera_settings.aperture))
-    # set config
-    gp.gp_camera_set_config(camera, config, context)
-
-    # Set shutter speed
-    shutter_speed = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
-    gp.gp_widget_set_value(shutter_speed, str(camera_settings.shutter_speed))
-    # set config
-    gp.gp_camera_set_config(camera, config, context)
+    context, config = __adapt_camera_settings(camera, camera_settings)
 
     # Take picture
     camera.capture(gp.GP_CAPTURE_IMAGE, context)
+
+
+def __adapt_camera_settings(camera, camera_settings):
+    context = gp.gp_context_new()
+    config = gp.check_result(gp.gp_camera_get_config(camera, context))
+    # Set ISO
+    gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso')), str(camera_settings.iso))
+    # set config
+    gp.gp_camera_set_config(camera, config, context)
+    # Set aperture
+    gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture')),
+                           str(camera_settings.aperture))
+    # set config
+    gp.gp_camera_set_config(camera, config, context)
+    # Set shutter speed
+    gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed')),
+                           str(camera_settings.shutter_speed))
+    # set config
+    gp.gp_camera_set_config(camera, config, context)
+    return context, config
+
+
+def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float) -> gphoto2:
+    """ Take a burst with the selected camera during duration seconds
+
+    Args:
+        - camera_name: Camera object
+        - camera_settings: Settings of the camera (exposure, f, iso)
+        - duration: Duration of the burst in seconds
+    """
+    context, config = __adapt_camera_settings(camera, camera_settings)
+
+    # Take picture
+    # Push the button
+    remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+    gp.gp_widget_set_value(remote_release, "Press Full")
+    # set config
+    gp.gp_camera_set_config(camera, config, context)
+    time.sleep(duration)
+
+    # Release the button
+    remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+    gp.gp_widget_set_value(remote_release, "Release Full")
+    # set config
+    gp.gp_camera_set_config(camera, config, context)
 
 
 def get_cameras() -> list:
@@ -128,6 +154,12 @@ def get_camera(camera_name: str):
         # set value
         value = gp.check_result(gp.gp_widget_get_choice(capture_target, 1))
         gp.gp_widget_set_value(capture_target, value)
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
+        # find the drivemode and set to Continuous high speed
+        drive_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
+        gp.gp_widget_set_value(drive_mode, "Continuous high speed")
         # set config
         gp.gp_camera_set_config(camera, config, context)
     except gphoto2.GPhoto2Error:
@@ -390,18 +422,24 @@ def main():
                 exit()
 
             # Set the correct time
-            print (get_time(camera_object))
+            print(get_time(camera_object))
             set_time(camera_object)
 
             # Take picture
+            start = time.time()
             camera_settings = CameraSettings("1/4000", 5.6, 200)
 
             take_picture(camera_object, camera_settings)
 
+            time.sleep(1)
             camera_settings = CameraSettings("1/200", 6.3, 400)
 
             take_picture(camera_object, camera_settings)
+            end = time.time()
+            print(end - start)
 
+            camera_settings = CameraSettings("1/4000", 5.6, 200)
+            # take_burst(camera_object, camera_settings, 2)
             camera_object.exit()
 
         except gphoto2.GPhoto2Error:
