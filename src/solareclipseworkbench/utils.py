@@ -10,7 +10,8 @@ from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 
 COMMANDS = {
     'voice_prompt': voice_prompt,
-    'take_picture': take_picture
+    'take_picture': take_picture,
+    'sync_cameras': sync_cameras
 }
 
 
