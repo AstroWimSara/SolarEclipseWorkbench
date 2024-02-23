@@ -12,6 +12,7 @@
   - [Running Solar Eclipse Workbench](#running-solar-eclipse-workbench)
     - [Command line parameters](#command-line-parameters)
   - [Script file format](#script-file-format)
+  - [Shortcomings](#shortcomings)
   - [Converting scripts from Solar Eclipse Maestro](#converting-scripts-from-solar-eclipse-maestro)
     - [Known Solar Eclipse Maestro commands](#known-solar-eclipse-maestro-commands)
   - [Image attributions](#image-attributions)
@@ -179,11 +180,23 @@ Solar Eclipse Workbench can use the following commands:
 
 This command will take a picture 1 minutes and 2 seconds before first contact (C1) with the Canon EOS 80D.  The ISO will be set to 200, aperture to 8.0 and shutter speed to 1/1250s.
 
+- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds.
+
+```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
+
 - **voice_prompt** - Play a sound file.  
 
 ```voice_prompt, C4, -, 00:00:03, C4_IN_3_SECONDS, "3 seconds before C4 voice prompt"```
 
 This command will play the C4_IN_3_SECONDS sound file 3 seconds before fourth contact (C4).
+
+- **sync_cameras** - Read out the camera settings
+
+```sync_cameras, C2, -, 00:00:04, "Sync the camera status"```
+
+## Shortcomings
+
+- In normal mode, only one picture every two seconds can be made.
 
 ## Converting scripts from Solar Eclipse Maestro
 

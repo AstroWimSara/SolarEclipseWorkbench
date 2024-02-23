@@ -29,9 +29,9 @@ def main(args):
             if args.c1:
                 simulated_start = datetime.now(pytz.utc) + timedelta(minutes=args.c1)
 
-                scheduler = observe_solar_eclipse(timings, filename, cameras, simulated_start)
+                scheduler = observe_solar_eclipse(timings, filename, cameras, None, simulated_start)
             else:
-                scheduler = observe_solar_eclipse(timings, filename, cameras, None)
+                scheduler = observe_solar_eclipse(timings, filename, cameras, None, None)
 
             while len(scheduler.get_jobs()) > 0:
                 sleep(5)
