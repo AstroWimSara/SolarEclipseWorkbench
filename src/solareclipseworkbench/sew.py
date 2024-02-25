@@ -26,12 +26,10 @@ def main(args):
             cameras = camera.get_camera_dict()
 
             # Only do a simulation if args.c1 is set
-            if args.c1:
-                simulated_start = datetime.now(pytz.utc) + timedelta(minutes=args.c1)
-
-                scheduler = observe_solar_eclipse(timings, filename, cameras, None, simulated_start)
+            if args.ref_moment:
+                scheduler = observe_solar_eclipse(timings, filename, cameras, None, args.ref_moment, args.minutes)
             else:
-                scheduler = observe_solar_eclipse(timings, filename, cameras, None, None)
+                scheduler = observe_solar_eclipse(timings, filename, cameras, None, None, None)
 
             while len(scheduler.get_jobs()) > 0:
                 sleep(5)
@@ -87,9 +85,17 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-c1",
-        "--c1",
-        help="minutes to C1 when simulating.",
+        "-r",
+        "--ref_moment",
+        help="reference moment for simulation (C1, C2, C3, C4, Max)",
+        default=False,
+        type=str
+    )
+
+    parser.add_argument(
+        "-m",
+        "--minutes",
+        help="minutes to reference moment for simulation",
         default=False,
         type=float
     )
