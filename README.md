@@ -143,11 +143,11 @@ poetry shell
 
 ```bash
 # On macos, start the commands with sudo
-sudo python src/solareclipseworkbench/sew.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3 -s config/scripts/voice_prompts.txt -c1 2
+sudo python src/solareclipseworkbench/sew.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3 -s config/scripts/voice_prompts.txt -r c1 -m 2
 sudo python src/solareclipseworkbench/sew.py -g
 
 # In Linux or using WSL on Windows, start the command without sudo
-python src/solareclipseworkbench/sew.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3 -s config/scripts/testEOS80D.txt -c1 2
+python src/solareclipseworkbench/sew.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3 -s config/scripts/testEOS80D.txt -r c1 -m 2
 python src/solareclipseworkbench/sew.py -g
 ```
 
