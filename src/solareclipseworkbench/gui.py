@@ -1026,11 +1026,9 @@ class SolarEclipseController(Observer):
                 self.view.jobs_overview.append(f"{job.next_run_time}: {job.name}")
 
         elif text == "Stop":
-            print("Shutdown scheduler")
             try:
                 self.scheduler.shutdown()
                 self.view.jobs_overview.clear()
-                print(self.scheduler.get_jobs())
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
