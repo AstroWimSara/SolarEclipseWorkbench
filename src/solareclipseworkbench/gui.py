@@ -1227,7 +1227,7 @@ class SimulatorPopup(QWidget, Observable):
         layout = QVBoxLayout()
 
         hbox1.addWidget(self.offset_minutes)
-        hbox1.addWidget(QLabel("minutes"))
+        hbox1.addWidget(QLabel("minute(s)"))
         hbox1.addWidget(self.before_after_combobox)
         hbox1.addWidget(self.reference_moment_combobox)
 
