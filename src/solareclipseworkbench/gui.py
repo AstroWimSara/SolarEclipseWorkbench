@@ -858,6 +858,8 @@ class SolarEclipseController(Observer):
             - Change in date and/or time format;
             - One of the buttons in the toolbar of the view is clicked.
 
+        Args:
+            - changed_object: Object from which the update was requested
         """
 
         if isinstance(changed_object, LocationPopup):
