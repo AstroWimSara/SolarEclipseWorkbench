@@ -813,6 +813,8 @@ class SolarEclipseController(Observer):
         self.is_simulator = is_simulator
 
         self.scheduler = None
+        self.sim_reference_moment = None
+        self.sim_offset_minutes = None
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
@@ -879,13 +881,8 @@ class SolarEclipseController(Observer):
             return
 
         elif isinstance(changed_object, SimulatorPopup):
-            changed_object: SimulatorPopup
-            minutes = float(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
-            reference_moment = changed_object.reference_moment_combobox.currentText()
-
-            print(f"{reference_moment} = now + {minutes}")
-
-            # TODO
+            self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
+            self.sim_offset_minutes = float(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -1015,17 +1012,14 @@ class SolarEclipseController(Observer):
             self.simulator_popup.show()
 
         elif text == "File":
-            filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "", "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
+            filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "",
+                                                      "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
 
             from solareclipseworkbench.utils import observe_solar_eclipse
-
-            if self.is_simulator:
-                simulated_start = datetime.datetime.now(pytz.utc) + datetime.timedelta(minutes=2)   # TODO
-            else:
-                simulated_start = None
             self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
                                                                         self.model.camera_overview, self,
-                                                                        simulated_start)
+                                                                        self.sim_reference_moment,
+                                                                        self.sim_offset_minutes)
             job: Job
             for job in self.scheduler.get_jobs():
                 self.view.jobs_overview.append(f"{job.next_run_time}: {job.name}")
