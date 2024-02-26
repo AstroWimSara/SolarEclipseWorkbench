@@ -1023,7 +1023,36 @@ class SolarEclipseController(Observer):
                                                                         self.sim_offset_minutes)
             job: Job
             for job in self.scheduler.get_jobs():
-                self.view.jobs_overview.append(f"{job.next_run_time}: {job.name}")
+
+                job_string = ""
+
+                if job.func.__name__ == "take_picture":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+
+                    job_string = f"take_picture(\"{camera_name}\", {shutter_speed}, {aperture}, {iso})"
+
+                elif job.func.__name__ == "take_burst":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+                    duration = job.args[2]
+
+                    job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
+
+                elif job.func.__name__ == "sync_cameras":
+                    job_string = f"sync_cameras()"
+
+                elif job.func.__name__ == "voice_prompt":
+                    job_string = f"{job.func.__name__}({', '.join(job.args)})"
+
+                if job.next_run_time:
+                    self.view.jobs_overview.append(f"{job.next_run_time}: {job_string} -> {job.name}")
 
         elif text == "Stop":
             try:
