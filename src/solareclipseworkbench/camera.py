@@ -15,15 +15,16 @@ class CameraError(Exception):
 
 class CameraSettings:
 
-    def __init__(self, shutter_speed: str, aperture: float, iso: int):
+    def __init__(self, camera_name: str, shutter_speed: str, aperture: str, iso: int):
         """ Initialise new camera settings.
 
         Args:
+            - camera_name: Name of the camera
             - shutter_speed: Exposure time [s], e.g. "1/2000".
             - aperture: Aperture (f-number), e.g. 5.6.
             - iso: ISO-value.
         """
-
+        self.camera_name = camera_name
         self.shutter_speed = shutter_speed
         self.aperture = aperture
         self.iso = iso
@@ -50,16 +51,26 @@ def __adapt_camera_settings(camera, camera_settings):
     gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso')), str(camera_settings.iso))
     # set config
     gp.gp_camera_set_config(camera, config, context)
+    time.sleep(0.1)
+
     # Set aperture
-    gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture')),
-                           str(camera_settings.aperture))
+    if "Canon" in camera_settings.camera_name:
+        gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture')),
+                               str(camera_settings.aperture))
+    elif "Nikon" in camera_settings.camera_name:
+        gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number')),
+                               str(camera_settings.aperture))
     # set config
     gp.gp_camera_set_config(camera, config, context)
+    time.sleep(0.1)
+
     # Set shutter speed
     gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed')),
                            str(camera_settings.shutter_speed))
     # set config
     gp.gp_camera_set_config(camera, config, context)
+    time.sleep(0.1)
+
     return context, config
 
 
@@ -335,7 +346,7 @@ def get_camera_overview() -> dict:
             total_space = get_space(camera)
 
             camera_overview[camera_name[0]] = CameraInfo(camera_name, battery_level, free_space, total_space)
-            camera.exit()
+            # camera.exit()
         except gp.GPhoto2Error as error:
             logging.error("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
 
@@ -413,32 +424,32 @@ def main():
             print(f"{camera[0]}: {get_battery_level(camera_object)} - {get_free_space(camera_object)} GB of {get_space(camera_object)} GB free.")
 
             # Check if the lens and the camera are set to manual
-            if get_shooting_mode(camera_object) != "Manual":
-                print("Set the camera in Manual mode!")
-                exit()
-
-            if get_focus_mode(camera_object) != "Manual":
-                print("Set the lens in Manual mode!")
-                exit()
+            # if get_shooting_mode(camera_object) != "Manual":
+            #     print("Set the camera in Manual mode!")
+            #     exit()
+            #
+            # if get_focus_mode(camera_object) != "Manual":
+            #     print("Set the lens in Manual mode!")
+            #     exit()
 
             # Set the correct time
             print(get_time(camera_object))
-            set_time(camera_object)
+            # set_time(camera_object)
 
             # Take picture
             start = time.time()
-            camera_settings = CameraSettings("1/4000", 5.6, 200)
+            camera_settings = CameraSettings(camera[0], "1/1000", "8.0", 100)
 
             take_picture(camera_object, camera_settings)
 
-            time.sleep(1)
-            camera_settings = CameraSettings("1/200", 6.3, 400)
-
-            take_picture(camera_object, camera_settings)
-            end = time.time()
-            print(end - start)
-
-            camera_settings = CameraSettings("1/4000", 5.6, 200)
+            # time.sleep(1)
+            # camera_settings = CameraSettings(camera[0], "1/200", 6.3, 400)
+            #
+            # take_picture(camera_object, camera_settings)
+            # end = time.time()
+            # print(end - start)
+            #
+            # camera_settings = CameraSettings(camera[0], "1/4000", 5.6, 200)
             # take_burst(camera_object, camera_settings, 2)
             camera_object.exit()
 

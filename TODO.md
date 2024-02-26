@@ -15,14 +15,32 @@
 - [ ] Show duration of totality at given location
 - [ ] Calculate list of solar eclipse (don't use a fixed list)
 - [ ] Log all actions
+- [ ] Crash if camera in script does not exist...
 
 ### Scripts
 
+- [ ] Add TAKEBST to conversion script
+- [ ] Add TAKEBKT to conversion script
 - [ ] Add Do-while loops
 - [ ] Convert burst mode, bracketing, ...
 
 ### Camera
 
+- [ ] Test Nikon 
+  - [X] Get name
+  - [X] Get Battery level
+  - [X] Get free space on card
+  - [X] Get total space on card
+  - [X] Get date
+  - [ ] Set date
+  - [X] Set ISO
+  - [X] Set Aperture
+  - [X] Set shutter speed
+  - [X] Take picture
+  - [ ] Take burst
+  - [ ] Check shooting mode
+  - [ ] Check lens mode
+- [ ] Fix setting Aperture on EOS 80D
 - [ ] Fix sync_cameras
 - [ ] Mirror up
 - [ ] Add bracketing option
