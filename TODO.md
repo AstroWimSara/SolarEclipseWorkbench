@@ -1,25 +1,41 @@
-## Interesting links
-
-- https://github.com/quentinsf/pygarmin
-
 ## TODO
+
+### GPS
+
+- [ ] Get GPS coordinates from device
+- https://github.com/quentinsf/pygarmin
+  
+### GUI
+
+- [ ] Simulation
+  - [X] Rewrite observe_solar_eclipse to make it possible to set a simulation (minutes to reference moment)
+  - [ ] Add in GUI
+- [ ] Save settings and reopen same settings again
+- [ ] Show scheduled jobs in a better way
+- [ ] Show duration of totality at given location
+- [ ] Calculate list of solar eclipse (don't use a fixed list)
+- [ ] Log all actions
+
+### Scripts
+
+- [ ] Add Do-while loops
+- [ ] Convert burst mode, bracketing, ...
 
 ### Camera
 
-- [X] Crash if you execute two times get_camera_dict
-- [ ] Taking two pictures with an interval of 1 second fails
-  - [X] Set the capturetarget when connecting to camera
-  - [X] Try to do all settings in one command
-  - [ ] Check if something has changed.  Only update settings if there was a change.
-  - [ ] Burst mode: The following command takes a lot of images, but the images are not send to the card (or the computer):
-```bash
-sudo gphoto2 --set-config capturetarget=1 --set-config drivemode="Continuous high speed" --set-config eosremoterelease="Press Full" --wait-event=1s --set-config eosremoterelease="Release Full" --set-config capturetarget=1 --wait-event=1s
-```
+- [ ] Fix sync_cameras
+- [ ] Mirror up
+- [ ] Add bracketing option
+- [ ] Make movies
+- [ ] Simulate an intervalometer
 - [ ] All commands from Solar Eclipse Maestro: http://xjubier.free.fr/en/site_pages/solar_eclipses/Solar_Eclipse_Maestro_Help/pgs2/btoc6.html
-- [ ] Do we also need a command to update the camera status (free memory and battery status)?
-- [ ] Sound does not work in wsl
 
-## Problems with gphoto2
+### Notifications 
+
+- [ ] Sound does not work in wsl
+  - [ ] Known problem, we should remove the voice_prompt commands from the scheduler
+
+### Problems with gphoto2
 
 - [ ] Camera access only works when executing the command using `sudo`
 

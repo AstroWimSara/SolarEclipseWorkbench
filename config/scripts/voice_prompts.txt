@@ -57,7 +57,7 @@ voice_prompt, C3, +, 00:00:15, C3_PLUS_15_SECONDS, "15 seconds after C3 voice pr
 voice_prompt, C3, +, 00:00:25, C3_PLUS_25_SECONDS, "25 seconds after C3 voice prompt"
 voice_prompt, C3, +, 00:00:45, C3_PLUS_45_SECONDS, "45 seconds after C3 voice prompt"
 voice_prompt, C3, +, 00:01:00, C3_PLUS_1_MINUTE, "1 minute after C3 voice prompt"
-voice_prompt, C3, +, 00:02:00, C3_PLUS_2_MINUTE, "2 minutes after C3 voice prompt"
+voice_prompt, C3, +, 00:02:00, C3_PLUS_2_MINUTES, "2 minutes after C3 voice prompt"
 voice_prompt, C4, -, 00:01:00, C4_IN_60_SECONDS, "60 seconds before C4 voice prompt"
 voice_prompt, C4, -, 00:00:40, C4_IN_40_SECONDS, "40 seconds before C4 voice prompt"
 voice_prompt, C4, -, 00:00:30, C4_IN_30_SECONDS, "30 seconds before C4 voice prompt"
