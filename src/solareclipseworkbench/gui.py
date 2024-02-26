@@ -12,7 +12,6 @@ from pathlib import Path
 
 import geopandas
 import pandas as pd
-import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
@@ -27,7 +26,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
-    get_shooting_mode, get_focus_mode, set_time
+    get_shooting_mode, get_focus_mode, set_time, CameraSettings
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
