@@ -12,7 +12,6 @@ from pathlib import Path
 
 import geopandas
 import pandas as pd
-import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
@@ -27,7 +26,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
-    get_shooting_mode, get_focus_mode, set_time
+    get_shooting_mode, get_focus_mode, set_time, CameraSettings
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 
@@ -50,6 +49,13 @@ DATE_FORMATS = {
     "dd/mm/yyyy": "%d/%m/%Y",
     "mm/dd/yy": "%m/%d/%Y"
 }
+
+BEFORE_AFTER = {
+    "before": 1,
+    "after": -1
+}
+
+REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
 
 class SolarEclipseModel:
@@ -216,7 +222,7 @@ class SolarEclipseModel:
 class SolarEclipseView(QMainWindow, Observable):
     """ View for the Solar Eclipse Workbench UI in the MVC pattern. """
 
-    def __init__(self):
+    def __init__(self, is_simulator: bool = False):
         """ Initialisation of the view of the Solar Eclipse Workbench UI.
 
         This view is responsible for:
@@ -237,11 +243,15 @@ class SolarEclipseView(QMainWindow, Observable):
             - Load the configuration file to schedule the tasks (voice prompts, taking pictures, updating the camera
               state);
             - Choose the time and date format.
+
+        Args:
+            - is_simulator: Indicates whether the UI should be started in simulator mode
         """
 
         super().__init__()
 
         self.controller = None
+        self.is_simulator = is_simulator
 
         self.setGeometry(300, 300, 1500, 1000)
         self.setWindowTitle("Solar Eclipse Workbench")
@@ -490,6 +500,13 @@ class SolarEclipseView(QMainWindow, Observable):
         camera_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
         camera_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(camera_action)
+
+        if self.is_simulator:
+            simulator_action = QAction("Simulator", self)
+            simulator_action.setStatusTip("Configure simulator")
+            simulator_action.setIcon(QIcon(str(ICON_PATH / "simulator.png")))
+            simulator_action.triggered.connect(self.on_toolbar_button_click)
+            self.toolbar.addAction(simulator_action)
 
         # Configuration file
 
@@ -795,9 +812,12 @@ class SolarEclipseController(Observer):
         self.is_simulator = is_simulator
 
         self.scheduler = None
+        self.sim_reference_moment = None
+        self.sim_offset_minutes = None
 
         self.location_popup: LocationPopup = None
         self.eclipse_popup: EclipsePopup = None
+        self.simulator_popup: SimulatorPopup = None
         self.settings_popup: SettingsPopup = None
 
         self.time_display_timer = QTimer()
@@ -838,6 +858,8 @@ class SolarEclipseController(Observer):
             - Change in date and/or time format;
             - One of the buttons in the toolbar of the view is clicked.
 
+        Args:
+            - changed_object: Object from which the update was requested
         """
 
         if isinstance(changed_object, LocationPopup):
@@ -857,6 +879,11 @@ class SolarEclipseController(Observer):
             self.model.set_eclipse_date(Time(datetime.datetime.strptime(eclipse_date, DATE_FORMATS[self.view.date_format])))
 
             self.view.eclipse_date.setText(changed_object.eclipse_combobox.currentText())
+            return
+
+        elif isinstance(changed_object, SimulatorPopup):
+            self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
+            self.sim_offset_minutes = float(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -981,28 +1008,56 @@ class SolarEclipseController(Observer):
             self.sync_camera_time()
             self.check_camera_state()
 
+        elif text == "Simulator":
+            self.simulator_popup = SimulatorPopup(self)
+            self.simulator_popup.show()
+
         elif text == "File":
-            filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "", "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
+            filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "",
+                                                      "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
 
             from solareclipseworkbench.utils import observe_solar_eclipse
-
-            if self.is_simulator:
-                simulated_start = datetime.datetime.now(pytz.utc) + datetime.timedelta(minutes=2)   # TODO
-            else:
-                simulated_start = None
             self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
                                                                         self.model.camera_overview, self,
-                                                                        simulated_start)
+                                                                        self.sim_reference_moment,
+                                                                        self.sim_offset_minutes)
             job: Job
             for job in self.scheduler.get_jobs():
-                self.view.jobs_overview.append(f"{job.next_run_time}: {job.name}")
+
+                job_string = ""
+
+                if job.func.__name__ == "take_picture":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+
+                    job_string = f"take_picture(\"{camera_name}\", {shutter_speed}, {aperture}, {iso})"
+
+                elif job.func.__name__ == "take_burst":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+                    duration = job.args[2]
+
+                    job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
+
+                elif job.func.__name__ == "sync_cameras":
+                    job_string = f"sync_cameras()"
+
+                elif job.func.__name__ == "voice_prompt":
+                    job_string = f"{job.func.__name__}({', '.join(job.args)})"
+
+                if job.next_run_time:
+                    self.view.jobs_overview.append(f"{job.next_run_time}: {job_string} -> {job.name}")
 
         elif text == "Stop":
-            print("Shutdown scheduler")
             try:
                 self.scheduler.shutdown()
                 self.view.jobs_overview.clear()
-                print(self.scheduler.get_jobs())
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
@@ -1169,6 +1224,64 @@ class EclipsePopup(QWidget, Observable):
         self.close()
 
 
+class SimulatorPopup(QWidget, Observable):
+    def __init__(self, observer: SolarEclipseController):
+        """ Initialisation of pop-up window to specify the start time of the simulation.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified about the specification of the start time of
+                        the simulation
+        """
+
+        QWidget.__init__(self)
+        self.setWindowTitle("Starting time")
+        self.setGeometry(QRect(100, 100, 300, 75))
+        self.add_observer(observer)
+
+        hbox1 = QHBoxLayout()
+        hbox2 = QHBoxLayout()
+
+        self.offset_minutes = QLineEdit()
+        offset_minutes_validator = QDoubleValidator()
+        self.offset_minutes.setValidator(offset_minutes_validator)
+
+        self.before_after_combobox = QComboBox()
+        self.before_after_combobox.addItems(BEFORE_AFTER.keys())
+
+        self.reference_moment_combobox = QComboBox()
+        self.reference_moment_combobox.addItems(REFERENCE_MOMENTS)
+
+        layout = QVBoxLayout()
+
+        hbox1.addWidget(self.offset_minutes)
+        hbox1.addWidget(QLabel("minute(s)"))
+        hbox1.addWidget(self.before_after_combobox)
+        hbox1.addWidget(self.reference_moment_combobox)
+
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept_starting_time)
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.cancel_starting_time)
+
+        hbox2.addWidget(ok_button)
+        hbox2.addWidget(cancel_button)
+
+        layout.addLayout(hbox1)
+        layout.addLayout(hbox2)
+
+        self.setLayout(layout)
+
+    def accept_starting_time(self):
+        """ Notify the observer about the specification of the starting time of the simulation and close the pop-up window. """
+
+        self.notify_observers(self)
+        self.close()
+
+    def cancel_starting_time(self):
+        """ Close the pop-up window. """
+
+
 class SettingsPopup(QWidget, Observable):
 
     def __init__(self, observer: SolarEclipseController):
@@ -1178,10 +1291,10 @@ class SettingsPopup(QWidget, Observable):
 
         If the setting had already been set before, this will be shown in the comboboxes.
 
-
         Args:
             - observer: SolarEclipseController that needs to be notified about the settings.
         """
+
         QWidget.__init__(self)
         self.setWindowTitle("Settings")
         self.setGeometry(QRect(100, 100, 300, 75))
@@ -1308,7 +1421,7 @@ def main():
     app.setApplicationName("Solar Eclipse Workbench")
 
     model = SolarEclipseModel()
-    view = SolarEclipseView()
+    view = SolarEclipseView(is_simulator=is_simulator)
     controller = SolarEclipseController(model, view, is_simulator=is_simulator)
 
     view.show()

@@ -115,11 +115,11 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
     args = cmd_str_split[4:-1]
 
     if func_name == "take_picture":
-        settings = CameraSettings(args[1].strip(), float(args[2].strip()), int(args[3].strip()))
+        settings = CameraSettings(args[0].strip(), args[1].strip(), float(args[2].strip()), int(args[3].strip()))
         new_args = [cameras[args[0].strip()], settings]
         args = new_args
     elif func_name == "take_burst":
-        settings = CameraSettings(args[1].strip(), float(args[2].strip()), int(args[3].strip()))
+        settings = CameraSettings(args[0].strip(), args[1].strip(), float(args[2].strip()), int(args[3].strip()))
         new_args = [cameras[args[0].strip()], settings, float(args[4].strip())]
         args = new_args
     elif func_name == "sync_cameras":
