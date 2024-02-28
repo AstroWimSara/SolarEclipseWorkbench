@@ -213,7 +213,7 @@ class SolarEclipseModel:
 
             # Shooting mode
 
-            shooting_mode = get_shooting_mode(camera)
+            shooting_mode = get_shooting_mode(camera_name, camera)
             if shooting_mode.lower() != "manual":
                 logging.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
                                 f"(is '{shooting_mode}')")
@@ -768,7 +768,7 @@ class SolarEclipseView(QMainWindow, Observable):
                 free_space_gb = get_free_space(camera)
                 total_space = get_space(camera)
 
-                # shooting_mode = get_shooting_mode(camera)
+                # shooting_mode = get_shooting_mode(camera_name, camera)
                 # focus_mode = get_focus_mode(camera)
 
                 free_space_percentage = int(free_space_gb / total_space * 100)
