@@ -29,8 +29,8 @@ def observe_solar_eclipse(ref_moments: ReferenceMomentInfo, commands_filename: s
                              moment during the solar eclipse
         - cameras: Dictionary of camera names and camera objects
         - controller: Controller of the Solar Eclipse Workbench UI
-        - reference_moment: Reference moment to use for the simulation.  Possible values are C1, C2, C3, C4, and MAX.
-                            None if no simulation should be used
+        - reference_moment: Reference moment to use for the simulation.  Possible values are C1, C2, C3, C4, sunrise,
+                            sunset, and MAX.  None if no simulation should be used
         - minutes_to_reference_moment: Minutes to reference moment when simulating, None if no simulation should be used
 
     Returns: Scheduler that is used to schedule the commands.
@@ -74,8 +74,8 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
                              respect to which the commands are scheduled
         - cameras: Dictionary of camera names and camera objects
         - controller: Controller of the Solar Eclipse Workbench UI
-        - reference_moment: Reference moment to use for the simulation.  Possible values are C1, C2, C3, C4, and MAX.
-                            None if no simulation should be used
+        - reference_moment: Reference moment to use for the simulation.  Possible values are C1, C2, C3, C4, sunrise,
+                            sunset, and MAX. None if no simulation should be used
         - simulated_start: datetime with the time to simulate relative to the reference moment.
                             None if no simulation is to be used.
 
@@ -98,7 +98,7 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
         - cameras: Dictionary of camera names and camera objects
         - controller: Controller of the Solar Eclipse Workbench UI
         - reference_moment_for_simulation: Reference moment to use for the simulation.  Possible values are C1, C2, C3,
-                            C4, and MAX. None if no simulation should be used.
+                            C4, sunrise, sunset, and MAX. None if no simulation should be used.
         - simulated_start: datetime with the time to simulate relative to the reference moment.
                             None if no simulation is to be used.
     """
@@ -114,16 +114,23 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str:
 
     args = cmd_str_split[4:-1]
 
-    if func_name == "take_picture":
-        settings = CameraSettings(args[0].strip(), args[1].strip(), float(args[2].strip()), int(args[3].strip()))
-        new_args = [cameras[args[0].strip()], settings]
-        args = new_args
-    elif func_name == "take_burst":
-        settings = CameraSettings(args[0].strip(), args[1].strip(), float(args[2].strip()), int(args[3].strip()))
-        new_args = [cameras[args[0].strip()], settings, float(args[4].strip())]
-        args = new_args
-    elif func_name == "sync_cameras":
-        args = [controller]
+    if func_name != "voice_prompt":
+        if cameras is not None:
+            try:
+                if func_name == "take_picture":
+                    settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
+                    new_args = [cameras[args[0].strip()], settings]
+                    args = new_args
+                elif func_name == "take_burst":
+                    settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
+                    new_args = [cameras[args[0].strip()], settings, float(args[4].strip())]
+                    args = new_args
+                elif func_name == "sync_cameras":
+                    args = [controller]
+            except KeyError:
+                return
+        else:
+            return
 
     func = COMMANDS[func_name]
 
