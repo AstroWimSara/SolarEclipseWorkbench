@@ -8,14 +8,15 @@
 import datetime
 import logging
 import sys
+from enum import Enum
 from pathlib import Path
 
 import geopandas
 import pandas as pd
-from PyQt6.QtCore import QTimer, QRect, Qt
+from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTextBrowser
+    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTableView
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -318,7 +319,9 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout = QGridLayout()
         self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.jobs_overview = QTextBrowser()
+        # self.jobs_overview = QTextBrowser()
+        self.jobs_model: JobsTableModel = None
+        self.jobs_table = QTableView()
 
         self.init_ui()
 
@@ -424,14 +427,9 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
         camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
 
-        # TODO
-        # camera_scroll = QScrollArea()
-        # camera_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        # camera_scroll.setWidget(camera_overview_group_box)
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addWidget(reference_moments_group_box)
-        # hbox.addWidget(camera_scroll)
         hbox.addWidget(camera_overview_group_box)
 
         scroll = QScrollArea()
@@ -439,14 +437,13 @@ class SolarEclipseView(QMainWindow, Observable):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidgetResizable(True)
 
-        scroll.setWidget(self.jobs_overview)
+        scroll.setWidget(self.jobs_table)
 
         global_layout = QVBoxLayout()
         global_layout.addLayout(hbox)
 
         global_layout.addWidget(scroll)
 
-        # app_frame.setLayout(hbox)
         app_frame.setLayout(global_layout)
 
         self.setCentralWidget(app_frame)
@@ -791,6 +788,12 @@ class SolarEclipseView(QMainWindow, Observable):
 
             camera_index += 1
 
+    def update_jobs_countdown(self):
+        """ Update the countdown of the scheduled jobs. """
+
+        if self.jobs_model:
+            self.jobs_model.update_countdown()
+
 
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -844,6 +847,8 @@ class SolarEclipseController(Observer):
 
         self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
                               countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
+
+        self.view.update_jobs_countdown()
 
     def do(self, actions):
         pass
@@ -1021,43 +1026,16 @@ class SolarEclipseController(Observer):
                                                                         self.model.camera_overview, self,
                                                                         self.sim_reference_moment,
                                                                         self.sim_offset_minutes)
-            job: Job
-            for job in self.scheduler.get_jobs():
 
-                job_string = ""
-
-                if job.func.__name__ == "take_picture":
-                    camera_settings: CameraSettings = job.args[1]
-                    camera_name = camera_settings.camera_name
-                    shutter_speed = camera_settings.shutter_speed
-                    aperture = camera_settings.aperture
-                    iso = camera_settings.iso
-
-                    job_string = f"take_picture(\"{camera_name}\", {shutter_speed}, {aperture}, {iso})"
-
-                elif job.func.__name__ == "take_burst":
-                    camera_settings: CameraSettings = job.args[1]
-                    camera_name = camera_settings.camera_name
-                    shutter_speed = camera_settings.shutter_speed
-                    aperture = camera_settings.aperture
-                    iso = camera_settings.iso
-                    duration = job.args[2]
-
-                    job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
-
-                elif job.func.__name__ == "sync_cameras":
-                    job_string = f"sync_cameras()"
-
-                elif job.func.__name__ == "voice_prompt":
-                    job_string = f"{job.func.__name__}({', '.join(job.args)})"
-
-                if job.next_run_time:
-                    self.view.jobs_overview.append(f"{job.next_run_time}: {job_string} -> {job.name}")
+            self.view.jobs_model = JobsTableModel(self.scheduler)
+            self.view.jobs_table.setModel(self.view.jobs_model)
+            self.view.jobs_table.resizeColumnsToContents()
+            self.view.jobs_table.setColumnWidth(4, 150)
 
         elif text == "Stop":
             try:
                 self.scheduler.shutdown()
-                self.view.jobs_overview.clear()
+                self.view.jobs_model.clear_jobs_overview()
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
@@ -1409,6 +1387,132 @@ def format_countdown(countdown: datetime.timedelta):
     formatted_countdown += f"{minutes:02d}:{seconds:02d}"
 
     return formatted_countdown
+
+
+class JobsTableColumnNames(Enum):
+    """ Enumeration of the column names for the table with the scheduled jobs. """
+
+    EXEC_TIME_UTC = "Execution time (UTC)"
+    EXEC_TIME_LOCAL = "Execution time (local)"
+    COUNTDOWN = "Countdown"
+    COMMAND = "Command"
+    DESCRIPTION = "Description"
+
+
+class JobsTableModel(QAbstractTableModel):
+    def __init__(self, scheduler: BackgroundScheduler):
+        """ Initialisation of the model for the table with the scheduled jobs.
+        Args:
+            - scheduler: Background scheduler
+        """
+
+        super().__init__()
+
+        now = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+
+        data = []
+
+        job: Job
+        for job in scheduler.get_jobs():
+
+            execution_time: datetime.datetime = job.next_run_time
+            if execution_time:
+
+                countdown = "-"
+                if now <= execution_time:
+                    countdown = format_countdown(execution_time - now)
+                description: str = job.name
+
+                job_string = ""
+
+                if job.func.__name__ == "take_picture":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+
+                    job_string = f"take_picture(\"{camera_name}\", {shutter_speed}, {aperture}, {iso})"
+
+                elif job.func.__name__ == "take_burst":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+                    duration = job.args[2]
+
+                    job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
+
+                elif job.func.__name__ == "sync_cameras":
+                    job_string = f"sync_cameras()"
+
+                elif job.func.__name__ == "voice_prompt":
+                    job_string = f"{job.func.__name__}({', '.join(job.args)})"
+
+                data.append([execution_time, countdown, job_string, description])
+
+        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.EXEC_TIME_UTC.value,
+                                                 JobsTableColumnNames.COUNTDOWN.value,
+                                                 JobsTableColumnNames.COMMAND.value,
+                                                 JobsTableColumnNames.DESCRIPTION.value])
+
+    def update_countdown(self):
+        """ Update the countdown until execution time."""
+
+        if self._data.shape[0] > 0:
+
+            self.beginResetModel()
+            now = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+
+            execution_times = self._data[JobsTableColumnNames.EXEC_TIME_UTC.value]
+            countdown: datetime.timedelta = execution_times - now
+
+            for row in range(len(countdown)):
+
+                new_countdown = countdown[row]
+                if new_countdown.total_seconds() > 0:
+                    new_countdown = format_countdown(countdown[row])
+                else:
+                    new_countdown = "-"
+                self._data.loc[row, JobsTableColumnNames.COUNTDOWN.value] = new_countdown
+            self.endResetModel()
+
+    def clear_jobs_overview(self):
+        """ Clear the scheduled jobs overview. """
+
+        self.beginResetModel()
+        self._data = pd.DataFrame(columns=self._data.columns)
+        self.endResetModel()
+
+    def rowCount(self, index):
+        return self._data.shape[0]
+
+    def columnCount(self, index):
+        return self._data.shape[1]
+
+    def headerData(self, section, orientation, role):
+        # section is the index of the column/row.
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
+                return str(self._data.columns[section])
+
+            if orientation == Qt.Orientation.Vertical:
+                return str(self._data.index[section])
+
+    def data(self, index: QModelIndex, role):
+        """ Formatting of the data to display. """
+
+        if role == Qt.ItemDataRole.DisplayRole:
+
+            value = self._data.loc[index.row()].iat[index.column()]
+
+            # Perform per-type checks and render accordingly.
+            if isinstance(value, datetime.datetime):
+                # Render time to YYY-MM-DD.
+                return value.strftime("%H:%M:%S")   # TODO Use time format from settings
+
+            return value
 
 
 def main():
