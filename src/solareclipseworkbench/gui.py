@@ -1101,6 +1101,7 @@ class LocationPopup(QWidget, Observable):
         grid_layout.addWidget(QLabel("Longitude [°]"), 0, 0)
         self.longitude = QLineEdit()
         longitude_validator = QDoubleValidator()
+        longitude_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         longitude_validator.setRange(-180, 180, 5)
         self.longitude.setValidator(longitude_validator)
         self.longitude.setToolTip("Positive values: East of Greenwich meridian; "
@@ -1112,6 +1113,7 @@ class LocationPopup(QWidget, Observable):
         grid_layout.addWidget(QLabel("Latitude [°]"), 1, 0)
         self.latitude = QLineEdit()
         latitude_validator = QDoubleValidator()
+        latitude_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         latitude_validator.setRange(-90, 90, 5)
         self.latitude.setValidator(latitude_validator)
         self.latitude.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
@@ -1228,8 +1230,19 @@ class SimulatorPopup(QWidget, Observable):
         self.before_after_combobox = QComboBox()
         self.before_after_combobox.addItems(BEFORE_AFTER.keys())
 
+        if observer.sim_offset_minutes:
+            self.offset_minutes.setText(str(abs(observer.sim_offset_minutes)))
+
+            if observer.sim_offset_minutes < 0:
+                self.before_after_combobox.setCurrentText("after")
+            else:
+                self.before_after_combobox.setCurrentText("before")
+
         self.reference_moment_combobox = QComboBox()
         self.reference_moment_combobox.addItems(REFERENCE_MOMENTS)
+
+        if observer.sim_reference_moment:
+            self.reference_moment_combobox.setCurrentText(observer.sim_reference_moment)
 
         layout = QVBoxLayout()
 
