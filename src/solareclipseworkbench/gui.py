@@ -13,6 +13,7 @@ from pathlib import Path
 
 import geopandas
 import pandas as pd
+import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
@@ -21,10 +22,12 @@ from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
+from dateutil import tz
 from geodatasets import get_path
 from gphoto2 import GPhoto2Error
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from timezonefinder import TimezoneFinder
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
     get_shooting_mode, get_focus_mode, set_time, CameraSettings
@@ -319,7 +322,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout = QGridLayout()
         self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # self.jobs_overview = QTextBrowser()
         self.jobs_model: JobsTableModel = None
         self.jobs_table = QTableView()
 
@@ -1027,7 +1029,7 @@ class SolarEclipseController(Observer):
                                                                         self.sim_reference_moment,
                                                                         self.sim_offset_minutes)
 
-            self.view.jobs_model = JobsTableModel(self.scheduler)
+            self.view.jobs_model = JobsTableModel(self.scheduler, self.model)
             self.view.jobs_table.setModel(self.view.jobs_model)
             self.view.jobs_table.resizeColumnsToContents()
             self.view.jobs_table.setColumnWidth(4, 150)
@@ -1400,27 +1402,32 @@ class JobsTableColumnNames(Enum):
 
 
 class JobsTableModel(QAbstractTableModel):
-    def __init__(self, scheduler: BackgroundScheduler):
+    def __init__(self, scheduler: BackgroundScheduler, model: SolarEclipseModel):
         """ Initialisation of the model for the table with the scheduled jobs.
+
         Args:
             - scheduler: Background scheduler
+            - model: Model for the Solar Eclipse Workbench UI
         """
 
         super().__init__()
 
-        now = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+        tf = TimezoneFinder()
+        timezone = pytz.timezone(tf.timezone_at(lng=model.longitude, lat=model.latitude))
 
+        now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
         data = []
 
         job: Job
         for job in scheduler.get_jobs():
 
-            execution_time: datetime.datetime = job.next_run_time
-            if execution_time:
+            execution_time_utc: datetime.datetime = job.next_run_time
+            if execution_time_utc:
+                execution_time_local = execution_time_utc.astimezone(timezone)
 
                 countdown = "-"
-                if now <= execution_time:
-                    countdown = format_countdown(execution_time - now)
+                if now_utc <= execution_time_utc:
+                    countdown = format_countdown(execution_time_utc - now_utc)
                 description: str = job.name
 
                 job_string = ""
@@ -1450,9 +1457,10 @@ class JobsTableModel(QAbstractTableModel):
                 elif job.func.__name__ == "voice_prompt":
                     job_string = f"{job.func.__name__}({', '.join(job.args)})"
 
-                data.append([execution_time, countdown, job_string, description])
+                data.append([execution_time_local, execution_time_utc, countdown, job_string, description])
 
-        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.EXEC_TIME_UTC.value,
+        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.EXEC_TIME_LOCAL.value,
+                                                 JobsTableColumnNames.EXEC_TIME_UTC.value,
                                                  JobsTableColumnNames.COUNTDOWN.value,
                                                  JobsTableColumnNames.COMMAND.value,
                                                  JobsTableColumnNames.DESCRIPTION.value])
@@ -1463,10 +1471,10 @@ class JobsTableModel(QAbstractTableModel):
         if self._data.shape[0] > 0:
 
             self.beginResetModel()
-            now = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+            now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
 
-            execution_times = self._data[JobsTableColumnNames.EXEC_TIME_UTC.value]
-            countdown: datetime.timedelta = execution_times - now
+            execution_times_utc = self._data[JobsTableColumnNames.EXEC_TIME_UTC.value]
+            countdown: datetime.timedelta = execution_times_utc - now_utc
 
             for row in range(len(countdown)):
 
