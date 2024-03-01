@@ -1451,6 +1451,16 @@ class JobsTableModel(QAbstractTableModel):
 
                     job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
 
+                elif job.func.__name__ == "take_bracket":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+                    step = job.args[2]
+
+                    job_string = f"take_bracket(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {step})"
+
                 elif job.func.__name__ == "sync_cameras":
                     job_string = f"sync_cameras()"
 

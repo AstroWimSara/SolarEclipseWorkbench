@@ -190,15 +190,19 @@ It is possible to take pictures in burst mode.  The speed is limited by the spee
 
 Solar Eclipse Workbench can use the following commands:
 
-- **take_picture** - Set the aperture, shutter speed and ISO of the camera and take a picture.
+- **take_picture** - Set the aperture (use 8 instead of 8.0), shutter speed and ISO of the camera and take a picture.
 
-```take_picture, C1, -, 0:01:02.0, Canon EOS 80D, 1/1250, 8.0, 200, "Pre-C1 uneclipsed (Iter. 1)"```
+```take_picture, C1, -, 0:01:02.0, Canon EOS 80D, 1/1250, 8, 200, "Pre-C1 uneclipsed (Iter. 1)"```
 
 This command will take a picture 1 minutes and 2 seconds before first contact (C1) with the Canon EOS 80D.  The ISO will be set to 200, aperture to 8.0 and shutter speed to 1/1250s.
 
 - **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon, Nikon will take 3 pictures in burst mode).
 
 ```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
+
+- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps).  This method only works in Canon cameras.  Make sure to have 5 steps enabled for bracketing.  Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3
+
+```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "+/- 1 2/3", "Bracket test"```
 
 - **voice_prompt** - Play a sound file.  
 
