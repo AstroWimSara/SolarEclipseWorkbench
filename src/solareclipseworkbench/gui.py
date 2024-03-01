@@ -15,7 +15,7 @@ import geopandas
 import pandas as pd
 import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex
-from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
+from PyQt6.QtGui import QIcon, QAction, QDoubleValidator, QIntValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
     QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTableView
 from apscheduler.job import Job
@@ -322,7 +322,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout = QGridLayout()
         self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.jobs_model: JobsTableModel = None
         self.jobs_table = QTableView()
 
         self.init_ui()
@@ -790,12 +789,6 @@ class SolarEclipseView(QMainWindow, Observable):
 
             camera_index += 1
 
-    def update_jobs_countdown(self):
-        """ Update the countdown of the scheduled jobs. """
-
-        if self.jobs_model:
-            self.jobs_model.update_countdown()
-
 
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -810,6 +803,7 @@ class SolarEclipseController(Observer):
         """
 
         self.model = model
+        self.jobs_model: JobsTableModel = None
 
         self.view = view
         self.view.add_observer(self)
@@ -850,7 +844,13 @@ class SolarEclipseController(Observer):
         self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
                               countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
 
-        self.view.update_jobs_countdown()
+        self.update_jobs_countdown()
+
+    def update_jobs_countdown(self):
+        """ Update the countdown of the scheduled jobs. """
+
+        if self.jobs_model:
+            self.jobs_model.update_countdown()
 
     def do(self, actions):
         pass
@@ -890,7 +890,7 @@ class SolarEclipseController(Observer):
 
         elif isinstance(changed_object, SimulatorPopup):
             self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
-            self.sim_offset_minutes = float(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
+            self.sim_offset_minutes = int(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -1029,15 +1029,15 @@ class SolarEclipseController(Observer):
                                                                         self.sim_reference_moment,
                                                                         self.sim_offset_minutes)
 
-            self.view.jobs_model = JobsTableModel(self.scheduler, self.model)
-            self.view.jobs_table.setModel(self.view.jobs_model)
+            self.jobs_model = JobsTableModel(self.scheduler, self.model)
+            self.view.jobs_table.setModel(self.jobs_model)
             self.view.jobs_table.resizeColumnsToContents()
             self.view.jobs_table.setColumnWidth(4, 150)
 
         elif text == "Stop":
             try:
                 self.scheduler.shutdown()
-                self.view.jobs_model.clear_jobs_overview()
+                self.jobs_model.clear_jobs_overview()
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
@@ -1224,7 +1224,7 @@ class SimulatorPopup(QWidget, Observable):
         hbox2 = QHBoxLayout()
 
         self.offset_minutes = QLineEdit()
-        offset_minutes_validator = QDoubleValidator()
+        offset_minutes_validator = QIntValidator()
         self.offset_minutes.setValidator(offset_minutes_validator)
 
         self.before_after_combobox = QComboBox()
@@ -1273,6 +1273,8 @@ class SimulatorPopup(QWidget, Observable):
 
     def cancel_starting_time(self):
         """ Close the pop-up window. """
+
+        self.close()
 
 
 class SettingsPopup(QWidget, Observable):
