@@ -614,7 +614,8 @@ class SolarEclipseView(QMainWindow, Observable):
         elif eclipse_type == "No eclipse":
             self.eclipse_type.setText(eclipse_type)
         else:
-            self.eclipse_type.setText(eclipse_type + " eclipse")
+            minutes, seconds = divmod(reference_moments["duration"].seconds, 60)
+            self.eclipse_type.setText(f"{eclipse_type} eclipse ({minutes}:{seconds:02})")
 
         suffix = ""
 
