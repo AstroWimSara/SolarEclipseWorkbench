@@ -30,7 +30,7 @@ class CameraSettings:
         self.iso = iso
 
 
-def take_picture(camera: Camera, camera_settings: CameraSettings) -> gphoto2:
+def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     """ Take a picture with the selected camera 
     
     Args: 
@@ -48,6 +48,11 @@ def __adapt_camera_settings(camera, camera_settings):
     context = gp.gp_context_new()
     config = gp.check_result(gp.gp_camera_get_config(camera, context))
     # Set ISO
+    if "Nikon" in camera_settings.camera_name:
+        gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), str("Off"))
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
     gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso')), str(camera_settings.iso))
     # set config
     gp.gp_camera_set_config(camera, config, context)
@@ -74,29 +79,110 @@ def __adapt_camera_settings(camera, camera_settings):
     return context, config
 
 
-def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float) -> gphoto2:
-    """ Take a burst with the selected camera during duration seconds
+def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float) -> None:
+    """ Take a burst with the selected camera.  For Canon, the duration is the duration in seconds, for Nikon, the
+        duration is the number of pictures to take.
 
     Args:
         - camera_name: Camera object
         - camera_settings: Settings of the camera (exposure, f, iso)
-        - duration: Duration of the burst in seconds
+        - duration: Duration of the burst in seconds (Canon) or number of pictures (Nikon)
     """
     context, config = __adapt_camera_settings(camera, camera_settings)
 
     # Take picture
-    # Push the button
-    remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
-    gp.gp_widget_set_value(remote_release, "Press Full")
-    # set config
-    gp.gp_camera_set_config(camera, config, context)
-    time.sleep(duration)
+    if "Canon" in camera_settings.camera_name:
+        # Push the button
+        remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+        gp.gp_widget_set_value(remote_release, "Press Full")
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+        time.sleep(duration)
 
-    # Release the button
-    remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
-    gp.gp_widget_set_value(remote_release, "Release Full")
-    # set config
-    gp.gp_camera_set_config(camera, config, context)
+        # Release the button
+        remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+        gp.gp_widget_set_value(remote_release, "Release Full")
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+    elif "Nikon" in camera_settings.camera_name:
+        # Push the button
+        capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+        gp.gp_widget_set_value(capture_mode, "Burst")
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
+        burst_number = gp.check_result(gp.gp_widget_get_child_by_name(config, 'burstnumber'))
+        gp.gp_widget_set_value(burst_number, round(duration))
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
+        camera.capture(gp.GP_CAPTURE_IMAGE, context)
+
+
+def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) -> None:
+    """ Take a bracketing of images with the selected camera.
+
+    Args:
+        - camera_name: Camera object
+        - camera_settings: Settings of the camera (exposure, f, iso)
+        - steps: Steps for each bracketing step (e.g. +/- 1 2/3)
+    """
+    context, config = __adapt_camera_settings(camera, camera_settings)
+
+    if "Canon" in camera_settings.camera_name:
+        # Set aeb
+        aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
+        gp.gp_widget_set_value(aeb, steps)
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
+        camera.capture(gp.GP_CAPTURE_IMAGE, context)
+        camera.capture(gp.GP_CAPTURE_IMAGE, context)
+        camera.capture(gp.GP_CAPTURE_IMAGE, context)
+        camera.capture(gp.GP_CAPTURE_IMAGE, context)
+        camera.capture(gp.GP_CAPTURE_IMAGE, context)
+
+        # Set aeb
+        aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
+        gp.gp_widget_set_value(aeb, "off")
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
+
+def mirror_lock(camera: Camera, camera_settings: CameraSettings) -> None:
+    """ Lock the mirror
+
+    Args:
+        - camera_name: Camera object
+    """
+    context = gp.gp_context_new()
+    config = gp.check_result(gp.gp_camera_get_config(camera, context))
+
+    if "Canon" in camera_settings.camera_name:
+        lock = gp.check_result(gp.gp_widget_get_child_by_name(config, 'mirrorlock'))
+        gp.gp_widget_set_value(lock, "1")
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+
+        context, config = __adapt_camera_settings(camera, camera_settings)
+
+        # # Push the button
+        # remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+        # gp.gp_widget_set_value(remote_release, "Press 2")
+        # # set config
+        # gp.gp_camera_set_config(camera, config, context)
+
+        # Release the button
+        # remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+        # gp.gp_widget_set_value(remote_release, "Release Full")
+        # # set config
+        # gp.gp_camera_set_config(camera, config, context)
+
+        # Set mirror lock back to off
+        lock = gp.check_result(gp.gp_widget_get_child_by_name(config, 'mirrorlock'))
+        gp.gp_widget_set_value(lock, "0")
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
 
 
 def get_cameras() -> list:
@@ -202,7 +288,7 @@ def get_space(camera: Camera) -> float:
     return round(camera.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)
 
 
-def get_shooting_mode(camera: Camera) -> str:
+def get_shooting_mode(camera_name: str, camera: Camera) -> str:
     """ Return the shooting mode of the selected camera. Should be "Manual".
     
     Args: 
@@ -210,8 +296,16 @@ def get_shooting_mode(camera: Camera) -> str:
 
     Returns: Shooting mode of the camera
     """
-
-    return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
+    if "Canon" in camera_name:
+        return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
+    elif "Nikon" in camera_name:
+        mode = camera.get_config().get_child_by_name('expprogram').get_value()
+        if mode == "M":
+            return "Manual"
+        else:
+            return mode
+    else:
+        return ""
 
 
 def get_focus_mode(camera: Camera) -> str:
@@ -281,6 +375,7 @@ def get_time(camera: Camera) -> str:
             break
     else:
         logging.warning('Unknown date/time config item')
+        return "Unknown date/time config item"
 
     return camera_time.isoformat(' ')
 
@@ -302,6 +397,9 @@ def __set_datetime(config) -> bool:
     """ Private method to set the date and time of the camera. """
 
     ok, date_config = gp.gp_widget_get_child_by_name(config, 'datetimeutc')
+    if ok == -2:
+        ok, date_config = gp.gp_widget_get_child_by_name(config, 'datetime')
+
     if ok >= gp.GP_OK:
         widget_type = date_config.get_type()
         if widget_type == gp.GP_WIDGET_DATE:
@@ -347,7 +445,7 @@ def get_camera_overview() -> dict:
 
             camera_overview[camera_name[0]] = CameraInfo(camera_name, battery_level, free_space, total_space)
             # camera.exit()
-        except gp.GPhoto2Error as error:
+        except gp.GPhoto2Error:
             logging.error("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
 
     return camera_overview
@@ -421,36 +519,41 @@ def main():
             camera_object = get_camera(camera[0])
 
             # Get general info
-            print(f"{camera[0]}: {get_battery_level(camera_object)} - {get_free_space(camera_object)} GB of {get_space(camera_object)} GB free.")
+            print(f"{camera[0]}: {get_battery_level(camera_object)} - {get_free_space(camera_object)} GB "
+                  f"of {get_space(camera_object)} GB free.")
 
             # Check if the lens and the camera are set to manual
-            # if get_shooting_mode(camera_object) != "Manual":
-            #     print("Set the camera in Manual mode!")
-            #     exit()
-            #
-            # if get_focus_mode(camera_object) != "Manual":
-            #     print("Set the lens in Manual mode!")
-            #     exit()
+            if get_shooting_mode(camera[0], camera_object) != "Manual":
+                print("Set the camera in Manual mode!")
+                exit()
+
+            if get_focus_mode(camera_object) != "Manual":
+                print("Set the lens in Manual mode!")
+                exit()
 
             # Set the correct time
             print(get_time(camera_object))
-            # set_time(camera_object)
+            set_time(camera_object)
 
             # Take picture
-            start = time.time()
-            camera_settings = CameraSettings(camera[0], "1/1000", "8.0", 100)
+            camera_settings = CameraSettings(camera[0], "1/1000", "8", 100)
 
             take_picture(camera_object, camera_settings)
 
-            # time.sleep(1)
-            # camera_settings = CameraSettings(camera[0], "1/200", 6.3, 400)
-            #
+            time.sleep(1)
+            camera_settings = CameraSettings(camera[0], "1/200", "6.3", 400)
+            # take_bracket(camera_object, camera_settings, "+/- 1 2/3")
+            take_picture(camera_object, camera_settings)
+
+            # Mirror lock
+            # mirror_lock(camera_object, camera_settings)
+
             # take_picture(camera_object, camera_settings)
-            # end = time.time()
-            # print(end - start)
-            #
-            # camera_settings = CameraSettings(camera[0], "1/4000", 5.6, 200)
-            # take_burst(camera_object, camera_settings, 2)
+
+            time.sleep(1)
+            camera_settings = CameraSettings(camera[0], "1/4000", "5.6", 200)
+            take_burst(camera_object, camera_settings, 1)
+            time.sleep(3)
             camera_object.exit()
 
         except gphoto2.GPhoto2Error:

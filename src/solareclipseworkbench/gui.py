@@ -217,7 +217,7 @@ class SolarEclipseModel:
 
             # Shooting mode
 
-            shooting_mode = get_shooting_mode(camera)
+            shooting_mode = get_shooting_mode(camera_name, camera)
             if shooting_mode.lower() != "manual":
                 logging.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
                                 f"(is '{shooting_mode}')")
@@ -767,7 +767,7 @@ class SolarEclipseView(QMainWindow, Observable):
                 free_space_gb = get_free_space(camera)
                 total_space = get_space(camera)
 
-                # shooting_mode = get_shooting_mode(camera)
+                # shooting_mode = get_shooting_mode(camera_name, camera)
                 # focus_mode = get_focus_mode(camera)
 
                 free_space_percentage = int(free_space_gb / total_space * 100)
@@ -1450,6 +1450,16 @@ class JobsTableModel(QAbstractTableModel):
                     duration = job.args[2]
 
                     job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
+
+                elif job.func.__name__ == "take_bracket":
+                    camera_settings: CameraSettings = job.args[1]
+                    camera_name = camera_settings.camera_name
+                    shutter_speed = camera_settings.shutter_speed
+                    aperture = camera_settings.aperture
+                    iso = camera_settings.iso
+                    step = job.args[2]
+
+                    job_string = f"take_bracket(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {step})"
 
                 elif job.func.__name__ == "sync_cameras":
                     job_string = f"sync_cameras()"
