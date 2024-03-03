@@ -1029,7 +1029,7 @@ class SolarEclipseController(Observer):
                                                                         self.sim_reference_moment,
                                                                         self.sim_offset_minutes)
 
-            self.jobs_model = JobsTableModel(self.scheduler, self.model)
+            self.jobs_model = JobsTableModel(self.scheduler, self)
             self.view.jobs_table.setModel(self.jobs_model)
             self.view.jobs_table.resizeColumnsToContents()
             self.view.jobs_table.setColumnWidth(4, 150)
@@ -1417,7 +1417,7 @@ class JobsTableColumnNames(Enum):
 
 
 class JobsTableModel(QAbstractTableModel):
-    def __init__(self, scheduler: BackgroundScheduler, model: SolarEclipseModel):
+    def __init__(self, scheduler: BackgroundScheduler, controller: SolarEclipseController):
         """ Initialisation of the model for the table with the scheduled jobs.
 
         Args:
@@ -1426,12 +1426,17 @@ class JobsTableModel(QAbstractTableModel):
         """
 
         super().__init__()
+        self.controller = controller
+        self.time_format = self.controller.view.time_format
 
         tf = TimezoneFinder()
-        timezone = pytz.timezone(tf.timezone_at(lng=model.longitude, lat=model.latitude))
+        timezone = pytz.timezone(tf.timezone_at(lng=self.controller.model.longitude, lat=self.controller.model.latitude))
 
         now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
         data = []
+
+        self.execution_times_utc_as_datetime = []
+        self.execution_times_local_as_datetime = []
 
         job: Job
         for job in scheduler.get_jobs():
@@ -1482,7 +1487,22 @@ class JobsTableModel(QAbstractTableModel):
                 elif job.func.__name__ == "voice_prompt":
                     job_string = f"{job.func.__name__}({', '.join(job.args)})"
 
-                data.append([execution_time_local, execution_time_utc, countdown, job_string, description])
+                self.execution_times_utc_as_datetime.append(execution_time_utc)
+                suffix = ""
+                if self.time_format == "12 hours":
+                    suffix = " am" if execution_time_utc.hour < 12 else " pm"
+                formatted_execution_time_utc = \
+                    f"{datetime.datetime.strftime(execution_time_utc, TIME_FORMATS[self.time_format])}{suffix}"
+
+                self.execution_times_local_as_datetime.append(execution_time_local)
+                suffix = ""
+                if self.time_format == "12 hours":
+                    suffix = " am" if execution_time_local.hour < 12 else " pm"
+                formatted_execution_time_local = \
+                    f"{datetime.datetime.strftime(execution_time_local, TIME_FORMATS[self.time_format])}{suffix}"
+
+                data.append([formatted_execution_time_local, formatted_execution_time_utc, countdown, job_string,
+                             description])
 
         self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.EXEC_TIME_LOCAL.value,
                                                  JobsTableColumnNames.EXEC_TIME_UTC.value,
@@ -1497,19 +1517,36 @@ class JobsTableModel(QAbstractTableModel):
 
             self.beginResetModel()
             now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+            time_format = self.controller.view.time_format
+            for row in range(len(self.execution_times_local_as_datetime)):
 
-            execution_times_utc = self._data[JobsTableColumnNames.EXEC_TIME_UTC.value]
-            countdown: datetime.timedelta = execution_times_utc - now_utc
-
-            for row in range(len(countdown)):
-
-                new_countdown = countdown[row]
+                new_countdown = self.execution_times_utc_as_datetime[row] - now_utc
+                # new_countdown = countdown[row]
                 if new_countdown.total_seconds() > 0:
-                    new_countdown = format_countdown(countdown[row])
+                    new_countdown = format_countdown(new_countdown)
                 else:
                     new_countdown = "-"
                 self._data.loc[row, JobsTableColumnNames.COUNTDOWN.value] = new_countdown
+
+                if self.time_format != time_format:
+                    suffix = ""
+                    execution_time_utc = self.execution_times_utc_as_datetime[row]
+                    if time_format == "12 hours":
+                        suffix = " am" if execution_time_utc.hour < 12 else " pm"
+                    self._data.loc[row, JobsTableColumnNames.EXEC_TIME_UTC.value] = \
+                        f"{datetime.datetime.strftime(execution_time_utc, TIME_FORMATS[time_format])}{suffix}"
+
+                    suffix = ""
+                    execution_time_local = self.execution_times_local_as_datetime[row]
+                    if time_format == "12 hours":
+                        suffix = " am" if execution_time_local.hour < 12 else " pm"
+                    self._data.loc[row, JobsTableColumnNames.EXEC_TIME_LOCAL.value] = \
+                        f"{datetime.datetime.strftime(execution_time_local, TIME_FORMATS[time_format])}{suffix}"
+
+            self.time_format = time_format
+
             self.endResetModel()
+
 
     def clear_jobs_overview(self):
         """ Clear the scheduled jobs overview. """
@@ -1542,8 +1579,12 @@ class JobsTableModel(QAbstractTableModel):
 
             # Perform per-type checks and render accordingly.
             if isinstance(value, datetime.datetime):
-                # Render time to YYY-MM-DD.
-                return value.strftime("%H:%M:%S")   # TODO Use time format from settings
+                # TODO Update the model when the time format is changed
+
+                suffix = ""
+                if self.time_format == "12 hours":
+                    suffix = " am" if value.hour < 12 else " pm"
+                return datetime.datetime.strftime(value, f"{TIME_FORMATS[self.controller.view.time_format]}{suffix}")
 
             return value
 
