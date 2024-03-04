@@ -762,12 +762,9 @@ class SolarEclipseView(QMainWindow, Observable):
         for camera_name, camera in camera_overview.items():
 
             try:
-                battery_level = get_battery_level(camera).rstrip("%")       # TODO Strip off percentage sign
+                battery_level = get_battery_level(camera).rstrip("%")
                 free_space_gb = get_free_space(camera)
                 total_space = get_space(camera)
-
-                # shooting_mode = get_shooting_mode(camera_name, camera)
-                # focus_mode = get_focus_mode(camera)
 
                 free_space_percentage = int(free_space_gb / total_space * 100)
 
@@ -1522,7 +1519,6 @@ class JobsTableModel(QAbstractTableModel):
             for row in range(len(self.execution_times_local_as_datetime)):
 
                 new_countdown = self.execution_times_utc_as_datetime[row] - now_utc
-                # new_countdown = countdown[row]
                 if new_countdown.total_seconds() > 0:
                     new_countdown = format_countdown(new_countdown)
                 else:
