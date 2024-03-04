@@ -306,6 +306,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.date_label = QLabel(f"Date [{self.date_format}]")
         self.date_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
         self.time_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.time_label_local.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.date_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
         self.time_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -350,6 +351,7 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_grid_layout.addWidget(self.time_label_utc, 2, 2)
 
         place_time_group_box.setLayout(place_time_grid_layout)
+        place_time_group_box.setFixedWidth(400)
         vbox_left.addWidget(place_time_group_box)
 
         location_group_box = QGroupBox()
@@ -361,6 +363,7 @@ class SolarEclipseView(QMainWindow, Observable):
         location_grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
         location_grid_layout.addWidget(self.altitude_label, 2, 1)
         location_group_box.setLayout(location_grid_layout)
+        location_group_box.setFixedWidth(400)
         vbox_left.addWidget(location_group_box)
 
         eclipse_date_group_box = QGroupBox()
@@ -371,6 +374,7 @@ class SolarEclipseView(QMainWindow, Observable):
         eclipse_date_grid_layout.addWidget(self.eclipse_type, 1, 1)
 
         eclipse_date_group_box.setLayout(eclipse_date_grid_layout)
+        eclipse_date_group_box.setFixedWidth(400)
         vbox_left.addWidget(eclipse_date_group_box)
 
         reference_moments_group_box = QGroupBox()
@@ -419,6 +423,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(QLabel("Sunrise"), 6, 0)
         reference_moments_grid_layout.addWidget(QLabel("Sunset"), 7, 0)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
+        reference_moments_group_box.setFixedWidth(600)
 
         camera_overview_group_box = QGroupBox()
         self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
@@ -426,6 +431,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
         camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
+        camera_overview_group_box.setFixedWidth(600)
 
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
