@@ -22,7 +22,6 @@ from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
-from dateutil import tz
 from geodatasets import get_path
 from gphoto2 import GPhoto2Error
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -1033,12 +1032,13 @@ class SolarEclipseController(Observer):
             self.jobs_model = JobsTableModel(self.scheduler, self)
             self.view.jobs_table.setModel(self.jobs_model)
             self.view.jobs_table.resizeColumnsToContents()
-            self.view.jobs_table.setColumnWidth(4, 150)
+            self.view.jobs_table.setColumnWidth(4, 250)
 
         elif text == "Stop":
             try:
-                self.scheduler.shutdown()
-                self.jobs_model.clear_jobs_overview()
+                if self.scheduler:
+                    self.scheduler.shutdown()
+                    self.jobs_model.clear_jobs_overview()
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
@@ -1502,12 +1502,12 @@ class JobsTableModel(QAbstractTableModel):
                 formatted_execution_time_local = \
                     f"{datetime.datetime.strftime(execution_time_local, TIME_FORMATS[self.time_format])}{suffix}"
 
-                data.append([formatted_execution_time_local, formatted_execution_time_utc, countdown, job_string,
+                data.append([countdown, formatted_execution_time_local, formatted_execution_time_utc, job_string,
                              description])
 
-        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.EXEC_TIME_LOCAL.value,
+        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.COUNTDOWN.value,
+                                                 JobsTableColumnNames.EXEC_TIME_LOCAL.value,
                                                  JobsTableColumnNames.EXEC_TIME_UTC.value,
-                                                 JobsTableColumnNames.COUNTDOWN.value,
                                                  JobsTableColumnNames.COMMAND.value,
                                                  JobsTableColumnNames.DESCRIPTION.value])
 
@@ -1548,7 +1548,6 @@ class JobsTableModel(QAbstractTableModel):
 
             self.endResetModel()
 
-
     def clear_jobs_overview(self):
         """ Clear the scheduled jobs overview. """
 
@@ -1580,7 +1579,6 @@ class JobsTableModel(QAbstractTableModel):
 
             # Perform per-type checks and render accordingly.
             if isinstance(value, datetime.datetime):
-                # TODO Update the model when the time format is changed
 
                 suffix = ""
                 if self.time_format == "12 hours":
@@ -1588,6 +1586,14 @@ class JobsTableModel(QAbstractTableModel):
                 return datetime.datetime.strftime(value, f"{TIME_FORMATS[self.controller.view.time_format]}{suffix}")
 
             return value
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if index.column() == 0:
+                return Qt.AlignmentFlag.AlignRight
+            elif index.column() <= 2:
+                return Qt.AlignmentFlag.AlignHCenter
+            else:
+                return Qt.AlignmentFlag.AlignLeft
 
 
 def main():
