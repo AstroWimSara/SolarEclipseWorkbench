@@ -15,14 +15,13 @@ import geopandas
 import pandas as pd
 import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex
-from PyQt6.QtGui import QIcon, QAction, QDoubleValidator
+from PyQt6.QtGui import QIcon, QAction, QDoubleValidator, QIntValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
     QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTableView
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
-from dateutil import tz
 from geodatasets import get_path
 from gphoto2 import GPhoto2Error
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -322,7 +321,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout = QGridLayout()
         self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.jobs_model: JobsTableModel = None
         self.jobs_table = QTableView()
 
         self.init_ui()
@@ -615,7 +613,8 @@ class SolarEclipseView(QMainWindow, Observable):
         elif eclipse_type == "No eclipse":
             self.eclipse_type.setText(eclipse_type)
         else:
-            self.eclipse_type.setText(eclipse_type + " eclipse")
+            minutes, seconds = divmod(reference_moments["duration"].seconds, 60)
+            self.eclipse_type.setText(f"{eclipse_type} eclipse ({minutes}:{seconds:02})")
 
         suffix = ""
 
@@ -790,12 +789,6 @@ class SolarEclipseView(QMainWindow, Observable):
 
             camera_index += 1
 
-    def update_jobs_countdown(self):
-        """ Update the countdown of the scheduled jobs. """
-
-        if self.jobs_model:
-            self.jobs_model.update_countdown()
-
 
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -810,6 +803,7 @@ class SolarEclipseController(Observer):
         """
 
         self.model = model
+        self.jobs_model: JobsTableModel = None
 
         self.view = view
         self.view.add_observer(self)
@@ -850,7 +844,13 @@ class SolarEclipseController(Observer):
         self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
                               countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
 
-        self.view.update_jobs_countdown()
+        self.update_jobs_countdown()
+
+    def update_jobs_countdown(self):
+        """ Update the countdown of the scheduled jobs. """
+
+        if self.jobs_model:
+            self.jobs_model.update_countdown()
 
     def do(self, actions):
         pass
@@ -890,7 +890,7 @@ class SolarEclipseController(Observer):
 
         elif isinstance(changed_object, SimulatorPopup):
             self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
-            self.sim_offset_minutes = float(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
+            self.sim_offset_minutes = int(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -1029,15 +1029,16 @@ class SolarEclipseController(Observer):
                                                                         self.sim_reference_moment,
                                                                         self.sim_offset_minutes)
 
-            self.view.jobs_model = JobsTableModel(self.scheduler, self.model)
-            self.view.jobs_table.setModel(self.view.jobs_model)
+            self.jobs_model = JobsTableModel(self.scheduler, self)
+            self.view.jobs_table.setModel(self.jobs_model)
             self.view.jobs_table.resizeColumnsToContents()
-            self.view.jobs_table.setColumnWidth(4, 150)
+            self.view.jobs_table.setColumnWidth(4, 250)
 
         elif text == "Stop":
             try:
-                self.scheduler.shutdown()
-                self.view.jobs_model.clear_jobs_overview()
+                if self.scheduler:
+                    self.scheduler.shutdown()
+                    self.jobs_model.clear_jobs_overview()
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
@@ -1101,6 +1102,7 @@ class LocationPopup(QWidget, Observable):
         grid_layout.addWidget(QLabel("Longitude [°]"), 0, 0)
         self.longitude = QLineEdit()
         longitude_validator = QDoubleValidator()
+        longitude_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         longitude_validator.setRange(-180, 180, 5)
         self.longitude.setValidator(longitude_validator)
         self.longitude.setToolTip("Positive values: East of Greenwich meridian; "
@@ -1112,6 +1114,7 @@ class LocationPopup(QWidget, Observable):
         grid_layout.addWidget(QLabel("Latitude [°]"), 1, 0)
         self.latitude = QLineEdit()
         latitude_validator = QDoubleValidator()
+        latitude_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         latitude_validator.setRange(-90, 90, 5)
         self.latitude.setValidator(latitude_validator)
         self.latitude.setToolTip("Positive values: Northern hemisphere; Negative values: Southern hemisphere")
@@ -1222,14 +1225,25 @@ class SimulatorPopup(QWidget, Observable):
         hbox2 = QHBoxLayout()
 
         self.offset_minutes = QLineEdit()
-        offset_minutes_validator = QDoubleValidator()
+        offset_minutes_validator = QIntValidator()
         self.offset_minutes.setValidator(offset_minutes_validator)
 
         self.before_after_combobox = QComboBox()
         self.before_after_combobox.addItems(BEFORE_AFTER.keys())
 
+        if observer.sim_offset_minutes:
+            self.offset_minutes.setText(str(abs(observer.sim_offset_minutes)))
+
+            if observer.sim_offset_minutes < 0:
+                self.before_after_combobox.setCurrentText("after")
+            else:
+                self.before_after_combobox.setCurrentText("before")
+
         self.reference_moment_combobox = QComboBox()
         self.reference_moment_combobox.addItems(REFERENCE_MOMENTS)
+
+        if observer.sim_reference_moment:
+            self.reference_moment_combobox.setCurrentText(observer.sim_reference_moment)
 
         layout = QVBoxLayout()
 
@@ -1260,6 +1274,8 @@ class SimulatorPopup(QWidget, Observable):
 
     def cancel_starting_time(self):
         """ Close the pop-up window. """
+
+        self.close()
 
 
 class SettingsPopup(QWidget, Observable):
@@ -1402,7 +1418,7 @@ class JobsTableColumnNames(Enum):
 
 
 class JobsTableModel(QAbstractTableModel):
-    def __init__(self, scheduler: BackgroundScheduler, model: SolarEclipseModel):
+    def __init__(self, scheduler: BackgroundScheduler, controller: SolarEclipseController):
         """ Initialisation of the model for the table with the scheduled jobs.
 
         Args:
@@ -1411,12 +1427,17 @@ class JobsTableModel(QAbstractTableModel):
         """
 
         super().__init__()
+        self.controller = controller
+        self.time_format = self.controller.view.time_format
 
         tf = TimezoneFinder()
-        timezone = pytz.timezone(tf.timezone_at(lng=model.longitude, lat=model.latitude))
+        timezone = pytz.timezone(tf.timezone_at(lng=self.controller.model.longitude, lat=self.controller.model.latitude))
 
         now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
         data = []
+
+        self.execution_times_utc_as_datetime = []
+        self.execution_times_local_as_datetime = []
 
         job: Job
         for job in scheduler.get_jobs():
@@ -1467,11 +1488,26 @@ class JobsTableModel(QAbstractTableModel):
                 elif job.func.__name__ == "voice_prompt":
                     job_string = f"{job.func.__name__}({', '.join(job.args)})"
 
-                data.append([execution_time_local, execution_time_utc, countdown, job_string, description])
+                self.execution_times_utc_as_datetime.append(execution_time_utc)
+                suffix = ""
+                if self.time_format == "12 hours":
+                    suffix = " am" if execution_time_utc.hour < 12 else " pm"
+                formatted_execution_time_utc = \
+                    f"{datetime.datetime.strftime(execution_time_utc, TIME_FORMATS[self.time_format])}{suffix}"
 
-        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.EXEC_TIME_LOCAL.value,
+                self.execution_times_local_as_datetime.append(execution_time_local)
+                suffix = ""
+                if self.time_format == "12 hours":
+                    suffix = " am" if execution_time_local.hour < 12 else " pm"
+                formatted_execution_time_local = \
+                    f"{datetime.datetime.strftime(execution_time_local, TIME_FORMATS[self.time_format])}{suffix}"
+
+                data.append([countdown, formatted_execution_time_local, formatted_execution_time_utc, job_string,
+                             description])
+
+        self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.COUNTDOWN.value,
+                                                 JobsTableColumnNames.EXEC_TIME_LOCAL.value,
                                                  JobsTableColumnNames.EXEC_TIME_UTC.value,
-                                                 JobsTableColumnNames.COUNTDOWN.value,
                                                  JobsTableColumnNames.COMMAND.value,
                                                  JobsTableColumnNames.DESCRIPTION.value])
 
@@ -1482,18 +1518,34 @@ class JobsTableModel(QAbstractTableModel):
 
             self.beginResetModel()
             now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+            time_format = self.controller.view.time_format
+            for row in range(len(self.execution_times_local_as_datetime)):
 
-            execution_times_utc = self._data[JobsTableColumnNames.EXEC_TIME_UTC.value]
-            countdown: datetime.timedelta = execution_times_utc - now_utc
-
-            for row in range(len(countdown)):
-
-                new_countdown = countdown[row]
+                new_countdown = self.execution_times_utc_as_datetime[row] - now_utc
+                # new_countdown = countdown[row]
                 if new_countdown.total_seconds() > 0:
-                    new_countdown = format_countdown(countdown[row])
+                    new_countdown = format_countdown(new_countdown)
                 else:
                     new_countdown = "-"
                 self._data.loc[row, JobsTableColumnNames.COUNTDOWN.value] = new_countdown
+
+                if self.time_format != time_format:
+                    suffix = ""
+                    execution_time_utc = self.execution_times_utc_as_datetime[row]
+                    if time_format == "12 hours":
+                        suffix = " am" if execution_time_utc.hour < 12 else " pm"
+                    self._data.loc[row, JobsTableColumnNames.EXEC_TIME_UTC.value] = \
+                        f"{datetime.datetime.strftime(execution_time_utc, TIME_FORMATS[time_format])}{suffix}"
+
+                    suffix = ""
+                    execution_time_local = self.execution_times_local_as_datetime[row]
+                    if time_format == "12 hours":
+                        suffix = " am" if execution_time_local.hour < 12 else " pm"
+                    self._data.loc[row, JobsTableColumnNames.EXEC_TIME_LOCAL.value] = \
+                        f"{datetime.datetime.strftime(execution_time_local, TIME_FORMATS[time_format])}{suffix}"
+
+            self.time_format = time_format
+
             self.endResetModel()
 
     def clear_jobs_overview(self):
@@ -1527,10 +1579,21 @@ class JobsTableModel(QAbstractTableModel):
 
             # Perform per-type checks and render accordingly.
             if isinstance(value, datetime.datetime):
-                # Render time to YYY-MM-DD.
-                return value.strftime("%H:%M:%S")   # TODO Use time format from settings
+
+                suffix = ""
+                if self.time_format == "12 hours":
+                    suffix = " am" if value.hour < 12 else " pm"
+                return datetime.datetime.strftime(value, f"{TIME_FORMATS[self.controller.view.time_format]}{suffix}")
 
             return value
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if index.column() == 0:
+                return Qt.AlignmentFlag.AlignRight
+            elif index.column() <= 2:
+                return Qt.AlignmentFlag.AlignHCenter
+            else:
+                return Qt.AlignmentFlag.AlignLeft
 
 
 def main():
