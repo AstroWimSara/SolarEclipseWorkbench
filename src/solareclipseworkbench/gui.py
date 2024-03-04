@@ -1026,16 +1026,17 @@ class SolarEclipseController(Observer):
             filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "",
                                                       "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
 
-            from solareclipseworkbench.utils import observe_solar_eclipse
-            self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
-                                                                        self.model.camera_overview, self,
-                                                                        self.sim_reference_moment,
-                                                                        self.sim_offset_minutes)
+            if self.model.reference_moments:
+                from solareclipseworkbench.utils import observe_solar_eclipse
+                self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
+                                                                            self.model.camera_overview, self,
+                                                                            self.sim_reference_moment,
+                                                                            self.sim_offset_minutes)
 
-            self.jobs_model = JobsTableModel(self.scheduler, self)
-            self.view.jobs_table.setModel(self.jobs_model)
-            self.view.jobs_table.resizeColumnsToContents()
-            self.view.jobs_table.setColumnWidth(4, 250)
+                self.jobs_model = JobsTableModel(self.scheduler, self)
+                self.view.jobs_table.setModel(self.jobs_model)
+                self.view.jobs_table.resizeColumnsToContents()
+                self.view.jobs_table.setColumnWidth(4, 250)
 
         elif text == "Stop":
             try:
@@ -1151,15 +1152,29 @@ class LocationPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def plot_location(self):
-        """ Plot the selected location on the world map."""
+        """ Plot the selected location on the world map.
 
-        self.location_plot.plot_location(longitude=float(self.longitude.text()), latitude=float(self.latitude.text()))
+        Check:
+            - longitude specified
+            - latitude specified
+        """
+
+        if self.longitude.text() and self.latitude.text():
+            self.location_plot.plot_location(
+                longitude=float(self.longitude.text()), latitude=float(self.latitude.text()))
 
     def accept_location(self):
-        """ Notify the observer about the selection of a new location and close the pop-up window."""
+        """ Notify the observer about the selection of a new location and close the pop-up window.
 
-        self.notify_observers(self)
-        self.close()
+        Check:
+            - longitude specified
+            - latitude specified
+            - altitude specified
+        """
+
+        if self.longitude.text() and self.latitude.text() and self.altitude.text():
+            self.notify_observers(self)
+            self.close()
 
 
 class EclipsePopup(QWidget, Observable):
@@ -1270,10 +1285,15 @@ class SimulatorPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def accept_starting_time(self):
-        """ Notify the observer about the specification of the starting time of the simulation and close the pop-up window. """
+        """ Notify the observer about the specification of the starting time of the simulation and close the pop-up window.
 
-        self.notify_observers(self)
-        self.close()
+        Check:
+            - offset specified
+        """
+
+        if self.offset_minutes.text():
+            self.notify_observers(self)
+            self.close()
 
     def cancel_starting_time(self):
         """ Close the pop-up window. """
