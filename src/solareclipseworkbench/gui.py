@@ -22,7 +22,6 @@ from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
-from dateutil import tz
 from geodatasets import get_path
 from gphoto2 import GPhoto2Error
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -1549,7 +1548,6 @@ class JobsTableModel(QAbstractTableModel):
 
             self.endResetModel()
 
-
     def clear_jobs_overview(self):
         """ Clear the scheduled jobs overview. """
 
@@ -1581,7 +1579,6 @@ class JobsTableModel(QAbstractTableModel):
 
             # Perform per-type checks and render accordingly.
             if isinstance(value, datetime.datetime):
-                # TODO Update the model when the time format is changed
 
                 suffix = ""
                 if self.time_format == "12 hours":
