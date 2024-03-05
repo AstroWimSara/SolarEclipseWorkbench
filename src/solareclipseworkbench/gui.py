@@ -306,6 +306,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.date_label = QLabel(f"Date [{self.date_format}]")
         self.date_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
         self.time_label_local = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
+        self.time_label_local.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.date_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
         self.time_label_utc = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -350,6 +351,7 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_grid_layout.addWidget(self.time_label_utc, 2, 2)
 
         place_time_group_box.setLayout(place_time_grid_layout)
+        place_time_group_box.setFixedWidth(400)
         vbox_left.addWidget(place_time_group_box)
 
         location_group_box = QGroupBox()
@@ -361,6 +363,7 @@ class SolarEclipseView(QMainWindow, Observable):
         location_grid_layout.addWidget(QLabel("Altitude [m]"), 2, 0)
         location_grid_layout.addWidget(self.altitude_label, 2, 1)
         location_group_box.setLayout(location_grid_layout)
+        location_group_box.setFixedWidth(400)
         vbox_left.addWidget(location_group_box)
 
         eclipse_date_group_box = QGroupBox()
@@ -371,6 +374,7 @@ class SolarEclipseView(QMainWindow, Observable):
         eclipse_date_grid_layout.addWidget(self.eclipse_type, 1, 1)
 
         eclipse_date_group_box.setLayout(eclipse_date_grid_layout)
+        eclipse_date_group_box.setFixedWidth(400)
         vbox_left.addWidget(eclipse_date_group_box)
 
         reference_moments_group_box = QGroupBox()
@@ -419,6 +423,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(QLabel("Sunrise"), 6, 0)
         reference_moments_grid_layout.addWidget(QLabel("Sunset"), 7, 0)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
+        reference_moments_group_box.setFixedWidth(600)
 
         camera_overview_group_box = QGroupBox()
         self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
@@ -426,6 +431,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
         self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
         camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
+        camera_overview_group_box.setFixedWidth(600)
 
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
@@ -762,12 +768,9 @@ class SolarEclipseView(QMainWindow, Observable):
         for camera_name, camera in camera_overview.items():
 
             try:
-                battery_level = get_battery_level(camera).rstrip("%")       # TODO Strip off percentage sign
+                battery_level = get_battery_level(camera).rstrip("%")
                 free_space_gb = get_free_space(camera)
                 total_space = get_space(camera)
-
-                # shooting_mode = get_shooting_mode(camera_name, camera)
-                # focus_mode = get_focus_mode(camera)
 
                 free_space_percentage = int(free_space_gb / total_space * 100)
 
@@ -1023,16 +1026,17 @@ class SolarEclipseController(Observer):
             filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "",
                                                       "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
 
-            from solareclipseworkbench.utils import observe_solar_eclipse
-            self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
-                                                                        self.model.camera_overview, self,
-                                                                        self.sim_reference_moment,
-                                                                        self.sim_offset_minutes)
+            if self.model.reference_moments:
+                from solareclipseworkbench.utils import observe_solar_eclipse
+                self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
+                                                                            self.model.camera_overview, self,
+                                                                            self.sim_reference_moment,
+                                                                            self.sim_offset_minutes)
 
-            self.jobs_model = JobsTableModel(self.scheduler, self)
-            self.view.jobs_table.setModel(self.jobs_model)
-            self.view.jobs_table.resizeColumnsToContents()
-            self.view.jobs_table.setColumnWidth(4, 250)
+                self.jobs_model = JobsTableModel(self.scheduler, self)
+                self.view.jobs_table.setModel(self.jobs_model)
+                self.view.jobs_table.resizeColumnsToContents()
+                self.view.jobs_table.setColumnWidth(4, 250)
 
         elif text == "Stop":
             try:
@@ -1148,15 +1152,29 @@ class LocationPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def plot_location(self):
-        """ Plot the selected location on the world map."""
+        """ Plot the selected location on the world map.
 
-        self.location_plot.plot_location(longitude=float(self.longitude.text()), latitude=float(self.latitude.text()))
+        Check:
+            - longitude specified
+            - latitude specified
+        """
+
+        if self.longitude.text() and self.latitude.text():
+            self.location_plot.plot_location(
+                longitude=float(self.longitude.text()), latitude=float(self.latitude.text()))
 
     def accept_location(self):
-        """ Notify the observer about the selection of a new location and close the pop-up window."""
+        """ Notify the observer about the selection of a new location and close the pop-up window.
 
-        self.notify_observers(self)
-        self.close()
+        Check:
+            - longitude specified
+            - latitude specified
+            - altitude specified
+        """
+
+        if self.longitude.text() and self.latitude.text() and self.altitude.text():
+            self.notify_observers(self)
+            self.close()
 
 
 class EclipsePopup(QWidget, Observable):
@@ -1267,10 +1285,15 @@ class SimulatorPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def accept_starting_time(self):
-        """ Notify the observer about the specification of the starting time of the simulation and close the pop-up window. """
+        """ Notify the observer about the specification of the starting time of the simulation and close the pop-up window.
 
-        self.notify_observers(self)
-        self.close()
+        Check:
+            - offset specified
+        """
+
+        if self.offset_minutes.text():
+            self.notify_observers(self)
+            self.close()
 
     def cancel_starting_time(self):
         """ Close the pop-up window. """
@@ -1522,7 +1545,6 @@ class JobsTableModel(QAbstractTableModel):
             for row in range(len(self.execution_times_local_as_datetime)):
 
                 new_countdown = self.execution_times_utc_as_datetime[row] - now_utc
-                # new_countdown = countdown[row]
                 if new_countdown.total_seconds() > 0:
                     new_countdown = format_countdown(new_countdown)
                 else:
