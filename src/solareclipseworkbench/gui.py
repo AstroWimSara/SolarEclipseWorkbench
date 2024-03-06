@@ -10,6 +10,7 @@ import logging
 import sys
 from enum import Enum
 from pathlib import Path
+from typing import Union
 
 import geopandas
 import pandas as pd
@@ -80,31 +81,31 @@ class SolarEclipseModel:
         # Location
 
         self.is_location_set = False
-        self.longitude: float = None
-        self.latitude: float = None
-        self.altitude: float = None
+        self.longitude: Union[float, None] = None
+        self.latitude: Union[float, None] = None
+        self.altitude: Union[float, None] = None
 
         # Eclipse date
 
         self.is_eclipse_date_set = False
-        self.eclipse_date: Time = None
+        self.eclipse_date: Union[Time, None] = None
 
         # Time
 
-        self.local_time: datetime.datetime = None
-        self.utc_time: datetime.datetime = None
+        self.local_time: Union[datetime.datetime, None] = None
+        self.utc_time: Union[datetime.datetime, None] = None
 
         # Reference moments
 
-        self.reference_moments = None
+        self.reference_moments: Union[dict, None] = None
 
-        self.c1_info: ReferenceMomentInfo = None
-        self.c2_info: ReferenceMomentInfo = None
-        self.max_info: ReferenceMomentInfo = None
-        self.c3_info: ReferenceMomentInfo = None
-        self.c4_info: ReferenceMomentInfo = None
-        self.sunrise_info: ReferenceMomentInfo = None
-        self.sunset_info: ReferenceMomentInfo = None
+        self.c1_info: Union[ReferenceMomentInfo, None] = None
+        self.c2_info: Union[ReferenceMomentInfo, None] = None
+        self.max_info: Union[ReferenceMomentInfo, None] = None
+        self.c3_info: Union[ReferenceMomentInfo, None] = None
+        self.c4_info: Union[ReferenceMomentInfo, None] = None
+        self.sunrise_info: Union[ReferenceMomentInfo, None] = None
+        self.sunset_info: Union[ReferenceMomentInfo, None] = None
 
         # Camera(s)
 
@@ -806,21 +807,21 @@ class SolarEclipseController(Observer):
         """
 
         self.model = model
-        self.jobs_model: JobsTableModel = None
+        self.jobs_model: Union[JobsTableModel, None] = None
 
-        self.view = view
+        self.view: SolarEclipseView = view
         self.view.add_observer(self)
 
-        self.is_simulator = is_simulator
+        self.is_simulator: bool = is_simulator
 
-        self.scheduler = None
-        self.sim_reference_moment = None
-        self.sim_offset_minutes = None
+        self.scheduler: Union[BackgroundScheduler, None] = None
+        self.sim_reference_moment: Union[str, None] = None
+        self.sim_offset_minutes: Union[int, None] = None
 
-        self.location_popup: LocationPopup = None
-        self.eclipse_popup: EclipsePopup = None
-        self.simulator_popup: SimulatorPopup = None
-        self.settings_popup: SettingsPopup = None
+        self.location_popup: Union[LocationPopup, None] = None
+        self.eclipse_popup: Union[EclipsePopup, None] = None
+        self.simulator_popup: Union[SimulatorPopup, None] = None
+        self.settings_popup: Union[SettingsPopup, None] = None
 
         self.time_display_timer = QTimer()
         self.time_display_timer.timeout.connect(self.update_time)
