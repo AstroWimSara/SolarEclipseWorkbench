@@ -629,13 +629,10 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C1" in reference_moments:
             c1_info: ReferenceMomentInfo = reference_moments["C1"]
-            if self.time_format == "12 hours":
-                suffix = " am" if c1_info.time_utc.hour < 12 else " pm"
-            self.c1_time_utc_label.setText(f"{datetime.datetime.strftime(c1_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-            if self.time_format == "12 hours":
-                suffix = " am" if c1_info.time_local.hour < 12 else " pm"
-            self.c1_time_local_label.setText(
-                f"{datetime.datetime.strftime(c1_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            label_text_utc, label_text_local \
+                = format_reference_moment_labels(c1_info.time_utc, c1_info.time_local, self.time_format)
+            self.c1_time_utc_label.setText(label_text_utc)
+            self.c1_time_local_label.setText(label_text_local)
             self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
             self.c1_altitude_label.setText(str(int(c1_info.altitude)))
         else:
@@ -648,14 +645,10 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C2" in reference_moments:
             c2_info: ReferenceMomentInfo = reference_moments["C2"]
-            if self.time_format == "12 hours":
-                suffix = " am" if c2_info.time_utc.hour < 12 else " pm"
-            self.c2_time_utc_label.setText(
-                f"{datetime.datetime.strftime(c2_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-            if self.time_format == "12 hours":
-                suffix = " am" if c2_info.time_local.hour < 12 else " pm"
-            self.c2_time_local_label.setText(
-                f"{datetime.datetime.strftime(c2_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            label_text_utc, label_text_local \
+                = format_reference_moment_labels(c2_info.time_utc, c2_info.time_local, self.time_format)
+            self.c2_time_utc_label.setText(label_text_utc)
+            self.c2_countdown_label.setText(label_text_local)
             self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
             self.c2_altitude_label.setText(str(int(c2_info.altitude)))
         else:
@@ -668,14 +661,10 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "MAX" in reference_moments:
             max_info: ReferenceMomentInfo = reference_moments["MAX"]
-            if self.time_format == "12 hours":
-                suffix = " am" if max_info.time_utc.hour < 12 else " pm"
-            self.max_time_utc_label.setText(
-                f"{datetime.datetime.strftime(max_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-            if self.time_format == "12 hours":
-                suffix = " am" if max_info.time_local.hour < 12 else " pm"
-            self.max_time_local_label.setText(
-                f"{datetime.datetime.strftime(max_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            label_text_utc, label_text_local \
+                = format_reference_moment_labels(max_info.time_utc, max_info.time_local, self.time_format)
+            self.max_time_utc_label.setText(label_text_utc)
+            self.max_countdown_label.setText(label_text_local)
             self.max_azimuth_label.setText(str(int(max_info.azimuth)))
             self.max_altitude_label.setText(str(int(max_info.altitude)))
         else:
@@ -688,13 +677,10 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C3" in reference_moments:
             c3_info: ReferenceMomentInfo = reference_moments["C3"]
-            if self.time_format == "12 hours":
-                suffix = " am" if c3_info.time_utc.hour < 12 else " pm"
-            self.c3_time_utc_label.setText(f"{datetime.datetime.strftime(c3_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-            if self.time_format == "12 hours":
-                suffix = " am" if c3_info.time_local.hour < 12 else " pm"
-            self.c3_time_local_label.setText(
-                f"{datetime.datetime.strftime(c3_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            label_text_utc, label_text_local \
+                = format_reference_moment_labels(c3_info.time_utc, c3_info.time_local, self.time_format)
+            self.c3_time_utc_label.setText(label_text_utc)
+            self.c3_countdown_label.setText(label_text_local)
             self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
             self.c3_altitude_label.setText(str(int(c3_info.altitude)))
         else:
@@ -707,14 +693,10 @@ class SolarEclipseView(QMainWindow, Observable):
 
         if "C4" in reference_moments:
             c4_info: ReferenceMomentInfo = reference_moments["C4"]
-            if self.time_format == "12 hours":
-                suffix = " am" if c4_info.time_utc.hour < 12 else " pm"
-            self.c4_time_utc_label.setText(
-                f"{datetime.datetime.strftime(c4_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-            if self.time_format == "12 hours":
-                suffix = " am" if c4_info.time_local.hour < 12 else " pm"
-            self.c4_time_local_label.setText(
-                f"{datetime.datetime.strftime(c4_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+            label_text_utc, label_text_local \
+                = format_reference_moment_labels(c4_info.time_utc, c4_info.time_local, self.time_format)
+            self.c4_time_utc_label.setText(label_text_utc)
+            self.c4_countdown_label.setText(label_text_local)
             self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
             self.c4_altitude_label.setText(str(int(c4_info.altitude)))
         else:
@@ -726,26 +708,14 @@ class SolarEclipseView(QMainWindow, Observable):
         # Sunrise
 
         sunrise_info: ReferenceMomentInfo = reference_moments["sunrise"]
-        if self.time_format == "12 hours":
-            suffix = " am" if sunrise_info.time_utc.hour < 12 else " pm"
-        self.sunrise_time_utc_label.setText(
-            f"{datetime.datetime.strftime(sunrise_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        if self.time_format == "12 hours":
-            suffix = " am" if sunrise_info.time_local.hour < 12 else " pm"
-        self.sunrise_time_local_label.setText(
-            f"{datetime.datetime.strftime(sunrise_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
+        label_text_utc, label_text_local \
+            = format_reference_moment_labels(sunrise_info.time_utc, sunrise_info.time_local, self.time_format)
+        self.sunrise_time_utc_label.setText(label_text_utc)
+        self.sunrise_countdown_label.setText(label_text_local)
 
         # Sunset
 
         sunset_info: ReferenceMomentInfo = reference_moments["sunset"]
-        if self.time_format == "12 hours":
-            suffix = " am" if sunset_info.time_utc.hour < 12 else " pm"
-        self.sunset_time_utc_label.setText(
-            f"{datetime.datetime.strftime(sunset_info.time_utc, TIME_FORMATS[self.time_format])}{suffix}")
-        if self.time_format == "12 hours":
-            suffix = " am" if sunset_info.time_local.hour < 12 else " pm"
-        self.sunset_time_local_label.setText(
-            f"{datetime.datetime.strftime(sunset_info.time_local, TIME_FORMATS[self.time_format])}{suffix}")
 
     def show_camera_overview(self, camera_overview: dict):
         """ Display the overview of connected cameras.
@@ -907,95 +877,46 @@ class SolarEclipseController(Observer):
             self.view.time_format = time_format
 
             if self.model.c1_info:
-                c1_time_utc = self.model.c1_info.time_utc
-                c1_time_local = self.model.c1_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_utc.hour < 12 else " pm"
-                self.view.c1_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(c1_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_local.hour < 12 else " pm"
-                self.view.c1_time_local_label.setText(
-                    f"{datetime.datetime.strftime(c1_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.c1_info.time_utc, self.model.c1_info.time_local, time_format)
+                self.view.c1_time_utc_label.setText(label_text_utc)
+                self.view.c1_time_local_label.setText(label_text_local)
 
             if self.model.c2_info:
-                c2_time_utc = self.model.c2_info.time_utc
-                c2_time_local = self.model.c2_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if c2_time_utc.hour < 12 else " pm"
-                self.view.c2_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(c2_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c2_time_local.hour < 12 else " pm"
-                self.view.c2_time_local_label.setText(
-                    f"{datetime.datetime.strftime(c2_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.c2_info.time_utc, self.model.c2_info.time_local, time_format)
+                self.view.c2_time_utc_label.setText(label_text_utc)
+                self.view.c2_time_local_label.setText(label_text_local)
 
             if self.model.max_info:
-                max_time_utc = self.model.max_info.time_utc
-                max_time_local = self.model.max_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if max_time_utc.hour < 12 else " pm"
-                self.view.max_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(max_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_local.hour < 12 else " pm"
-                self.view.max_time_local_label.setText(
-                    f"{datetime.datetime.strftime(max_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.max_info.time_utc, self.model.max_info.time_local, time_format)
+                self.view.max_time_utc_label.setText(label_text_utc)
+                self.view.max_time_local_label.setText(label_text_local)
 
             if self.model.c3_info:
-                c3_time_utc = self.model.c3_info.time_utc
-                c3_time_local = self.model.c3_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if c3_time_utc.hour < 12 else " pm"
-                self.view.c3_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(c3_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_local.hour < 12 else " pm"
-                self.view.c3_time_local_label.setText(
-                    f"{datetime.datetime.strftime(c3_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.c3_info.time_utc, self.model.c3_info.time_local, time_format)
+                self.view.c3_time_utc_label.setText(label_text_utc)
+                self.view.c3_time_local_label.setText(label_text_local)
 
             if self.model.c4_info:
-                c4_time_utc = self.model.c4_info.time_utc
-                c4_time_local = self.model.c4_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if c4_time_utc.hour < 12 else " pm"
-                self.view.c4_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(c4_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_local.hour < 12 else " pm"
-                self.view.c4_time_local_label.setText(
-                    f"{datetime.datetime.strftime(c4_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.c4_info.time_utc, self.model.c4_info.time_local, time_format)
+                self.view.c4_time_utc_label.setText(label_text_utc)
+                self.view.c4_time_local_label.setText(label_text_local)
 
             if self.model.sunrise_info:
-                sunrise_time_utc = self.model.sunrise_info.time_utc
-                sunrise_time_local = self.model.sunrise_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if sunrise_time_utc.hour < 12 else " pm"
-                self.view.sunrise_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(sunrise_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_local.hour < 12 else " pm"
-                self.view.sunrise_time_local_label.setText(
-                    f"{datetime.datetime.strftime(sunrise_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.sunrise_info.time_utc, self.model.sunrise_info.time_local, time_format)
+                self.view.sunrise_time_utc_label.setText(label_text_utc)
+                self.view.sunrise_time_local_label.setText(label_text_local)
 
             if self.model.sunset_info:
-                sunset_time_utc = self.model.sunset_info.time_utc
-                sunset_time_local = self.model.sunset_info.time_local
-                suffix = ""
-                if time_format == "12 hours":
-                    suffix = " am" if sunset_time_utc.hour < 12 else " pm"
-                self.view.sunset_time_utc_label.setText(
-                    f"{datetime.datetime.strftime(sunset_time_utc, TIME_FORMATS[time_format])}{suffix}")
-                if time_format == "12 hours":
-                    suffix = " am" if c1_time_local.hour < 12 else " pm"
-                self.view.sunset_time_local_label.setText(
-                    f"{datetime.datetime.strftime(sunset_time_local, TIME_FORMATS[time_format])}{suffix}")
+                label_text_utc, label_text_local = format_reference_moment_labels(
+                    self.model.sunset_info.time_utc, self.model.sunset_info.time_local, time_format)
+                self.view.sunset_time_utc_label.setText(label_text_utc)
+                self.view.sunset_time_local_label.setText(label_text_local)
 
             return
 
@@ -1617,6 +1538,30 @@ class JobsTableModel(QAbstractTableModel):
                 return Qt.AlignmentFlag.AlignHCenter
             else:
                 return Qt.AlignmentFlag.AlignLeft
+
+
+def format_reference_moment_labels(time_utc, time_local, time_format):
+    """ Format text for the labels with the timing of the reference moments.
+
+    Args:
+        - time_utc: Time in UTC timezone
+        - time_local: Time in local timezone
+        - time_format: Time format (12/24 hours)
+
+    Returns:
+        - Formatted time in UTC timezone
+        - Formatted time in local timezone
+    """
+
+    suffix = ""
+    if time_format == "12 hours":
+        suffix = " am" if time_utc.hour < 12 else " pm"
+
+    if time_format == "12 hours":
+        suffix = " am" if time_local.hour < 12 else " pm"
+
+    return (f"{datetime.datetime.strftime(time_utc, TIME_FORMATS[time_format])}{suffix}",
+            f"{datetime.datetime.strftime(time_local, TIME_FORMATS[time_format])}{suffix}")
 
 
 def main():
