@@ -558,7 +558,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.eclipse_date_label.setText(f"Eclipse date [{self.date_format}]")
 
         self.date_label.setText(f"Date [{self.date_format}]")
-        self.date_label_local.setText(datetime.datetime.strftime(current_time_local, DATE_FORMATS[self.date_format])) # "%d/%m/%Y"))
+        self.date_label_local.setText(datetime.datetime.strftime(current_time_local, DATE_FORMATS[self.date_format]))
         self.date_label_utc.setText(datetime.datetime.strftime(current_time_utc, DATE_FORMATS[self.date_format]))
 
         suffix = ""
@@ -606,7 +606,7 @@ class SolarEclipseView(QMainWindow, Observable):
             - reference_moments: Dictionary with the reference moments (C1, C2, maximum eclipse, C3, C4, sunrise, and
                                  sunset)
             - magnitude: Eclipse magnitude (0: no eclipse, 1: total eclipse)
-            - eclipse_type: Eclipse type (total / annular / partial / no eclispe)
+            - eclipse_type: Eclipse type (total / annular / partial / no eclipse)
         """
 
         if eclipse_type == "Partial" or eclipse_type == "Annular":
@@ -813,14 +813,16 @@ class SolarEclipseController(Observer):
 
         elif isinstance(changed_object, EclipsePopup):
             eclipse_date = changed_object.eclipse_combobox.currentText()
-            self.model.set_eclipse_date(Time(datetime.datetime.strptime(eclipse_date, DATE_FORMATS[self.view.date_format])))
+            self.model.set_eclipse_date(
+                Time(datetime.datetime.strptime(eclipse_date, DATE_FORMATS[self.view.date_format])))
 
             self.view.eclipse_date.setText(changed_object.eclipse_combobox.currentText())
             return
 
         elif isinstance(changed_object, SimulatorPopup):
             self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
-            self.sim_offset_minutes = int(changed_object.offset_minutes.text()) * BEFORE_AFTER[changed_object.before_after_combobox.currentText()]
+            self.sim_offset_minutes = (int(changed_object.offset_minutes.text())
+                                       * BEFORE_AFTER[changed_object.before_after_combobox.currentText()])
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -1109,7 +1111,9 @@ class SimulatorPopup(QWidget, Observable):
         self.setGeometry(QRect(100, 100, 300, 75))
         self.add_observer(observer)
 
+        # noinspection SpellCheckingInspection
         hbox1 = QHBoxLayout()
+        # noinspection SpellCheckingInspection
         hbox2 = QHBoxLayout()
 
         self.offset_minutes = QLineEdit()
@@ -1155,7 +1159,7 @@ class SimulatorPopup(QWidget, Observable):
         self.setLayout(layout)
 
     def accept_starting_time(self):
-        """ Notify the observer about the specification of the starting time of the simulation and close the pop-up window.
+        """ Notify the observer about specification of the starting time of the simulation and close the pop-up window.
 
         Check:
             - offset specified
@@ -1224,7 +1228,7 @@ class SettingsPopup(QWidget, Observable):
 
 
 class LocationPlot(FigureCanvas):
-    """ Display the world with the selected location overplotted in red."""
+    """ Display the world with the selected location marked with a red dot."""
 
     def __init__(self, parent=None, dpi=100):
         """ Plot a world map."""
@@ -1241,6 +1245,7 @@ class LocationPlot(FigureCanvas):
         self.location = None
         self.gdf = None
 
+        # noinspection SpellCheckingInspection
         world = geopandas.read_file(get_path("naturalearth.land"))
         # Crop -> min longitude, min latitude, max longitude, max latitude
         world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)
@@ -1266,7 +1271,8 @@ class LocationPlot(FigureCanvas):
                 "Longitude": [longitude],
             }
         )
-        self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude), crs="EPSG:4326")
+        self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude),
+                                          crs="EPSG:4326")
         self.gdf.plot(ax=self.ax, color="red")
 
         self.ax.set_aspect("equal")
@@ -1404,7 +1410,8 @@ class JobsTableModel(QAbstractTableModel):
         self.time_format = self.controller.view.time_format
 
         tf = TimezoneFinder()
-        timezone = pytz.timezone(tf.timezone_at(lng=self.controller.model.longitude, lat=self.controller.model.latitude))
+        timezone = pytz.timezone(
+            tf.timezone_at(lng=self.controller.model.longitude, lat=self.controller.model.latitude))
 
         now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
         data = []
@@ -1603,7 +1610,7 @@ def main():
 
     model = SolarEclipseModel()
     view = SolarEclipseView(is_simulator=is_simulator)
-    controller = SolarEclipseController(model, view, is_simulator=is_simulator)
+    _ = SolarEclipseController(model, view, is_simulator=is_simulator)
 
     view.show()
 
