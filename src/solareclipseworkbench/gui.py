@@ -109,7 +109,7 @@ class SolarEclipseModel:
 
         # Camera(s)
 
-        self.camera_overview: dict = None
+        self.camera_overview: CameraOverviewTableModel = CameraOverviewTableModel()
 
     def set_position(self, longitude: float, latitude: float, altitude: float):
         """ Set the geographical position of the observing location.
@@ -182,19 +182,19 @@ class SolarEclipseModel:
 
         return self.reference_moments, magnitude, eclipse_type
 
-    def set_camera_overview(self, camera_overview: dict):
-        """ Set the camera overview to the given dictionary.
-
-        Args:
-            - camera_overview: Dictionary containing the camera overview
-        """
-
-        self.camera_overview = camera_overview
+    # def set_camera_overview(self, camera_overview: dict):
+    #     """ Set the camera overview to the given dictionary.
+    #
+    #     Args:
+    #         - camera_overview: Dictionary containing the camera overview
+    #     """
+    #
+    #     self.camera_overview = camera_overview
 
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
 
-        for camera_name, camera in self.camera_overview.items():
+        for camera_name, camera in self.camera_overview.camera_overview_dict.items():
 
             logging.info(f"Syncing time for camera {camera_name}")
             set_time(camera)
@@ -206,7 +206,7 @@ class SolarEclipseModel:
         logged.
         """
 
-        for camera_name, camera in self.camera_overview.items():
+        for camera_name, camera in self.camera_overview.camera_overview_dict.items():
 
             # Focus mode
 
@@ -320,8 +320,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.eclipse_type = QLabel()
 
-        self.camera_overview_grid_layout = QGridLayout()
-        self.camera_overview_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.camera_overview = QTableView()
 
         self.jobs_table = QTableView()
 
@@ -426,18 +425,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
         reference_moments_group_box.setFixedWidth(600)
 
-        camera_overview_group_box = QGroupBox()
-        self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
-        self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
-        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
-        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
-        camera_overview_group_box.setLayout(self.camera_overview_grid_layout)
-        camera_overview_group_box.setFixedWidth(600)
-
+        # noinspection SpellCheckingInspection
         hbox = QHBoxLayout()
         hbox.addLayout(vbox_left)
         hbox.addWidget(reference_moments_group_box)
-        hbox.addWidget(camera_overview_group_box)
+
+        self.camera_overview.setFixedHeight(300)
+        hbox.addWidget(self.camera_overview)
 
         scroll = QScrollArea()
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
@@ -716,52 +710,10 @@ class SolarEclipseView(QMainWindow, Observable):
         # Sunset
 
         sunset_info: ReferenceMomentInfo = reference_moments["sunset"]
-
-    def show_camera_overview(self, camera_overview: dict):
-        """ Display the overview of connected cameras.
-
-        Args:
-            - camera_overview: Dictionary with an overview of the connected cameras
-        """
-
-        # Clear the widget
-
-        for widget_index in reversed(range(self.camera_overview_grid_layout.count())):
-            # if not widget_index % 3:
-            self.camera_overview_grid_layout.itemAt(widget_index).widget().setParent(None)
-
-        self.camera_overview_grid_layout.addWidget(QLabel("Camera"), 0, 0)
-        self.camera_overview_grid_layout.addWidget(QLabel("Battery level [%]"), 0, 1)
-        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [GB]"), 0, 2)
-        self.camera_overview_grid_layout.addWidget(QLabel("Free memory [%]"), 0, 3)
-
-        camera_index = 1
-        for camera_name, camera in camera_overview.items():
-
-            try:
-                battery_level = get_battery_level(camera).rstrip("%")
-                free_space_gb = get_free_space(camera)
-                total_space = get_space(camera)
-
-                free_space_percentage = int(free_space_gb / total_space * 100)
-
-                self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
-                self.camera_overview_grid_layout.addWidget(
-                    QLabel(str(battery_level), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 1)
-                self.camera_overview_grid_layout.addWidget(
-                    QLabel(str(free_space_gb), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 2)
-                self.camera_overview_grid_layout.addWidget(
-                    QLabel(str(free_space_percentage), alignment=Qt.AlignmentFlag.AlignRight), camera_index, 3)
-            except GPhoto2Error:
-                self.camera_overview_grid_layout.addWidget(QLabel(camera_name), camera_index, 0)
-                self.camera_overview_grid_layout.addWidget(
-                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 1)
-                self.camera_overview_grid_layout.addWidget(
-                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 2)
-                self.camera_overview_grid_layout.addWidget(
-                    QLabel("N.A.", alignment=Qt.AlignmentFlag.AlignRight), camera_index, 3)
-
-            camera_index += 1
+        label_text_utc, label_text_local \
+            = format_reference_moment_labels(sunset_info.time_utc, sunset_info.time_local, self.time_format)
+        self.sunset_time_utc_label.setText(label_text_utc)
+        self.sunset_countdown_label.setText(label_text_local)
 
 
 class SolarEclipseController(Observer):
@@ -778,8 +730,12 @@ class SolarEclipseController(Observer):
 
         self.model = model
         self.jobs_model: Union[JobsTableModel, None] = None
+        self.model.camera_overview = CameraOverviewTableModel()
 
         self.view: SolarEclipseView = view
+        self.view.camera_overview.setModel(self.model.camera_overview)
+        self.view.camera_overview.resizeColumnsToContents()
+        self.view.camera_overview.setColumnWidth(0, 100)
         self.view.add_observer(self)
 
         self.is_simulator: bool = is_simulator
@@ -936,7 +892,7 @@ class SolarEclipseController(Observer):
                 self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
 
         elif text == "Camera(s)":
-            self.update_camera_overview()
+            self.model.camera_overview.update_camera_overview()
             self.sync_camera_time()
             self.check_camera_state()
 
@@ -972,14 +928,6 @@ class SolarEclipseController(Observer):
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
             self.settings_popup.show()
-
-    def update_camera_overview(self):
-        """ Update the camera overview in the model and the view."""
-
-        camera_overview: dict = get_camera_dict()
-
-        self.model.set_camera_overview(camera_overview)
-        self.view.show_camera_overview(camera_overview)
 
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
@@ -1352,6 +1300,86 @@ def format_countdown(countdown: datetime.timedelta):
     return formatted_countdown
 
 
+class CameraOverviewTableColumnNames(Enum):
+    """ Enumeration of the column names for the table with the camera overview table. """
+
+    CAMERA = "Camera"
+    BATTERY_LEVEL = "Battery level"
+    FREE_MEMORY_GB = "Free memory [GB]"
+    FREE_MEMORY_PERCENTAGE = "Free memory [%]"
+
+
+class CameraOverviewTableModel(QAbstractTableModel):
+
+    def __init__(self):
+        """ Initialisation of the model for the table with the camera overview. """
+
+        super().__init__()
+
+        self.camera_overview_dict: Union[dict, None] = None
+
+        self._data = pd.DataFrame(columns=[CameraOverviewTableColumnNames.CAMERA.value,
+                                           CameraOverviewTableColumnNames.BATTERY_LEVEL.value,
+                                           CameraOverviewTableColumnNames.FREE_MEMORY_GB.value,
+                                           CameraOverviewTableColumnNames.FREE_MEMORY_PERCENTAGE.value])
+
+    def rowCount(self, index):
+        return self._data.shape[0]
+
+    def columnCount(self, index):
+        return self._data.shape[1]
+
+    def headerData(self, section, orientation, role):
+        # section is the index of the column/row.
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
+                return str(self._data.columns[section])
+
+            if orientation == Qt.Orientation.Vertical:
+                return str(self._data.index[section])
+
+    def data(self, index: QModelIndex, role):
+        """ Formatting of the data to display. """
+
+        if role == Qt.ItemDataRole.DisplayRole:
+
+            value = self._data.loc[index.row()].iat[index.column()]
+            return value
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if index.column() == 0:
+                return Qt.AlignmentFlag.AlignLeft
+            else:
+                return Qt.AlignmentFlag.AlignRight
+
+    def update_camera_overview(self):
+        """ Update the camera overview. """
+
+        self._data = pd.DataFrame(columns=self._data.columns)
+
+        self.beginResetModel()
+
+        self.camera_overview_dict = get_camera_dict()
+
+        data = []
+
+        for camera_name, camera in self.camera_overview_dict.items():
+            try:
+                battery_level = get_battery_level(camera).rstrip("%")
+                free_space_gb = get_free_space(camera)
+                total_space = get_space(camera)
+                free_space_percentage = int(free_space_gb / total_space * 100)
+
+                data.append([camera_name, str(battery_level), str(free_space_gb), str(free_space_percentage)])
+
+            except GPhoto2Error:
+                pass
+
+        self._data = pd.DataFrame(data, columns=self._data.columns)
+
+        self.endResetModel()
+
+
 class JobsTableColumnNames(Enum):
     """ Enumeration of the column names for the table with the scheduled jobs. """
 
@@ -1595,7 +1623,7 @@ def sync_cameras(controller: SolarEclipseController):
         - controller: Controller of the Solar Eclipse Workbench UI
     """
 
-    controller.update_camera_overview()
+    controller.model.update_camera_overview()
     controller.sync_camera_time()
     controller.check_camera_state()
 
