@@ -1,8 +1,6 @@
-
-
-
 import argparse
 from datetime import datetime, timedelta
+
 
 def main(input: str, output: str) -> None:
     """

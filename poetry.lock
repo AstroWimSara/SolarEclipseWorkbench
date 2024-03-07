@@ -93,13 +93,13 @@ test-all = ["astropy[test]", "coverage[toml]", "ipython (>=4.2)", "objgraph", "s
 
 [[package]]
 name = "astropy-iers-data"
-version = "0.2024.2.26.0.28.55"
+version = "0.2024.3.4.0.30.17"
 description = "IERS Earth Rotation and Leap Second tables for the astropy core package"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "astropy-iers-data-0.2024.2.26.0.28.55.tar.gz", hash = "sha256:908d69c8b7ef9b644e4c8d3c8d22818f54f1ad5d364ab98b1eb1c57b7126abd3"},
-    {file = "astropy_iers_data-0.2024.2.26.0.28.55-py3-none-any.whl", hash = "sha256:2f6887ec4c75e8d0d5742820663f8ececf75c28ae4804621cb4101062c93a580"},
+    {file = "astropy-iers-data-0.2024.3.4.0.30.17.tar.gz", hash = "sha256:d530709e64d267a0547d305910608b8321f5d0225e37cf0b57430225b05114e2"},
+    {file = "astropy_iers_data-0.2024.3.4.0.30.17-py3-none-any.whl", hash = "sha256:6bde799b11eb2fc32ab3f209a49ef6a5be7e141c07c86893bf2478f2762b7fb4"},
 ]
 
 [package.extras]
@@ -1198,13 +1198,13 @@ test = ["pytest", "pytest-doctestplus (>=0.7)"]
 
 [[package]]
 name = "pyparsing"
-version = "3.1.1"
+version = "3.1.2"
 description = "pyparsing module - Classes and methods to define and execute parsing grammars"
 optional = false
 python-versions = ">=3.6.8"
 files = [
-    {file = "pyparsing-3.1.1-py3-none-any.whl", hash = "sha256:32c7c0b711493c72ff18a981d24f28aaf9c1fb7ed5e9667c9e84e3db623bdbfb"},
-    {file = "pyparsing-3.1.1.tar.gz", hash = "sha256:ede28a1a32462f5a9705e07aea48001a08f7cf81a021585011deba701581a0db"},
+    {file = "pyparsing-3.1.2-py3-none-any.whl", hash = "sha256:f9db75911801ed778fe61bb643079ff86601aca99fcae6345aa67292038fb742"},
+    {file = "pyparsing-3.1.2.tar.gz", hash = "sha256:a1bac0ce561155ecc3ed78ca94d3c9378656ad4c94c1270de543f621420f94ad"},
 ]
 
 [package.extras]

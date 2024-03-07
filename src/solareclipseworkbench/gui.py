@@ -4,7 +4,7 @@
     - View: SolarEclipseView
     - Controller: SolarEclipseController
 """
-
+import argparse
 import datetime
 import logging
 import sys
@@ -1535,16 +1535,72 @@ class JobsTableModel(QAbstractTableModel):
 
 def main():
 
-    args = list(sys.argv)
-    is_simulator = "--sim" in args or "--simulator" in args
+    parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")
+    parser.add_argument(
+        "-s",
+        "--sim",
+        help="Start up in simulator mode",
+        default=False,
+        action='store_true'
+    )
+    parser.add_argument(
+        "-lon",
+        "--longitude",
+        help="longitude of the location where to watch the solar eclipse (W is negative)",
+        default=False,
+        type=float
+    )
+
+    parser.add_argument(
+        "-lat",
+        "--latitude",
+        help="latitude of the location where to watch the solar eclipse (N is positive)",
+        default=False,
+        type=float
+    )
+
+    parser.add_argument(
+        "-alt",
+        "--altitude",
+        help="altitude of the location where to watch the solar eclipse (in meters)",
+        default=False,
+        type=float
+    )
+
+    parser.add_argument(
+        "-d",
+        "--date",
+        help="date of the solar eclipse (in YYYY-MM-DD format)",
+        default=False,
+    )
+
+    args = parser.parse_args()
+
     # args[1:1] = ["-stylesheet", str(styles_location)]
-    app = QApplication(args)
+    app = QApplication(list(sys.argv))
     app.setWindowIcon(QIcon(str(ICON_PATH / "logo-small.svg")))
     app.setApplicationName("Solar Eclipse Workbench")
 
     model = SolarEclipseModel()
-    view = SolarEclipseView(is_simulator=is_simulator)
-    _ = SolarEclipseController(model, view, is_simulator=is_simulator)
+    view = SolarEclipseView(is_simulator=args.sim)
+    _ = SolarEclipseController(model, view, is_simulator=args.sim)
+
+    if args.longitude and args.latitude and args.altitude:
+        model.set_position(args.longitude, args.latitude, args.altitude)
+        view.longitude_label.setText(str(args.longitude))
+        view.latitude_label.setText(str(args.latitude))
+        view.altitude_label.setText(str(args.altitude))
+
+    if args.date:
+        date = datetime.datetime.strptime(args.date, "%Y-%m-%d")
+
+        model.set_eclipse_date(Time(date))
+
+        view.eclipse_date.setText(date.strftime(DATE_FORMATS[view.date_format]))
+
+    if args.longitude and args.latitude and args.altitude and args.date:
+        reference_moments, magnitude, eclipse_type = model.get_reference_moments()
+        view.show_reference_moments(reference_moments, magnitude, eclipse_type)
 
     view.show()
 

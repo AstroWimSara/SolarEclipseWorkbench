@@ -8,7 +8,6 @@
 ### GUI
 
 - [ ] Save settings and reopen same settings again
-- [ ] Show duration of totality at given location
 - [ ] Calculate list of solar eclipse (don't use a fixed list)
 - [ ] Log all actions
 
@@ -22,7 +21,7 @@
 
 - [ ] Fix sync_cameras
 - [ ] Mirror up - TEST???
-- [ ] Write script for April 8
+- [X] Write script for April 8
 - [ ] Simulate an intervalometer
 - [ ] All commands from Solar Eclipse Maestro: http://xjubier.free.fr/en/site_pages/solar_eclipses/Solar_Eclipse_Maestro_Help/pgs2/btoc6.html
 
