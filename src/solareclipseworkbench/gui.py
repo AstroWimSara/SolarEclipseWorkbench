@@ -61,6 +61,8 @@ BEFORE_AFTER = {
 
 REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
+LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
+
 
 class SolarEclipseModel:
     """ Model for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -210,17 +212,23 @@ class SolarEclipseModel:
 
             # Focus mode
 
-            focus_mode = get_focus_mode(camera)
-            if focus_mode.lower() != "manual":
-                logging.warning(f"The focus mode for camera {camera_name} should be set to 'Manual' "
-                                f"(is '{focus_mode}')")
+            try:
+                focus_mode = get_focus_mode(camera)
+                if focus_mode.lower() != "manual":
+                    LOGGER.warning(f"The focus mode for camera {camera_name} should be set to 'Manual' "
+                                   f"(is '{focus_mode}')")
+            except GPhoto2Error:
+                LOGGER.warning(f"The focus mode for camera {camera_name} could not be determined")
 
             # Shooting mode
 
-            shooting_mode = get_shooting_mode(camera_name, camera)
-            if shooting_mode.lower() != "manual":
-                logging.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
-                                f"(is '{shooting_mode}')")
+            try:
+                shooting_mode = get_shooting_mode(camera_name, camera)
+                if shooting_mode.lower() != "manual":
+                    LOGGER.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
+                                    f"(is '{shooting_mode}')")
+            except GPhoto2Error:
+                LOGGER.warning(f"The shooting mode for camera {camera_name} could not be determined")
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -269,7 +277,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.eclipse_date_widget = QWidget()
         self.eclipse_date_label = QLabel(f"Eclipse date [{self.date_format}]")
-        self.eclipse_date = QLabel(f"")
+        self.eclipse_date = QLabel("")
 
         self.reference_moments_widget = QWidget()
         self.c1_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
@@ -909,6 +917,40 @@ class SolarEclipseController(Observer):
 
         self.model.check_camera_state()
 
+    def set_location(self, longitude: float, latitude: float, altitude: float):
+        """ Set the observing location in the model and the view.
+
+        Args:
+                - longitude: Longitude of the location [degrees]
+                - latitude: Latitude of the location [degrees]
+                - altitude: Altitude of the location [meters]
+        """
+
+        self.model.set_position(longitude, latitude, altitude)
+
+        self.view.longitude_label.setText(str(longitude))
+        self.view.latitude_label.setText(str(latitude))
+        self.view.altitude_label.setText(str(altitude))
+
+    def set_eclipse_date(self, date: str):
+        """ Set the eclipse date in the model and the view.
+
+        Args:
+            - eclipse_date: Eclipse date [%Y-%m-%d]
+        """
+
+        date = datetime.datetime.strptime(date, "%Y-%m-%d")
+
+        self.model.set_eclipse_date(Time(date))
+
+        self.view.eclipse_date.setText(date.strftime(DATE_FORMATS[self.view.date_format]))
+
+    def set_reference_moments(self):
+        """ Set the reference moments of the eclipse in the model and the view."""
+
+        reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
+        self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+
 
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
@@ -1358,7 +1400,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
 
                 data.append([camera_name, str(battery_level), str(free_space_gb), str(free_space_percentage)])
 
-            except GPhoto2Error:
+            except (GPhoto2Error, IndexError):
                 pass
 
         self._data = pd.DataFrame(data, columns=self._data.columns)
@@ -1583,28 +1625,25 @@ def main():
 
     model = SolarEclipseModel()
     view = SolarEclipseView(is_simulator=args.sim)
-    _ = SolarEclipseController(model, view, is_simulator=args.sim)
+    controller = SolarEclipseController(model, view, is_simulator=args.sim)
 
     if args.longitude and args.latitude and args.altitude:
-        model.set_position(args.longitude, args.latitude, args.altitude)
-        view.longitude_label.setText(str(args.longitude))
-        view.latitude_label.setText(str(args.latitude))
-        view.altitude_label.setText(str(args.altitude))
+        controller.set_location(args.longitude, args.latitude, args.altitude)
 
     if args.date:
-        date = datetime.datetime.strptime(args.date, "%Y-%m-%d")
-
-        model.set_eclipse_date(Time(date))
-
-        view.eclipse_date.setText(date.strftime(DATE_FORMATS[view.date_format]))
+        controller.set_eclipse_date(args.date)
 
     if args.longitude and args.latitude and args.altitude and args.date:
-        reference_moments, magnitude, eclipse_type = model.get_reference_moments()
-        view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+        controller.set_reference_moments()
 
     view.show()
 
     return app.exec()
+
+
+
+
+
 
 
 def sync_cameras(controller: SolarEclipseController):
