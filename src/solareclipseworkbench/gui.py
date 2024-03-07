@@ -277,7 +277,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.eclipse_date_widget = QWidget()
         self.eclipse_date_label = QLabel(f"Eclipse date [{self.date_format}]")
-        self.eclipse_date = QLabel(f"")
+        self.eclipse_date = QLabel("")
 
         self.reference_moments_widget = QWidget()
         self.c1_time_local_label = QLabel(alignment=Qt.AlignmentFlag.AlignRight)
