@@ -909,6 +909,40 @@ class SolarEclipseController(Observer):
 
         self.model.check_camera_state()
 
+    def set_location(self, longitude: float, latitude: float, altitude: float):
+        """ Set the observing location in the model and the view.
+
+        Args:
+                - longitude: Longitude of the location [degrees]
+                - latitude: Latitude of the location [degrees]
+                - altitude: Altitude of the location [meters]
+        """
+
+        self.model.set_position(longitude, latitude, altitude)
+
+        self.view.longitude_label.setText(str(longitude))
+        self.view.latitude_label.setText(str(latitude))
+        self.view.altitude_label.setText(str(altitude))
+
+    def set_eclipse_date(self, date: str):
+        """ Set the eclipse date in the model and the view.
+
+        Args:
+            - eclipse_date: Eclipse date [%Y-%m-%d]
+        """
+
+        date = datetime.datetime.strptime(date, "%Y-%m-%d")
+
+        self.model.set_eclipse_date(Time(date))
+
+        self.view.eclipse_date.setText(date.strftime(DATE_FORMATS[self.view.date_format]))
+
+    def set_reference_moments(self):
+        """ Set the reference moments of the eclipse in the model and the view."""
+
+        reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
+        self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+
 
 class LocationPopup(QWidget, Observable):
     def __init__(self, observer: SolarEclipseController):
@@ -1583,28 +1617,25 @@ def main():
 
     model = SolarEclipseModel()
     view = SolarEclipseView(is_simulator=args.sim)
-    _ = SolarEclipseController(model, view, is_simulator=args.sim)
+    controller = SolarEclipseController(model, view, is_simulator=args.sim)
 
     if args.longitude and args.latitude and args.altitude:
-        model.set_position(args.longitude, args.latitude, args.altitude)
-        view.longitude_label.setText(str(args.longitude))
-        view.latitude_label.setText(str(args.latitude))
-        view.altitude_label.setText(str(args.altitude))
+        controller.set_location(args.longitude, args.latitude, args.altitude)
 
     if args.date:
-        date = datetime.datetime.strptime(args.date, "%Y-%m-%d")
-
-        model.set_eclipse_date(Time(date))
-
-        view.eclipse_date.setText(date.strftime(DATE_FORMATS[view.date_format]))
+        controller.set_eclipse_date(args.date)
 
     if args.longitude and args.latitude and args.altitude and args.date:
-        reference_moments, magnitude, eclipse_type = model.get_reference_moments()
-        view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+        controller.set_reference_moments()
 
     view.show()
 
     return app.exec()
+
+
+
+
+
 
 
 def sync_cameras(controller: SolarEclipseController):
