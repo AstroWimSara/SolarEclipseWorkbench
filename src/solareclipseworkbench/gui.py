@@ -15,7 +15,7 @@ from typing import Union
 import geopandas
 import pandas as pd
 import pytz
-from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex
+from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QSettings
 from PyQt6.QtGui import QIcon, QAction, QDoubleValidator, QIntValidator
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
     QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTableView
@@ -343,7 +343,7 @@ class SolarEclipseView(QMainWindow, Observable):
         """ Save the settings.
 
         The settings that are saved are:
-        
+
             - Longitude [degrees];
             - Latitude [degrees];
             - Altitude [m];
@@ -778,6 +778,8 @@ class SolarEclipseController(Observer):
         self.time_display_timer.setInterval(1000)
         self.time_display_timer.start()
 
+        self.load_settings()
+
     def update_time(self):
         """ Update the displayed current time and countdown clocks."""
 
@@ -955,6 +957,54 @@ class SolarEclipseController(Observer):
 
         self.model.check_camera_state()
 
+    def load_settings(self):
+        """ Load the UI settings.
+
+        These settings are:
+
+            - Date format (always present);
+            - Time format (always present);
+            - Location (longitude, latitude, altitude);
+            - Eclipse date.
+
+        If the location and eclipse date are present in the settings file, the reference moments will be updated
+        automatically.
+        """
+
+        self.view.settings = QSettings("./SolarEclipseWorkBench.ini", QSettings.Format.IniFormat)
+
+        # Date & time format
+        # TODO Requires Python 3.7
+
+        default_date_format, *_ = DATE_FORMATS
+        date_format = self.view.settings.value("date_format", default_date_format, type=str)
+        default_time_format, *_ = TIME_FORMATS
+        time_format = self.view.settings.value("time_format", default_time_format, type=str)
+        self.set_datetime_format(date_format, time_format)
+
+        # Location
+
+        self.set_location(self.view.settings.value("longitude", None, type=float),
+                          self.view.settings.value("latitude", None, type=float),
+                          self.view.settings.value("altitude", None, type=float))
+
+        # Eclipse date
+
+        self.set_eclipse_date(self.view.settings.value("eclipse_date", None, type=str), date_format)
+
+        # Reference moments
+
+        try:
+            self.set_reference_moments()
+        except AttributeError:
+            pass
+
+    def set_datetime_format(self, date_format: str, time_format: str):
+        """ Set the date and time format in the view. """
+
+        self.view.date_format = date_format
+        self.view.time_format = time_format
+
     def set_location(self, longitude: float, latitude: float, altitude: float):
         """ Set the observing location in the model and the view.
 
@@ -970,18 +1020,23 @@ class SolarEclipseController(Observer):
         self.view.latitude_label.setText(str(latitude))
         self.view.altitude_label.setText(str(altitude))
 
-    def set_eclipse_date(self, date: str):
+    def set_eclipse_date(self, eclipse_date: str, date_format: str = None):
         """ Set the eclipse date in the model and the view.
 
         Args:
-            - eclipse_date: Eclipse date [%Y-%m-%d]
+            - eclipse_date: Eclipse date
+            - date_format: Date format for the given eclipse date (if None, the date format is %Y-%m-%d)
         """
 
-        date = datetime.datetime.strptime(date, "%Y-%m-%d")
+        if date_format:
+            dt = datetime.datetime.strptime(eclipse_date, DATE_FORMATS[date_format])
+            date = datetime.datetime.strftime(dt, "%Y-%m-%d")
+            self.view.eclipse_date.setText(eclipse_date)
+        else:
+            date = datetime.datetime.strptime(eclipse_date, "%Y-%m-%d")
+            self.view.eclipse_date.setText(date.strftime(DATE_FORMATS[self.view.date_format]))
 
         self.model.set_eclipse_date(Time(date))
-
-        self.view.eclipse_date.setText(date.strftime(DATE_FORMATS[self.view.date_format]))
 
     def set_reference_moments(self):
         """ Set the reference moments of the eclipse in the model and the view."""
@@ -1677,11 +1732,6 @@ def main():
     view.show()
 
     return app.exec()
-
-
-
-
-
 
 
 def sync_cameras(controller: SolarEclipseController):
