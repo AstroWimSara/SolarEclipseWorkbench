@@ -61,6 +61,8 @@ BEFORE_AFTER = {
 
 REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
+LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
+
 
 class SolarEclipseModel:
     """ Model for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -210,17 +212,23 @@ class SolarEclipseModel:
 
             # Focus mode
 
-            focus_mode = get_focus_mode(camera)
-            if focus_mode.lower() != "manual":
-                logging.warning(f"The focus mode for camera {camera_name} should be set to 'Manual' "
-                                f"(is '{focus_mode}')")
+            try:
+                focus_mode = get_focus_mode(camera)
+                if focus_mode.lower() != "manual":
+                    LOGGER.warning(f"The focus mode for camera {camera_name} should be set to 'Manual' "
+                                   f"(is '{focus_mode}')")
+            except GPhoto2Error:
+                LOGGER.warning(f"The focus mode for camera {camera_name} could not be determined")
 
             # Shooting mode
 
-            shooting_mode = get_shooting_mode(camera_name, camera)
-            if shooting_mode.lower() != "manual":
-                logging.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
-                                f"(is '{shooting_mode}')")
+            try:
+                shooting_mode = get_shooting_mode(camera_name, camera)
+                if shooting_mode.lower() != "manual":
+                    LOGGER.warning(f"The shooting mode for camera {camera_name} should be set to 'Manual' "
+                                    f"(is '{shooting_mode}')")
+            except GPhoto2Error:
+                LOGGER.warning(f"The shooting mode for camera {camera_name} could not be determined")
 
 
 class SolarEclipseView(QMainWindow, Observable):
@@ -1392,7 +1400,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
 
                 data.append([camera_name, str(battery_level), str(free_space_gb), str(free_space_percentage)])
 
-            except GPhoto2Error:
+            except (GPhoto2Error, IndexError):
                 pass
 
         self._data = pd.DataFrame(data, columns=self._data.columns)
