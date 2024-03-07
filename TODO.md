@@ -7,7 +7,7 @@
   
 ### GUI
 
-- [ ] Save settings and reopen same settings again
+- [x] Save settings and reopen same settings again
 - [ ] Calculate list of solar eclipse (don't use a fixed list)
 - [ ] Log all actions
 
