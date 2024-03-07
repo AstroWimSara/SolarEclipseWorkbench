@@ -7,7 +7,6 @@ import pytz
 from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, sync_cameras
 from solareclipseworkbench.camera import CameraSettings
 from solareclipseworkbench.gui import SolarEclipseController
-from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 
 COMMANDS = {
     'voice_prompt': voice_prompt,
@@ -18,7 +17,7 @@ COMMANDS = {
 }
 
 
-def observe_solar_eclipse(ref_moments: ReferenceMomentInfo, commands_filename: str, cameras: dict,
+def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: dict,
                           controller: SolarEclipseController, reference_moment: str,
                           minutes_to_reference_moment: float) -> BackgroundScheduler:
     """ Observe (and photograph) the solar eclipse, as per given files.
@@ -63,7 +62,7 @@ def start_scheduler():
     return scheduler
 
 
-def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_moments: ReferenceMomentInfo,
+def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_moments: dict,
                       cameras: dict, controller: SolarEclipseController, reference_moment, simulated_start: datetime):
     """ Schedule commands as specified in the given file.
 
@@ -76,7 +75,7 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
         - cameras: Dictionary of camera names and camera objects
         - controller: Controller of the Solar Eclipse Workbench UI
         - reference_moment: Reference moment to use for the simulation.  Possible values are C1, C2, C3, C4, sunrise,
-                            sunset, and MAX. None if no simulation should be used
+                            sunset, and MAX. None if no simulation should be used.
         - simulated_start: datetime with the time to simulate relative to the reference moment.
                             None if no simulation is to be used.
 
@@ -85,11 +84,13 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
 
     with open(filename, "r") as file:
         for cmd_str in file:
-            schedule_command(scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start)
+            schedule_command(
+                scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start)
 
 
-def schedule_command(scheduler: BackgroundScheduler, reference_moments, cmd_str: str, cameras: dict,
-                     controller: SolarEclipseController, reference_moment_for_simulation: str, simulated_start: datetime):
+def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
+                     controller: SolarEclipseController, reference_moment_for_simulation: str,
+                     simulated_start: datetime):
     """ Schedule the given command with the given scheduler and reference moments.
 
     Args:
