@@ -334,6 +334,44 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.init_ui()
 
+    def closeEvent(self, event):
+        """ Save the settings when the UI is closed. """
+
+        self.save_settings()
+
+    def save_settings(self):
+        """ Save the settings.
+
+        The settings that are saved are:
+        
+            - Longitude [degrees];
+            - Latitude [degrees];
+            - Altitude [m];
+            - Eclipse date;
+            - Date format;
+            - Time format.
+        """
+
+        # Location
+
+        longitude = self.longitude_label.text()
+        latitude = self.latitude_label.text()
+        altitude = self.altitude_label.text()
+
+        if longitude and latitude and altitude:
+            self.settings.setValue("longitude", float(longitude))
+            self.settings.setValue("latitude", float(latitude))
+            self.settings.setValue("altitude", float(altitude))
+
+        # Eclipse date
+
+        self.settings.setValue("eclipse_date", self.eclipse_date.text())
+
+        # Date & time format
+
+        self.settings.setValue("date_format", self.date_format)
+        self.settings.setValue("time_format", self.time_format)
+
     def init_ui(self):
         """ Add all components to the UI. """
 
