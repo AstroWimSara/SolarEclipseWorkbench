@@ -8,18 +8,16 @@ Reference moments of a solar eclipse:
     - MAX: Maximum eclipse.
 """
 from datetime import datetime
-from pathlib import Path
 
-import pytz
 import astronomy
+import astropy.units as u
+import pytz
+from astronomy import SearchLocalSolarEclipse, LocalSolarEclipseInfo
 from astropy.coordinates import EarthLocation
 from astropy.time import Time
-from astronomy import SearchLocalSolarEclipse
-import astropy.units as u
 from skyfield import almanac
 from skyfield.api import load, wgs84, Topos
 from skyfield.units import Angle
-import yaml
 from timezonefinder import TimezoneFinder
 
 
@@ -42,34 +40,6 @@ class ReferenceMomentInfo:
         self.altitude = altitude
 
 
-def read_reference_moments(
-        filename="/Users/sara/private/solareclipseworkbench/softwareDevelopment/solareclipseworkbench/config/reference_moments.yaml") -> dict:
-    """ Read the reference moments of the solar eclipse from the given file.
-
-    The reference moments of a solar eclipse are the following:
-
-        - C1: First contact;
-        - C2: Second contact;
-        - C3: Third contact;
-        - C4: Fourth contact;
-        - MAX: Maximum eclipse.
-
-    In the file, they are specified in the format dd/MM/yyyy HH:mm:ss.S (local time).
-
-    Args:
-        - filename: Filename of the YAML file in which the reference moments are listed
-
-    Returns: Dictionary with the reference moments of the solar eclipse, as datetime objects.
-    """
-
-    reference_moments = yaml.safe_load(Path(filename).read_text())["reference_moments"]
-
-    for (key, value) in reference_moments.items():
-        reference_moments[key] = datetime.strptime(value, "%d/%m/%Y %H:%M:%S.%f")
-
-    return reference_moments
-
-
 def calculate_reference_moments(longitude: float, latitude: float, altitude: float, time: Time) -> (dict, int, str):
     """ Calculate the reference moments of the solar eclipse and return as a dictionary.
 
@@ -81,6 +51,7 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
         - C3: Third contact;
         - C4: Fourth contact;
         - MAX: Maximum eclipse;
+        - duration: Duration of the eclipse;
         - sunset: Moment of sun set.
 
     Args:
@@ -100,7 +71,7 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
     observer = astronomy.Observer(latitude, longitude)
     start_time = astronomy_time
 
-    eclipse = SearchLocalSolarEclipse(start_time, observer)
+    eclipse: LocalSolarEclipseInfo = SearchLocalSolarEclipse(start_time, observer)
 
     eph = load("de421.bsp")
     ts = load.timescale()
@@ -129,7 +100,7 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
         return timings, 0, 'No eclipse'
 
     # Check if altitude at one of the moments is > 0.0
-    if eclipse.peak.altitude > 0.0 or eclipse.start_partial.altitude > 0.0 or eclipse.end_partial > 0.0:
+    if eclipse.peak.altitude > 0.0 or eclipse.partial_begin.altitude > 0.0 or eclipse.partial_end.altitude > 0.0:
         alt, az = __calculate_alt_az(ts, earth, sun_ephem, loc, eclipse.partial_begin.time.Utc())
         c1 = ReferenceMomentInfo(eclipse.partial_begin.time.Utc().replace(tzinfo=pytz.UTC), az,
                                  eclipse.partial_begin.altitude, timezone)
@@ -190,6 +161,8 @@ def main():
                                                               value.azimuth, value.altitude))
         else:
             print("{:<10} {:<25}".format(key, str(value)))
+
+    print(type(timings["duration"]))
 
 
 if __name__ == "__main__":

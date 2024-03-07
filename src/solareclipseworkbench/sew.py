@@ -2,13 +2,11 @@ import argparse
 from time import sleep
 
 from astropy.time import Time
-from datetime import datetime, timedelta
 
+import camera
 from solareclipseworkbench import gui
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.utils import observe_solar_eclipse
-import pytz
-import camera
 
 
 def main(args):
@@ -34,7 +32,8 @@ def main(args):
             while len(scheduler.get_jobs()) > 0:
                 sleep(5)
         else:
-            print("When using the command line, you must specify the date, script to execute and the exact location of the solar eclipse.")
+            print("When using the command line, you must specify the date, "
+                  "script to execute and the exact location of the solar eclipse.")
             exit()
 
 
