@@ -971,7 +971,7 @@ class SolarEclipseController(Observer):
         automatically.
         """
 
-        self.view.settings = QSettings("./SolarEclipseWorkBench.ini", QSettings.Format.IniFormat)
+        self.view.settings = QSettings("./SolarEclipseWorkbench.ini", QSettings.Format.IniFormat)
 
         # Date & time format
         # TODO Requires Python 3.7
@@ -984,20 +984,22 @@ class SolarEclipseController(Observer):
 
         # Location
 
-        self.set_location(self.view.settings.value("longitude", None, type=float),
-                          self.view.settings.value("latitude", None, type=float),
-                          self.view.settings.value("altitude", None, type=float))
+        is_location_loaded = self.set_location(self.view.settings.value("longitude", None, type=float),
+                                               self.view.settings.value("latitude", None, type=float),
+                                               self.view.settings.value("altitude", None, type=float))
 
         # Eclipse date
 
-        self.set_eclipse_date(self.view.settings.value("eclipse_date", None, type=str), date_format)
+        is_eclipse_date_loaded = self.set_eclipse_date(self.view.settings.value("eclipse_date", None, type=str),
+                                                       date_format)
 
         # Reference moments
 
-        try:
-            self.set_reference_moments()
-        except AttributeError:
-            pass
+        if is_location_loaded and is_eclipse_date_loaded:
+            try:
+                self.set_reference_moments()
+            except AttributeError:
+                pass
 
     def set_datetime_format(self, date_format: str, time_format: str):
         """ Set the date and time format in the view. """
@@ -1005,38 +1007,52 @@ class SolarEclipseController(Observer):
         self.view.date_format = date_format
         self.view.time_format = time_format
 
-    def set_location(self, longitude: float, latitude: float, altitude: float):
+    def set_location(self, longitude: float, latitude: float, altitude: float) -> bool:
         """ Set the observing location in the model and the view.
 
         Args:
-                - longitude: Longitude of the location [degrees]
-                - latitude: Latitude of the location [degrees]
-                - altitude: Altitude of the location [meters]
+            - longitude: Longitude of the location [degrees]
+            - latitude: Latitude of the location [degrees]
+            - altitude: Altitude of the location [meters]
+
+        Returns: True if the location was set, false otherwise.
         """
 
-        self.model.set_position(longitude, latitude, altitude)
+        if longitude and latitude and altitude:
+            self.model.set_position(longitude, latitude, altitude)
 
-        self.view.longitude_label.setText(str(longitude))
-        self.view.latitude_label.setText(str(latitude))
-        self.view.altitude_label.setText(str(altitude))
+            self.view.longitude_label.setText(str(longitude))
+            self.view.latitude_label.setText(str(latitude))
+            self.view.altitude_label.setText(str(altitude))
 
-    def set_eclipse_date(self, eclipse_date: str, date_format: str = None):
+            return True
+
+        return False
+
+    def set_eclipse_date(self, eclipse_date: str, date_format: str = None) -> bool:
         """ Set the eclipse date in the model and the view.
 
         Args:
             - eclipse_date: Eclipse date
             - date_format: Date format for the given eclipse date (if None, the date format is %Y-%m-%d)
+
+        Returns: True if the eclipse date was set, false otherwise.
         """
 
-        if date_format:
-            dt = datetime.datetime.strptime(eclipse_date, DATE_FORMATS[date_format])
-            date = datetime.datetime.strftime(dt, "%Y-%m-%d")
-            self.view.eclipse_date.setText(eclipse_date)
-        else:
-            date = datetime.datetime.strptime(eclipse_date, "%Y-%m-%d")
-            self.view.eclipse_date.setText(date.strftime(DATE_FORMATS[self.view.date_format]))
+        if eclipse_date:
 
-        self.model.set_eclipse_date(Time(date))
+            if date_format:
+                dt = datetime.datetime.strptime(eclipse_date, DATE_FORMATS[date_format])
+                date = datetime.datetime.strftime(dt, "%Y-%m-%d")
+                self.view.eclipse_date.setText(eclipse_date)
+            else:
+                date = datetime.datetime.strptime(eclipse_date, "%Y-%m-%d")
+                self.view.eclipse_date.setText(date.strftime(DATE_FORMATS[self.view.date_format]))
+
+            self.model.set_eclipse_date(Time(date))
+            return True
+
+        return False
 
     def set_reference_moments(self):
         """ Set the reference moments of the eclipse in the model and the view."""
@@ -1724,7 +1740,7 @@ def main():
         controller.set_location(args.longitude, args.latitude, args.altitude)
 
     if args.date:
-        controller.set_eclipse_date(args.date)
+        controller.set_eclipse_date(args.date, date_format=None)
 
     if args.longitude and args.latitude and args.altitude and args.date:
         controller.set_reference_moments()
