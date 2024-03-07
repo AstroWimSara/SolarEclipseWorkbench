@@ -1630,9 +1630,7 @@ def sync_cameras(controller: SolarEclipseController):
         - controller: Controller of the Solar Eclipse Workbench UI
     """
 
-    controller.model.update_camera_overview()
-    controller.sync_camera_time()
-    controller.check_camera_state()
+    controller.model.camera_overview.update_camera_overview()
 
 
 if __name__ == "__main__":
