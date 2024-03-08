@@ -19,7 +19,6 @@
 ### Camera
 
 - [ ] Mirror up - TEST???
-- [ ] Update script for April 8
 - [ ] Simulate an intervalometer
 - [ ] All commands from Solar Eclipse Maestro: http://xjubier.free.fr/en/site_pages/solar_eclipses/Solar_Eclipse_Maestro_Help/pgs2/btoc6.html
 
