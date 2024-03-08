@@ -7,6 +7,7 @@
 import argparse
 import datetime
 import logging
+import os.path
 import sys
 from enum import Enum
 from pathlib import Path
@@ -334,11 +335,6 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.init_ui()
 
-    def closeEvent(self, event):
-        """ Save the settings when the UI is closed. """
-
-        self.save_settings()
-
     def save_settings(self):
         """ Save the settings.
 
@@ -568,13 +564,21 @@ class SolarEclipseView(QMainWindow, Observable):
         shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(shutdown_scheduler_action)
 
-        # Settings
+        # Date & time format
 
         settings_action = QAction("Settings", self)
-        settings_action.setStatusTip("Settings")
+        settings_action.setStatusTip("Date & time format")
         settings_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
         settings_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(settings_action)
+
+        # Save settings
+
+        save_action = QAction("Save", self)
+        save_action.setStatusTip("Save configuration")
+        save_action.setIcon(QIcon(str(ICON_PATH / "save.png")))
+        save_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(save_action)
 
     def on_toolbar_button_click(self):
         """ Action triggered when a toolbar button is clicked."""
@@ -918,17 +922,20 @@ class SolarEclipseController(Observer):
             filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "",
                                                       "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
 
-            if self.model.reference_moments:
-                from solareclipseworkbench.utils import observe_solar_eclipse
-                self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
-                                                                            self.model.camera_overview, self,
-                                                                            self.sim_reference_moment,
-                                                                            self.sim_offset_minutes)
+            if self.model.reference_moments and os.path.exists(filename):
+                try:
+                    from solareclipseworkbench.utils import observe_solar_eclipse
+                    self.scheduler: BackgroundScheduler \
+                        = observe_solar_eclipse(self.model.reference_moments, filename,
+                                                self.model.camera_overview.camera_overview_dict, self,
+                                                self.sim_reference_moment, self.sim_offset_minutes)
 
-                self.jobs_model = JobsTableModel(self.scheduler, self)
-                self.view.jobs_table.setModel(self.jobs_model)
-                self.view.jobs_table.resizeColumnsToContents()
-                self.view.jobs_table.setColumnWidth(4, 250)
+                    self.jobs_model = JobsTableModel(self.scheduler, self)
+                    self.view.jobs_table.setModel(self.jobs_model)
+                    self.view.jobs_table.resizeColumnsToContents()
+                    self.view.jobs_table.setColumnWidth(4, 250)
+                except IndexError:
+                    LOGGER.warning(f"File {filename} does not contain scheduled jobs")
 
         elif text == "Stop":
             try:
@@ -942,6 +949,9 @@ class SolarEclipseController(Observer):
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
             self.settings_popup.show()
+
+        elif text == "Save":
+            self.view.save_settings()
 
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
