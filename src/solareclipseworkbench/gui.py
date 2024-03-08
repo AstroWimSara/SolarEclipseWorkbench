@@ -920,10 +920,10 @@ class SolarEclipseController(Observer):
 
             if self.model.reference_moments:
                 from solareclipseworkbench.utils import observe_solar_eclipse
-                self.scheduler: BackgroundScheduler = observe_solar_eclipse(self.model.reference_moments, filename,
-                                                                            self.model.camera_overview, self,
-                                                                            self.sim_reference_moment,
-                                                                            self.sim_offset_minutes)
+                self.scheduler: BackgroundScheduler \
+                    = observe_solar_eclipse(self.model.reference_moments, filename,
+                                            self.model.camera_overview.camera_overview_dict, self,
+                                            self.sim_reference_moment, self.sim_offset_minutes)
 
                 self.jobs_model = JobsTableModel(self.scheduler, self)
                 self.view.jobs_table.setModel(self.jobs_model)
