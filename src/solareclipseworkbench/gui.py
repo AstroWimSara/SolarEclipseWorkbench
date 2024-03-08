@@ -566,8 +566,8 @@ class SolarEclipseView(QMainWindow, Observable):
 
         # Date & time format
 
-        settings_action = QAction("Settings", self)
-        settings_action.setStatusTip("Date & time format")
+        settings_action = QAction("Datetime format", self)
+        settings_action.setStatusTip("Datetime format")
         settings_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
         settings_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(settings_action)
@@ -946,7 +946,7 @@ class SolarEclipseController(Observer):
                 # Scheduler not running
                 pass
 
-        elif text == "Settings":
+        elif text == "Datetime format":
             self.settings_popup = SettingsPopup(self)
             self.settings_popup.show()
 
@@ -1314,7 +1314,7 @@ class SettingsPopup(QWidget, Observable):
         """
 
         QWidget.__init__(self)
-        self.setWindowTitle("Settings")
+        self.setWindowTitle("Datetime format")
         self.setGeometry(QRect(100, 100, 300, 75))
         self.add_observer(observer)
 
