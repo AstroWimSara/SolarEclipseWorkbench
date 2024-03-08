@@ -7,6 +7,7 @@
 import argparse
 import datetime
 import logging
+import os.path
 import sys
 from enum import Enum
 from pathlib import Path
@@ -921,17 +922,20 @@ class SolarEclipseController(Observer):
             filename, _ = QFileDialog.getOpenFileName(None, "QFileDialog.getOpenFileName()", "",
                                                       "All Files (*);;Python Files (*.py);;Text Files (*.txt)")
 
-            if self.model.reference_moments:
-                from solareclipseworkbench.utils import observe_solar_eclipse
-                self.scheduler: BackgroundScheduler \
-                    = observe_solar_eclipse(self.model.reference_moments, filename,
-                                            self.model.camera_overview.camera_overview_dict, self,
-                                            self.sim_reference_moment, self.sim_offset_minutes)
+            if self.model.reference_moments and os.path.exists(filename):
+                try:
+                    from solareclipseworkbench.utils import observe_solar_eclipse
+                    self.scheduler: BackgroundScheduler \
+                        = observe_solar_eclipse(self.model.reference_moments, filename,
+                                                self.model.camera_overview.camera_overview_dict, self,
+                                                self.sim_reference_moment, self.sim_offset_minutes)
 
-                self.jobs_model = JobsTableModel(self.scheduler, self)
-                self.view.jobs_table.setModel(self.jobs_model)
-                self.view.jobs_table.resizeColumnsToContents()
-                self.view.jobs_table.setColumnWidth(4, 250)
+                    self.jobs_model = JobsTableModel(self.scheduler, self)
+                    self.view.jobs_table.setModel(self.jobs_model)
+                    self.view.jobs_table.resizeColumnsToContents()
+                    self.view.jobs_table.setColumnWidth(4, 250)
+                except IndexError:
+                    LOGGER.warning(f"File {filename} does not contain scheduled jobs")
 
         elif text == "Stop":
             try:
