@@ -334,11 +334,6 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.init_ui()
 
-    def closeEvent(self, event):
-        """ Save the settings when the UI is closed. """
-
-        self.save_settings()
-
     def save_settings(self):
         """ Save the settings.
 
@@ -568,13 +563,21 @@ class SolarEclipseView(QMainWindow, Observable):
         shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(shutdown_scheduler_action)
 
-        # Settings
+        # Date & time format
 
         settings_action = QAction("Settings", self)
-        settings_action.setStatusTip("Settings")
+        settings_action.setStatusTip("Date & time format")
         settings_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
         settings_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(settings_action)
+
+        # Save settings
+
+        save_action = QAction("Save", self)
+        save_action.setStatusTip("Save configuration")
+        save_action.setIcon(QIcon(str(ICON_PATH / "save.png")))
+        save_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(save_action)
 
     def on_toolbar_button_click(self):
         """ Action triggered when a toolbar button is clicked."""
@@ -942,6 +945,9 @@ class SolarEclipseController(Observer):
         elif text == "Settings":
             self.settings_popup = SettingsPopup(self)
             self.settings_popup.show()
+
+        elif text == "Save":
+            self.view.save_settings()
 
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
