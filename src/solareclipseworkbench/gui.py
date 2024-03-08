@@ -1506,7 +1506,8 @@ class CameraOverviewTableModel(QAbstractTableModel):
 
         self.beginResetModel()
 
-        self.camera_overview_dict = get_camera_dict()
+        if self.camera_overview_dict is None:
+            self.camera_overview_dict = get_camera_dict()
 
         data = []
 
