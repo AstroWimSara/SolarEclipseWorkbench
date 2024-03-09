@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
+import astronomy
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -15,6 +16,29 @@ COMMANDS = {
     'take_bracket': take_bracket,
     'sync_cameras': sync_cameras
 }
+
+
+def calculate_next_solar_eclipses(count: int) -> list:
+    """ Calculate the next solar eclipses, starting from today.
+
+    Args:
+        - count: Number of solar eclipses to calculate
+
+    Returns:
+        - List of solar eclipses, starting from today, as an array in the DD/MM/YYYY format
+    """
+    now = astronomy.Time.Now().AddDays(-3)
+
+    eclipse = astronomy.SearchGlobalSolarEclipse(now)
+    dates = [f"{eclipse.peak.Calendar()[2]:02}/{eclipse.peak.Calendar()[1]:02}/{eclipse.peak.Calendar()[0]}"]
+
+    previous_eclipse = eclipse.peak
+    for i in range(count - 1):
+        eclipse = astronomy.NextGlobalSolarEclipse(previous_eclipse)
+        dates.append(f"{eclipse.peak.Calendar()[2]:02}/{eclipse.peak.Calendar()[1]:02}/{eclipse.peak.Calendar()[0]}")
+        previous_eclipse = eclipse.peak
+
+    return dates
 
 
 def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: dict,

@@ -6,13 +6,24 @@
 
 [//]: # (- [Solar Eclipse Workbench]&#40;#solar-eclipse-workbench&#41;)
 [//]: # (  - [Table of contents]&#40;#table-of-contents&#41;)
+- [Solar Eclipse Workbench](#solar-eclipse-workbench)
+  - [Table of contents](#table-of-contents)
   - [Installation instructions](#installation-instructions)
     - [Installation on macOS](#installation-on-macos)
     - [Installation on Ubuntu 22.04](#installation-on-ubuntu-2204)
     - [Installation on Windows 11](#installation-on-windows-11)
   - [Running Solar Eclipse Workbench](#running-solar-eclipse-workbench)
-    - [UI functionality](#ui-functionality)
     - [Command line parameters](#command-line-parameters)
+    - [UI functionality](#ui-functionality)
+      - [Observing location](#observing-location)
+      - [Eclipse date](#eclipse-date)
+      - [Reference moments](#reference-moments)
+      - [Camera overview](#camera-overview)
+      - [Simulation mode](#simulation-mode)
+      - [Job scheduling](#job-scheduling)
+      - [Interrupting scheduled jobs](#interrupting-scheduled-jobs)
+      - [Datetime format](#datetime-format)
+      - [Saving settings](#saving-settings)
   - [Script file format](#script-file-format)
     - [General remarks](#general-remarks)
     - [Commands](#commands)
@@ -90,7 +101,7 @@ pip install pygobject
 - GPhoto2 is only available for Linux and macOS.  To run Solar Eclipse Workbench, wsl should be used.  
 - Open a terminal in Windows
 - Install wsl by executing the command
-- 
+
 ```bash
 wsl --install
 ```

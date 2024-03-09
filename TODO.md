@@ -7,7 +7,7 @@
   
 ### GUI
 
-- [ ] Calculate list of solar eclipse (don't use a fixed list)
+- [ ] Close camera objects when closing gui
 - [ ] Log all actions
 
 ### Scripts
