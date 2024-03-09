@@ -147,12 +147,12 @@ poetry shell
 
 ```bash
 # On macos, start the commands with sudo
-sudo python src/solareclipseworkbench/gui.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3 -s config/scripts/voice_prompts.txt -r c1 -m 2
-sudo python src/solareclipseworkbench/gui.py -g
+sudo python src/solareclipseworkbench/gui.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
+sudo python src/solareclipseworkbench/gui.py
 
 # In Linux or using WSL on Windows, start the command without sudo
-python src/solareclipseworkbench/gui.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3 -s config/scripts/testEOS80D.txt -r c1 -m 2
-python src/solareclipseworkbench/gui.py -g
+python src/solareclipseworkbench/gui.py -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
+python src/solareclipseworkbench/gui.py
 ```
 
 - There is a problem with `gphoto2`.  On macOS, Solar Eclipse Workbench needs to be started with sudo rights to be able to connect to the cameras.  In Linux (or Windows using wsl), sudo should not be used.
@@ -160,18 +160,15 @@ python src/solareclipseworkbench/gui.py -g
 
 ### Command line parameters
 
-The following command line parameters can be used to start up sew.py.
+The following command line parameters can be used to start up gui.py.
 
 | Short parameter | Long parameter        | Description                                                                |
 |-----------------|-----------------------|----------------------------------------------------------------------------|
 | -h              | --help                | Show the help message and exit                                             |
-| -g              | --gui                 | Start the Solar Eclipse Workbench GUI                                      |
 | -d DATE         | --date DATE           | Date of the solar eclipse (in YYYY-MM-DD format)                           |
 | -lon LONGITUDE  | --longitude LONGITUDE | Longitude of the location where to watch the solar eclipse (W is negative) |
 | -lat LATITUDE   | --latitude LATITUDE   | Latitude of the location where to watch the solar eclipse (N is positive)  |
 | -alt ALTITUDE   | --altitude ALTITUDE   | Altitude of the location where to watch the solar eclipse (in meters)      |
-| -s SCRIPT       | --script SCRIPT       | Script to execute (with voice prompts and camera commands)                 |
-| -c1 C1          | --c1 C1               | Minutes to C1 when simulating.                                             |
 
 ### UI functionality
 In the images below, a screenshot of the toolbar and the upper part of the UI are shown. 
@@ -197,7 +194,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
 
 #### Eclipse date
 
-- When pressing the "Date" icon, a pop-up window (see screenshot below) will appear, in which you can choose the date of the eclipse from a drop-down menu.  Currently, all solar eclipses up to the year 2045 have been included.
+- When pressing the "Date" icon, a pop-up window (see screenshot below) will appear, in which you can choose the date of the eclipse from a drop-down menu.  At any moment in time, the next 20 solar eclipses are included in the list.
 - When pressing the "OK" button, the selected eclipse date is accepted and will be filled out in the top section of the UI.
 
 ![eclipse date pop-up](img/eclipse-date-popup.png)
@@ -216,7 +213,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - The information that is shown for each of these reference moments is:
     - Time in the local timezone
     - Time in UTC;
-    - Coutdown;
+    - Countdown;
     - Altitude (in degrees);
     - Azimuth (in degrees).
 - This information can only be populated when the location and the eclipse date have been indicated.  Note that the reference moments are not automatically updated in case either of them would be modified.
