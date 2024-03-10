@@ -37,14 +37,6 @@ from solareclipseworkbench.reference_moments import calculate_reference_moments,
 
 ICON_PATH = Path(__file__).parent.resolve() / ".." / ".." / "img"
 
-ECLIPSE_DATES = ["08/04/2024", "02/10/2024", "29/03/2025", "21/09/2025", "17/02/2026", "12/08/2026", "06/02/2027",
-                 "02/08/2027", "26/01/2028", "22/07/2028", "14/01/2029", "12/06/2029", "11/07/2029", "05/12/2029",
-                 "01/06/2030", "25/11/2030", "21/05/2031", "14/11/2031", "09/05/2032", "03/11/2033", "30/03/2033",
-                 "23/09/2033", "20/03/2034", "12/09/2034", "09/03/2035", "02/09/2035", "27/02/2036", "23/07/2036",
-                 "21/08/2036", "16/01/2037", "13/07/2037", "05/01/2038", "02/07/2038", "26/12/2038", "21/06/2039",
-                 "15/12/2039", "11/05/2040", "04/11/2040", "30/04/2041", "25/10/2041", "20/04/2042", "14/10/2042",
-                 "09/04/2043", "03/10/2043", "28/02/2044", "23/08/2044", "16/02/2045", "12/08/2045"]
-
 TIME_FORMATS = {
     "24 hours": "%H:%M:%S",
     "12 hours": "%I:%M:%S"}
@@ -1200,7 +1192,8 @@ class EclipsePopup(QWidget, Observable):
 
         formatted_eclipse_dates = []
 
-        for eclipse_date in ECLIPSE_DATES:
+        from solareclipseworkbench.utils import calculate_next_solar_eclipses
+        for eclipse_date in calculate_next_solar_eclipses(20):
             formatted_eclipse_date = datetime.datetime.strptime(eclipse_date, "%d/%m/%Y").strftime(date_format)
             formatted_eclipse_dates.append(formatted_eclipse_date)
 
@@ -1450,8 +1443,8 @@ def format_time(time: datetime.datetime, time_format: str) -> str:
 class CameraOverviewTableColumnNames(Enum):
     """ Enumeration of the column names for the table with the camera overview table. """
 
-    CAMERA = "Camera"
-    BATTERY_LEVEL = "Battery level"
+    CAMERA = "Camera name"
+    BATTERY_LEVEL = "Battery level [%]"
     FREE_MEMORY_GB = "Free memory [GB]"
     FREE_MEMORY_PERCENTAGE = "Free memory [%]"
 
