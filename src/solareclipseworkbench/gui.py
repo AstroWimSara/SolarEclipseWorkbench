@@ -9,6 +9,7 @@ import datetime
 import logging
 import os.path
 import sys
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Union
@@ -1694,6 +1695,9 @@ class JobsTableModel(QAbstractTableModel):
 
 
 def main():
+    time_string = time.strftime("%Y%m%d-%H%M%S")
+    logging.basicConfig(filename=f'{time_string}.log', level=logging.DEBUG, format='%(asctime)s %(message)s')
+    LOGGER.info("Starting up Solar Eclipse Workbench")
 
     parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")
     parser.add_argument(
