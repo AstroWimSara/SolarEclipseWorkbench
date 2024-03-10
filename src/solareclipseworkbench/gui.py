@@ -265,6 +265,15 @@ class SolarEclipseView(QMainWindow, Observable):
         self.time_format = list(TIME_FORMATS.keys())[0]
 
         self.toolbar = None
+        self.location_action = QAction("Location", self)
+        self.date_action = QAction("Date", self)
+        self.reference_moments_action = QAction("Reference moments", self)
+        self.camera_action = QAction("Camera(s)", self)
+        self.simulator_action = QAction("Simulator", self)
+        self.file_action = QAction("File", self)
+        self.shutdown_scheduler_action = QAction("Stop", self)
+        self.datetime_format_action = QAction("Datetime format", self)
+        self.save_action = QAction("Save", self)
 
         self.place_time_frame = QFrame()
 
@@ -503,74 +512,65 @@ class SolarEclipseView(QMainWindow, Observable):
 
         # Location
 
-        location_action = QAction("Location", self)
-        location_action.setStatusTip("Location")
-        location_action.setIcon(QIcon(str(ICON_PATH / "location.png")))
-        location_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(location_action)
+        self.location_action.setStatusTip("Location")
+        self.location_action.setIcon(QIcon(str(ICON_PATH / "location.png")))
+        self.location_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.location_action)
 
         # Date
 
-        date_action = QAction("Date", self)
-        date_action.setStatusTip("Date")
-        date_action.setIcon(QIcon(str(ICON_PATH / "calendar.png")))
-        date_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(date_action)
+        self.date_action.setStatusTip("Date")
+        self.date_action.setIcon(QIcon(str(ICON_PATH / "calendar.png")))
+        self.date_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.date_action)
 
         # Reference moments
 
-        reference_moments_action = QAction("Reference moments", self)
-        reference_moments_action.setStatusTip("Reference moments")
-        reference_moments_action.setIcon(QIcon(str(ICON_PATH / "clock.png")))
-        reference_moments_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(reference_moments_action)
+        self.reference_moments_action.setStatusTip("Reference moments")
+        self.reference_moments_action.setIcon(QIcon(str(ICON_PATH / "clock.png")))
+        self.reference_moments_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.reference_moments_action)
 
         # Camera(s)
 
-        camera_action = QAction("Camera(s)", self)
-        camera_action.setStatusTip("Camera(s)")
-        camera_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
-        camera_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(camera_action)
+        self.camera_action.setStatusTip("Camera(s)")
+        self.camera_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
+        self.camera_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.camera_action)
 
         if self.is_simulator:
-            simulator_action = QAction("Simulator", self)
-            simulator_action.setStatusTip("Configure simulator")
-            simulator_action.setIcon(QIcon(str(ICON_PATH / "simulator.png")))
-            simulator_action.triggered.connect(self.on_toolbar_button_click)
-            self.toolbar.addAction(simulator_action)
+            self.simulator_action.setStatusTip("Configure simulator")
+            self.simulator_action.setIcon(QIcon(str(ICON_PATH / "simulator.png")))
+            self.simulator_action.triggered.connect(self.on_toolbar_button_click)
+            self.toolbar.addAction(self.simulator_action)
 
         # Configuration file
 
-        file_action = QAction("File", self)
-        file_action.setStatusTip("File")
-        file_action.setIcon(QIcon(str(ICON_PATH / "folder.png")))
-        file_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(file_action)
+        self.file_action.setStatusTip("File")
+        self.file_action.setIcon(QIcon(str(ICON_PATH / "folder.png")))
+        self.file_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.file_action)
 
         # Shutdown scheduler
 
-        shutdown_scheduler_action = QAction("Stop", self)
-        shutdown_scheduler_action.setStatusTip("Shut down scheduler")
-        shutdown_scheduler_action.setIcon(QIcon(str(ICON_PATH / "stop.png")))
-        shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(shutdown_scheduler_action)
+        self.shutdown_scheduler_action.setStatusTip("Shut down scheduler")
+        self.shutdown_scheduler_action.setIcon(QIcon(str(ICON_PATH / "stop.png")))
+        self.shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.shutdown_scheduler_action)
 
         # Date & time format
 
-        settings_action = QAction("Datetime format", self)
-        settings_action.setStatusTip("Datetime format")
-        settings_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
-        settings_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(settings_action)
+        self.datetime_format_action.setStatusTip("Datetime format")
+        self.datetime_format_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
+        self.datetime_format_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.datetime_format_action)
 
         # Save settings
 
-        save_action = QAction("Save", self)
-        save_action.setStatusTip("Save configuration")
-        save_action.setIcon(QIcon(str(ICON_PATH / "save.png")))
-        save_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(save_action)
+        self.save_action.setStatusTip("Save configuration")
+        self.save_action.setIcon(QIcon(str(ICON_PATH / "save.png")))
+        self.save_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.save_action)
 
     def on_toolbar_button_click(self):
         """ Action triggered when a toolbar button is clicked."""
@@ -926,6 +926,9 @@ class SolarEclipseController(Observer):
                     self.view.jobs_table.setModel(self.jobs_model)
                     self.view.jobs_table.resizeColumnsToContents()
                     self.view.jobs_table.setColumnWidth(4, 250)
+
+                    self.view.camera_action.setDisabled(True)
+
                 except IndexError:
                     LOGGER.warning(f"File {filename} does not contain scheduled jobs")
 
@@ -934,6 +937,8 @@ class SolarEclipseController(Observer):
                 if self.scheduler:
                     self.scheduler.shutdown()
                     self.jobs_model.clear_jobs_overview()
+
+                    self.view.camera_action.setEnabled(True)
             except SchedulerNotRunningError:
                 # Scheduler not running
                 pass
@@ -1327,7 +1332,7 @@ class SettingsPopup(QWidget, Observable):
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.accept_settings)
         cancel_button = QPushButton("Cancel")
-        ok_button.clicked.connect(self.cancel_settings)
+        cancel_button.clicked.connect(self.cancel_settings)
         layout.addWidget(ok_button, 2, 0)
         layout.addWidget(cancel_button, 2, 1)
 
@@ -1601,7 +1606,7 @@ class JobsTableModel(QAbstractTableModel):
                     job_string = f"sync_cameras()"
 
                 elif job.func.__name__ == "voice_prompt":
-                    job_string = f"{job.func.__name__}({', '.join(job.args)})"
+                    job_string = f"{job.func.__name__}({', '.join(job.args).strip()})"
 
                 self.execution_times_utc_as_datetime.append(execution_time_utc)
                 formatted_execution_time_utc = format_time(execution_time_utc, self.time_format)
