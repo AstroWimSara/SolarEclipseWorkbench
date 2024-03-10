@@ -1327,7 +1327,7 @@ class SettingsPopup(QWidget, Observable):
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.accept_settings)
         cancel_button = QPushButton("Cancel")
-        ok_button.clicked.connect(self.cancel_settings)
+        cancel_button.clicked.connect(self.cancel_settings)
         layout.addWidget(ok_button, 2, 0)
         layout.addWidget(cancel_button, 2, 1)
 
