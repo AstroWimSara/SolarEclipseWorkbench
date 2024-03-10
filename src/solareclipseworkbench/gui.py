@@ -1606,7 +1606,7 @@ class JobsTableModel(QAbstractTableModel):
                     job_string = f"sync_cameras()"
 
                 elif job.func.__name__ == "voice_prompt":
-                    job_string = f"{job.func.__name__}({', '.join(job.args)})"
+                    job_string = f"{job.func.__name__}({', '.join(job.args).strip()})"
 
                 self.execution_times_utc_as_datetime.append(execution_time_utc)
                 formatted_execution_time_utc = format_time(execution_time_utc, self.time_format)
