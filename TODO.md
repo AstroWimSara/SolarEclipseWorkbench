@@ -8,7 +8,9 @@
 ### GUI
 
 - [ ] Close camera objects when closing gui
-- [ ] Log all actions
+- [ ] Update scheduler view to always see next tasks
+- [ ] Installation instructions
+  - [ ] Add PYTHONPATH
 
 ### Scripts
 

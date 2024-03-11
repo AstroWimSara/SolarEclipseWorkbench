@@ -72,7 +72,7 @@ pip3 install PyObjC
 
 ```bash
 sudo apt install curl git
-curl -sSL https://install.python-poetry.org | sed 's/symlinks=False/symlinks=True/' | python3 -
+/usr/bin/curl -sSL https://install.python-poetry.org | sed 's/symlinks=False/symlinks=True/' | /usr/bin/python3 -
 ```
 
 - Check out the source code:
@@ -85,8 +85,8 @@ cd SolarEclipseWorkbench
 - Install the python environment by executing the following command in the Solar Eclipse Workbench directory
 
 ```bash
-poetry install
-poetry shell
+~/.local/bin/poetry install
+~/.local/bin/poetry shell
 ```
 
 - Eventually, to make the sound notifications a bit faster, install pygobject:
@@ -151,7 +151,7 @@ pip install pygobject
 - Before starting Solar Eclipse Workbench, make sure to enable the correct python environment by executing the following command in the installation directory: 
   
 ```bash
-poetry shell
+~/.local/bin/poetry shell
 ```
 
 - The main script to start is `gui.py`.  You can add a parameters to set the needed parameters for the eclipse.  Some examples:
