@@ -7,9 +7,6 @@
   
 ### GUI
 
-- [ ] Close camera objects when closing gui
-- [ ] Log all actions
-
 ### Scripts
 
 - [ ] Add TAKEBST to conversion script
@@ -19,7 +16,6 @@
 ### Camera
 
 - [ ] Mirror up - TEST???
-- [ ] Simulate an intervalometer
 - [ ] All commands from Solar Eclipse Maestro: http://xjubier.free.fr/en/site_pages/solar_eclipses/Solar_Eclipse_Maestro_Help/pgs2/btoc6.html
 
 ### Notifications 

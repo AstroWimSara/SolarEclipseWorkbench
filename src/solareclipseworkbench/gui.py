@@ -739,10 +739,10 @@ class SolarEclipseView(QMainWindow, Observable):
         """ Disconnect cameras when the UI is closed.
 
         Args:
-            - eve
+            - close_event: Event that occurs when the UI window is closed
         """
 
-        self.notify_observers(event)
+        self.notify_observers(close_event)
 
 
 class SolarEclipseController(Observer):
