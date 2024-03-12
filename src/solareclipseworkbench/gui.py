@@ -18,7 +18,7 @@ import geopandas
 import pandas as pd
 import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QSettings
-from PyQt6.QtGui import QIcon, QAction, QDoubleValidator, QIntValidator
+from PyQt6.QtGui import QIcon, QAction, QDoubleValidator, QIntValidator, QCloseEvent
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
     QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QTableView
 from apscheduler.job import Job
@@ -26,7 +26,7 @@ from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
 from geodatasets import get_path
-from gphoto2 import GPhoto2Error
+from gphoto2 import GPhoto2Error, Camera
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from timezonefinder import TimezoneFinder
@@ -736,6 +736,15 @@ class SolarEclipseView(QMainWindow, Observable):
         self.sunset_time_utc_label.setText(format_time(sunset_info.time_utc, self.time_format))
         self.sunset_time_local_label.setText(format_time(sunset_info.time_local, self.time_format))
 
+    def closeEvent(self, close_event: QCloseEvent):
+        """ Disconnect cameras when the UI is closed.
+
+        Args:
+            - close_event: Event that occurs when the UI window is closed
+        """
+
+        self.notify_observers(close_event)
+
 
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -815,7 +824,9 @@ class SolarEclipseController(Observer):
 
             - Change in location at which the solar eclipse will be observed;
             - Change in date at which the solar eclipse will be observed;
+            - Change in simulation starting time (only when the UI was started in simulation mode);
             - Change in date and/or time format;
+            - Closure of the UI window;
             - One of the buttons in the toolbar of the view is clicked.
 
         Args:
@@ -884,6 +895,17 @@ class SolarEclipseController(Observer):
             if self.model.sunset_info:
                 self.view.sunset_time_utc_label.setText(format_time(self.model.sunset_info.time_utc, time_format))
                 self.view.sunset_time_local_label.setText(format_time(self.model.sunset_info.time_local, time_format))
+
+            return
+
+        elif isinstance(changed_object, QCloseEvent):
+
+            if self.model.camera_overview.camera_overview_dict:
+                cameras = self.model.camera_overview.camera_overview_dict.values()
+
+                camera: Camera
+                for camera in cameras:
+                    camera.exit()
 
             return
 
