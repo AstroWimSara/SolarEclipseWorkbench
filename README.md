@@ -290,6 +290,7 @@ Test your script before using it during a total solar eclipse!  Some cameras can
 
 The following cameras are tested:
 
+- Canon EOS 1000D: 1 picture every two seconds
 - Canon EOS 80D: 1 picture every two seconds
 - Canon EOS R: 1 picture every two seconds
 - Nikon DSC D3400: 1 picture every three seconds

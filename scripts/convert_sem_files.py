@@ -2,21 +2,21 @@ import argparse
 from datetime import datetime, timedelta
 
 
-def main(input: str, output: str) -> None:
+def main(input_location: str, output: str) -> None:
     """
     Converts the input file from Solar Eclipse Maestro to a file that is readable by Solar Eclipse Workbench.
     
     Args:
-        - input (str): Path of the Solar Eclipse Maestro input file
+        - input_file (str): Path of the Solar Eclipse Maestro input file
         - output (str): Path of the output file
 
     Returns: None
     """    
-    inputfile = open(input, 'r')
-    outputfile = open(output, 'w')
+    input_file = open(input_location, 'r')
+    output_file = open(output, 'w')
 
     while True:
-        line = inputfile.readline()
+        line = input_file.readline()
         if not line:
             break
         # Drop empty lines and comments (starting with #)
@@ -24,7 +24,7 @@ def main(input: str, output: str) -> None:
             # FOR loops in the Solar Eclipse Maestro scripts
             if line.startswith('FOR'):
                 _, _, direction, interval, number_of_steps = line.split(",")
-                line = inputfile.readline()
+                line = input_file.readline()
                 while not line.startswith('ENDFOR'):
                     if direction == "0":
                         # If direction is 0, count from high to low.
@@ -42,7 +42,7 @@ def main(input: str, output: str) -> None:
                     iteration = 1
                     for i in range(start, stop, step):
                         command = line.split(",")
-                        if (command[0] == "TAKEPIC"):
+                        if command[0] == "TAKEPIC":
                             command = "take_picture"
                             _, ref_moment, before_after, delta, camera_name, exposure, aperture, iso, _, _, _, _, comment = line.split(",")
                             # Some of the time deltas in the Solar Eclipse Maestro scripts are MM:SS.s, some HH:MM:SS.s
@@ -59,7 +59,7 @@ def main(input: str, output: str) -> None:
                                 hours=delta_datetime.hour, minutes=delta_datetime.minute, seconds=delta_datetime.second
                                 ).total_seconds() * sign
                             # Calculate the total time delta
-                            time_delta = delta + delta_sign * (((i - 1) * float(interval)))
+                            time_delta = delta + delta_sign * ((i - 1) * float(interval))
                             if time_delta < 0:
                                 sign = "-"
                             else:
@@ -71,10 +71,10 @@ def main(input: str, output: str) -> None:
                             else:
                                 time_delta = str(timedelta(seconds=abs(time_delta))) + ".0"
                             # Write the take_picture command to the output file.
-                            outputfile.write(f"{command}, {ref_moment}, {sign}, {time_delta}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()} (Iter. {iteration})\"\n")
+                            output_file.write(f"{command}, {ref_moment}, {sign}, {time_delta}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()} (Iter. {iteration})\"\n")
                         iteration = iteration + 1
 
-                    line = inputfile.readline()
+                    line = input_file.readline()
 
             command = line.split(",")
             if command[0] == "PLAY":
@@ -92,23 +92,34 @@ def main(input: str, output: str) -> None:
                     sound_file = ref_moment + "_IN_" + sound_file
                 # Write the voice_prompt command to the output file.
                 comment = comment.strip('\n')
-                outputfile.write(f"voice_prompt, {ref_moment}, {before_after}, {delta_datetime}, {sound_file}, \"{comment}\"\n")
+                output_file.write(f"voice_prompt, {ref_moment}, {before_after}, {delta_datetime}, {sound_file}, \"{comment}\"\n")
             elif command[0] == "TAKEPIC":
                 _, ref_moment, before_after, delta, camera_name, exposure, aperture, iso, _, _, _, _, comment = line.split(",")
                 delta_datetime = _get_delta_datetime(delta)
                 # Write the take_picture command to the output file.
-                outputfile.write(f"take_picture, {ref_moment}, {before_after}, {delta_datetime}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()}\"\n")
-    outputfile.close()
+                output_file.write(f"take_picture, {ref_moment}, {before_after}, {delta_datetime}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()}\"\n")
+            elif command[0] == "TAKEBST":
+                _, ref_moment, before_after, delta, camera_name, exposure, aperture, iso, number_of_pictures, _, _, _, comment = line.split(",")
+                delta_datetime = _get_delta_datetime(delta)
+                # Write the take_picture command to the output file.
+                output_file.write(f"take_burst, {ref_moment}, {before_after}, {delta_datetime}, {camera_name}, {exposure}, {aperture}, {iso}, {number_of_pictures}, \"{comment.strip()}\"\n")
+            elif command[0] == "TAKEBKT":
+                _, ref_moment, before_after, delta, camera_name, exposure, aperture, iso, _, _, _, _, comment = line.split(",")
+                delta_datetime = _get_delta_datetime(delta)
+                # Write the take_picture command to the output file.
+                output_file.write(f"take_bracket, {ref_moment}, {before_after}, {delta_datetime}, {camera_name}, {exposure}, {aperture}, {iso}, \"{comment.strip()}\"\n")
+
+    output_file.close()
 
 
+def _get_delta_datetime(delta: str) -> str:
     """ Calculate the time delta (with an accuracy of 1/10 of a seconds).
 
-    Args:
-        - delta (str): Time delta in the Solar Eclipse Maestro format (MM:SS.s or HH:MM:SS.s)
+        Args:
+            - delta (str): Time delta in the Solar Eclipse Maestro format (MM:SS.s or HH:MM:SS.s)
 
-    Returns: String with the time delta in HH:MM:SS.s format
+        Returns: String with the time delta in HH:MM:SS.s format
     """
-def _get_delta_datetime(delta: str) -> str:
     if delta.count(":") == 1:
         delta_datetime = datetime.strptime(delta, "%M:%S.%f")
     else:

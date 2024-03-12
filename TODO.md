@@ -9,10 +9,6 @@
 
 ### Scripts
 
-- [ ] Add TAKEBST to conversion script
-- [ ] Add TAKEBKT to conversion script
-- [ ] Add Do-while loops
-
 ### Camera
 
 - [ ] Mirror up - TEST???
