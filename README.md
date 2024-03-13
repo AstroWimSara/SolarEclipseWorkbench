@@ -48,7 +48,7 @@ curl -sSL https://install.python-poetry.org | sed 's/symlinks=False/symlinks=Tru
 
 ```bash
 export PATH=<location_of_homebrew_installation>/bin:$PATH
-brew install gphoto2
+brew install gphoto2 pkg-config
 ```
 
 - Check out the source code:
