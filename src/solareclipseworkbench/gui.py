@@ -333,7 +333,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.camera_overview = QTableView()
 
-        self.jobs_table = QTableView()
+        self.jobs_table = QJobsTableView()
 
         self.init_ui()
 
@@ -947,8 +947,8 @@ class SolarEclipseController(Observer):
 
                     self.jobs_model = JobsTableModel(self.scheduler, self)
                     self.view.jobs_table.setModel(self.jobs_model)
+                    self.jobs_model.add_observer(self.view.jobs_table)
                     self.view.jobs_table.resizeColumnsToContents()
-                    self.view.jobs_table.setColumnWidth(4, 250)
 
                     self.view.camera_action.setDisabled(True)
 
@@ -1559,7 +1559,7 @@ class JobsTableColumnNames(Enum):
     DESCRIPTION = "Description"
 
 
-class JobsTableModel(QAbstractTableModel):
+class JobsTableModel(QAbstractTableModel, Observable):
     def __init__(self, scheduler: BackgroundScheduler, controller: SolarEclipseController):
         """ Initialisation of the model for the table with the scheduled jobs.
 
@@ -1657,7 +1657,9 @@ class JobsTableModel(QAbstractTableModel):
             for row in range(len(self.execution_times_local_as_datetime)):
 
                 new_countdown = self.execution_times_utc_as_datetime[row] - now_utc
-                if new_countdown.total_seconds() > 0:
+                if new_countdown.total_seconds() >= 0:
+                    if int(new_countdown.total_seconds()) == 0:
+                        self.notify_observers(row)
                     new_countdown = format_countdown(new_countdown)
                 else:
                     new_countdown = "-"
@@ -1714,6 +1716,25 @@ class JobsTableModel(QAbstractTableModel):
                 return Qt.AlignmentFlag.AlignHCenter
             else:
                 return Qt.AlignmentFlag.AlignLeft
+
+
+class QJobsTableView(QTableView):
+
+    def __init__(self):
+        super().__init__()
+
+    def update(self, row: int):
+        """ Scroll to the jobs that are up next.
+
+        Args:
+            - row: Row index of the first job that will be executed next.
+        """
+
+        index: QModelIndex = self.model().index(min(row + 5, self.model().rowCount(None) - 1), 0)
+        self.setCurrentIndex(index)
+
+    def do(self, actions):
+        pass
 
 
 def main():
