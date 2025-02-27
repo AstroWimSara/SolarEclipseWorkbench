@@ -5,7 +5,7 @@ import astronomy
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, sync_cameras
+from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, sync_cameras, scripts
 from solareclipseworkbench.camera import CameraSettings
 from solareclipseworkbench.gui import SolarEclipseController
 
@@ -105,11 +105,13 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
 
     Returns: Scheduler that is used to schedule the commands.
     """
+    script_file = scripts.convert_script(filename, reference_moments)
+    script_file.seek(0)
 
-    with open(filename, "r") as file:
-        for cmd_str in file:
-            schedule_command(
-                scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start)
+    # Loop over all lines in script file
+    for cmd_str in script_file:
+        schedule_command(
+            scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start)
 
 
 def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
