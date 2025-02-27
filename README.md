@@ -253,7 +253,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
   - sunrise;
   - sunset.
 - The information that is shown for each of these reference moments is:
-  - Time in the local timezone
+  - Time in the local timezone;
   - Time in UTC;
   - Countdown;
   - Altitude (in degrees);
