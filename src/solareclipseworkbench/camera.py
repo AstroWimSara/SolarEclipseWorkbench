@@ -59,15 +59,18 @@ def __adapt_camera_settings(camera, camera_settings):
     time.sleep(0.1)
 
     # Set aperture
-    if "Canon" in camera_settings.camera_name:
-        gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture')),
-                               str(camera_settings.aperture))
-    elif "Nikon" in camera_settings.camera_name:
-        gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number')),
-                               str(camera_settings.aperture))
-    # set config
-    gp.gp_camera_set_config(camera, config, context)
-    time.sleep(0.1)
+    try:
+        if "Canon" in camera_settings.camera_name:
+            gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture')),
+                                   str(camera_settings.aperture))
+        elif "Nikon" in camera_settings.camera_name:
+            gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number')),
+                                   str(camera_settings.aperture))
+        # set config
+        gp.gp_camera_set_config(camera, config, context)
+        time.sleep(0.1)
+    except gphoto2.GPhoto2Error:
+        pass
 
     # Set shutter speed
     gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed')),
@@ -435,9 +438,9 @@ def get_camera_overview() -> dict:
     camera_overview = {}
 
     camera_names = get_cameras()
-
     for camera_name in camera_names:
         camera = get_camera(camera_name[0])
+
         try:
             battery_level = get_battery_level(camera)
             free_space = get_free_space(camera)
