@@ -33,7 +33,6 @@
   - [Image attributions](#image-attributions)
     - [GUI icons](#gui-icons)
 
-
 ## Installation instructions
 
 ### Installation on macOS
@@ -98,7 +97,7 @@ pip install pygobject
 
 ### Installation on Windows 11
 
-- GPhoto2 is only available for Linux and macOS.  To run Solar Eclipse Workbench, wsl should be used.  
+- GPhoto2 is only available for Linux and macOS.  To run Solar Eclipse Workbench, wsl should be used.
 - Open a terminal in Windows
 - Install wsl by executing the command
 
@@ -107,7 +106,6 @@ wsl --install
 ```
 
 - Start using wsl by typing `wsl` in a new terminal.
-
 - Install poetry by executing the following line in the terminal
 
 ```bash
@@ -132,24 +130,57 @@ poetry shell
 - Install needed packages
 
 ```bash
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo-dev
 ```
-
-- Sound on WSL does not work.  It should be possible to make he sound work by following the steps from this page: 
-https://www.reddit.com/r/bashonubuntuonwindows/comments/hrn1lz/wsl_sound_through_pulseaudio_solved/
-If this doesn't work, make sure not to include sound notifications in your script.
 
 - Eventually, to make the sound notifications a bit faster, install pygobject:
 
 ```bash
-sudo apt install libcairo2-dev libgirepository1.0-dev gcc python3-dev
+sudo apt install libcairo2-dev libgirepository1.0-dev gcc python3-dev gobject-* gir1.2-*
 pip install pygobject
+```
+
+### Make cameras accessible in wsl
+
+The USB devices are not automatically accessible in wsl.  To make the cameras accessible, the following steps should be taken:
+- Download the usbipd-win package from [GitHub](https://github.com/dorssel/usbipd-win/releases)
+- Install the package
+- Start a PowerShell terminal as administrator
+- Connect the cameras to the computer
+- Execute the following command in the PowerShell terminal
+
+```bash
+usbipd list
+```
+
+- The cameras should be listed (with their camera name or as MTP USB Device).  The camera_id is the busid of the camera.  This can be found in the list of usbipd list.  The camera_id is a number with a colon and a number (e.g. 1:2).  The command to bind the camera to wsl is
+
+```bash
+usbipd bind --busid <camera_id>
+```
+
+- Attach the camera to wsl by executing the following command in a PowerShell terminal.  Make sure that a wsl terminal is also open. **This should be done every time the camera is connected to the computer!!**
+
+```bash
+usbipd attach --wsl --busid <camera_id>
+```
+
+- The camera should now be available in wsl. You can test this by executing the following command:
+
+```bash
+lsusb
+```
+
+- The camera can not be accessed yet by the normal user.  To make this work, the user should be added to the plugdev group.  This can be done by executing the following command in the wsl terminal, and log in into :
+
+```bash 
+sudo usermod -aG plugdev $USER
 ```
 
 ## Running Solar Eclipse Workbench
 
-- Before starting Solar Eclipse Workbench, make sure to enable the correct python environment by executing the following command in the installation directory: 
-  
+- Before starting Solar Eclipse Workbench, make sure to enable the correct python environment by executing the following command in the installation directory:
+
 ```bash
 ~/.local/bin/poetry shell
 ```
@@ -173,6 +204,7 @@ python src/solareclipseworkbench/gui.py
 
 The following command line parameters can be used to start up gui.py.
 
+
 | Short parameter | Long parameter        | Description                                                                |
 |-----------------|-----------------------|----------------------------------------------------------------------------|
 | -h              | --help                | Show the help message and exit                                             |
@@ -182,7 +214,8 @@ The following command line parameters can be used to start up gui.py.
 | -alt ALTITUDE   | --altitude ALTITUDE   | Altitude of the location where to watch the solar eclipse (in meters)      |
 
 ### UI functionality
-In the images below, a screenshot of the toolbar and the upper part of the UI are shown. 
+
+In the images below, a screenshot of the toolbar and the upper part of the UI are shown.
 
 ![ui toolbar](img/toolbar.png)
 
@@ -193,12 +226,10 @@ The icons on the UI toolbar must be clicked from left to right (and the required
 The functionality of the toolbar buttons is as follows (from left to right):
 
 #### Observing location
+
 - When pressing the "Location" icon, a pop-up window (see screenshot below) will appear, in which you are asked to fill out the longitude, latitude, and altitude of your observing location.  Both longitude and latitude are expressed in degrees, the altitude in meters.
-
 - If these data were already inserted before somehow (manually, via command line arguments, or by loading a settings file), these values will appear there (you can modify them as you see fit).
-
 - When pressing the "Plot" button, the specified location (longitude, latitude) will be marked with a red dot on the world map.  Note that this plot is not updated automatically when you change the values.
-
 - When pressing the "OK" button, the data are accepted and will be filled out in the top section of the UI.
 
 ![location pop-up](img/location-popup.png)
@@ -222,11 +253,11 @@ The functionality of the toolbar buttons is as follows (from left to right):
   - sunrise;
   - sunset.
 - The information that is shown for each of these reference moments is:
-    - Time in the local timezone
-    - Time in UTC;
-    - Countdown;
-    - Altitude (in degrees);
-    - Azimuth (in degrees).
+  - Time in the local timezone
+  - Time in UTC;
+  - Countdown;
+  - Altitude (in degrees);
+  - Azimuth (in degrees).
 - This information can only be populated when the location and the eclipse date have been indicated.  Note that the reference moments are not automatically updated in case either of them would be modified.
 - Together with the information about the reference moments, the eclipse type (partial / total / annular) will be displayed.  For total and annular eclipses, also the time between C2 and C3 will be shown (next to the eclipse type).
 
@@ -280,7 +311,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - When pressing the "Save" icon, the location and eclipse date (if selected) will be stored in a settings file, together with the applied date and time format.
 - The standard settings framework of `PyQt6` (`QSettings`) will be used: it stores the settings as `SolarEclipseWorkbench.ini`.
 - Next time you open the UI (from the same location), this settings file will be loaded and the specified data will be made available in the UI.
-- In case command line arguments are used to open the UI, these take priority over the values from the settings file. 
+- In case command line arguments are used to open the UI, these take priority over the values from the settings file.
 
 ## Script file format
 
@@ -297,7 +328,7 @@ The following cameras are tested:
 
 It is possible to take pictures in burst mode.  The speed is limited by the speed of the camera (and card).
 
-### Commands 
+### Commands
 
 Solar Eclipse Workbench can use the following commands:
 
@@ -311,11 +342,11 @@ This command will take a picture 1 minutes and 2 seconds before first contact (C
 
 ```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
 
-- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps).  This method only works in Canon cameras.  Make sure to have 5 steps enabled for bracketing.  Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3
+- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps.  This method only works in Canon cameras.  Make sure to have 5 steps enabled for bracketing.  Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3
 
 ```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "+/- 1 2/3", "Bracket test"```
 
-- **voice_prompt** - Play a sound file.  
+- **voice_prompt** - Play a sound file.
 
 ```voice_prompt, C4, -, 00:00:03, C4_IN_3_SECONDS, "3 seconds before C4 voice prompt"```
 
@@ -325,31 +356,54 @@ This command will play the C4_IN_3_SECONDS sound file 3 seconds before fourth co
 
 ```sync_cameras, C2, -, 00:00:04, "Sync the camera status"```
 
-## Shortcomings
+- **for** - Repeat a command a number of times
 
-- In normal mode, only one picture every two seconds can be made.
+```for,C1,C4,10,-10,+10```
 
-## Converting scripts from Solar Eclipse Maestro
+This command will repeat the commands between C1 and C4 with an interval of 10 seconds.  The for loop will start 10 seconds before C1 and will end 10 seconds after C4.
+All commands that follow will be repeated up to the **endfor** command.  The time for the commands will be adapted automatically.
 
-Scripts from Solar Eclipse Maestro can be converted to scripts that can be used by Solar Eclipse Workbench.  Execute:
+Example 1:
 
-```bash
-python scripts/convert_sem_files.py -i solar_eclipse_maestro_files.txt -o my_script.txt
+```
+for,C1,C4,10,-10.0,10.0
+take_picture,(VAR), +, 0:00:00.0, Canon EOS 80D, 1/1250, 6, 100, "Partial C1-C4"
+take_picture,(VAR), +, 0:00:00.0, Canon EOS R, 1/800, 8, 100, "Partial C1-C4"
+endfor
 ```
 
-### Known Solar Eclipse Maestro commands
+Example 2:
 
-At this moment, Solar Eclipse Workbench only knows a subset of commands from Solar Eclipse Maestro.  These commands can be used:
+```
+for,C1,C4,600,-20.0,10.0
+sync_cameras,(VAR), +, 00:00:00, "Sync the camera status"
+endfor
+```
+
+- It is also possible to use the following commands from Solar Eclipse Maestro:
 
 | Command              | Since version |
 |----------------------|---------------|
 | FOR,(INTERVALOMETER) | 1.0           |
 | TAKEPIC              | 1.0           |
 | PLAY                 | 1.0           |
+| TAKEBST              | 1.0           |
+| TAKEBKT              | 1.0           |
+
+
+## Shortcomings
+
+- In normal mode, only one picture every two seconds can be made.
+- The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/). 
+
+## Converting scripts from Solar Eclipse Maestro
+
+Scripts from Solar Eclipse Maestro are converted automatically to scripts that can be used by Solar Eclipse Workbench.
 
 ## Image attributions
 
 ### GUI icons
+
 - <a href="https://www.flaticon.com/free-icons/map" title="map icons">Map icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/clock" title="clock icons">Clock icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/camera" title="camera icons">Camera icons created by Freepik - Flaticon</a>
