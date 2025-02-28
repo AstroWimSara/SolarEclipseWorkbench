@@ -14,11 +14,6 @@
 - [ ] Mirror up - TEST???
 - [ ] All commands from Solar Eclipse Maestro: http://xjubier.free.fr/en/site_pages/solar_eclipses/Solar_Eclipse_Maestro_Help/pgs2/btoc6.html
 
-### Notifications 
-
-- [ ] Sound does not work in wsl
-  - [ ] Known problem, we should remove the voice_prompt commands from the scheduler
-
 ### Problems with gphoto2
 
 - [ ] Camera access only works when executing the command using `sudo`
