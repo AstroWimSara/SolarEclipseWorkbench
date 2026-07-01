@@ -1,6 +1,6 @@
 [project]
 name = "solareclipseworkbench"
-version = "1.10.4"
+version = "1.10.5"
 
 description = "Tools to photograph solar eclipses"
 readme = "README.md"
@@ -28,6 +28,7 @@ dependencies = [
     "pyserial==3.5",
     "pynmea2==1.19.0",
     "geopy==2.4.1",
+    "astropy-iers-data==0.2026.6.22.1.23.34",
     "requests==2.34.2",
 ]
 
