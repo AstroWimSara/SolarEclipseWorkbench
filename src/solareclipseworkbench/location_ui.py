@@ -467,6 +467,20 @@ class LocationWidget(QWidget):
         self._setup_ui()
 
     # ------------------------------------------------------------------
+    # Widget lifecycle
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event) -> None:
+        """Ensure all background threads are stopped when the widget closes."""
+        self._cleanup_usb_gps_worker()
+        for attr in ('_geocoding_worker', '_elevation_worker'):
+            worker = getattr(self, attr, None)
+            if worker is not None:
+                setattr(self, attr, None)
+                worker.wait(2000)
+        super().closeEvent(event)
+
+    # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
@@ -758,14 +772,20 @@ class LocationWidget(QWidget):
         """Fill the altitude field after a successful Open-Elevation lookup."""
         self.altitude_edit.setText(f"{elevation:.1f}")
         self.altitude_edit.setPlaceholderText("Altitude above sea level")
+        worker = self._elevation_worker
         self._elevation_worker = None
+        if worker is not None:
+            worker.wait(1000)
 
     def _on_elevation_error(self, message: str) -> None:
         """Clear the placeholder text when the elevation lookup fails."""
         self.altitude_edit.setPlaceholderText("Altitude above sea level")
         self.altitude_edit.setText("0.0")
         print(f"Elevation lookup failed: {message}")
+        worker = self._elevation_worker
         self._elevation_worker = None
+        if worker is not None:
+            worker.wait(1000)
 
     def _on_gps_error(self, message: str) -> None:
         """Show an error and close the GPS dialog."""
@@ -792,6 +812,11 @@ class LocationWidget(QWidget):
 
     def _start_usb_gps_capture(self) -> None:
         """Start reading from a USB GPS receiver and show a progress dialog."""
+        if self._usb_gps_worker:
+            QMessageBox.warning(self, "USB GPS Already Running",
+                                "A USB GPS capture is already in progress. Please wait or cancel it first.")
+            return
+
         try:
             from solareclipseworkbench.usb_gps import get_usb_gps_worker_class
             UsbGpsWorker = get_usb_gps_worker_class()
@@ -829,7 +854,7 @@ class LocationWidget(QWidget):
         btn_box.rejected.connect(self._cancel_usb_gps_capture)
         dlg_layout.addWidget(btn_box)
 
-        self._usb_gps_worker = UsbGpsWorker(fix_timeout=120.0, parent=self)
+        self._usb_gps_worker = UsbGpsWorker(fix_timeout=120.0, parent=None)
         self._usb_gps_worker.status.connect(self._on_usb_gps_status)
         self._usb_gps_worker.location_received.connect(
             self._on_usb_gps_location_received
@@ -839,11 +864,41 @@ class LocationWidget(QWidget):
 
         self.usb_gps_btn.setEnabled(False)
         self._usb_gps_dialog.exec()
+        
+        # Ensure cleanup if dialog was closed by window manager instead of via signals
+        self._cleanup_usb_gps_worker()
 
     def _on_usb_gps_status(self, message: str) -> None:
         """Update the dialog status label with a progress message."""
         if self._usb_gps_status_label:
             self._usb_gps_status_label.setText(message)
+
+    def _cleanup_usb_gps_worker(self) -> None:
+        """Safely stop, disconnect, and clean up the USB GPS worker thread."""
+        # Move to local variable and clear the instance attribute first so that
+        # any re-entrant call (e.g. from a stale queued signal) is a no-op.
+        worker = self._usb_gps_worker
+        if worker is None:
+            return
+        self._usb_gps_worker = None
+
+        # Disconnect all signals to prevent stale callbacks.
+        for sig in (worker.status, worker.location_received, worker.error):
+            try:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
+        # Ask the thread to stop its loop, then wait for the OS thread to exit.
+        # wait() uses pthread_join internally and guarantees that
+        # QThreadPrivate::finish() has set d->running = False before returning,
+        # so it is safe to let the Python wrapper be garbage-collected afterwards.
+        worker.stop()
+        worker.quit()
+        if not worker.wait(5000):
+            worker.terminate()
+            worker.wait(2000)
+        # 'worker' local variable goes out of scope → Python refcount → 0 → safe GC.
 
     def _on_usb_gps_location_received(self, data: dict) -> None:
         """Fill coordinate fields with fix data and store the GPS time offset."""
@@ -878,9 +933,7 @@ class LocationWidget(QWidget):
             self._usb_gps_dialog = None
         self.usb_gps_btn.setEnabled(True)
 
-        if self._usb_gps_worker:
-            self._usb_gps_worker.stop()
-            self._usb_gps_worker = None
+        self._cleanup_usb_gps_worker()
 
         # Show the user what was measured
         offset_secs = time_offset.total_seconds()
@@ -903,20 +956,16 @@ class LocationWidget(QWidget):
             self._usb_gps_dialog.reject()
             self._usb_gps_dialog = None
         self.usb_gps_btn.setEnabled(True)
-        if self._usb_gps_worker:
-            self._usb_gps_worker = None
+        self._cleanup_usb_gps_worker()
         QMessageBox.critical(self, "USB GPS Error", message)
 
     def _cancel_usb_gps_capture(self) -> None:
         """Called when the user cancels the USB GPS dialog."""
-        if self._usb_gps_worker:
-            self._usb_gps_worker.stop()
-            self._usb_gps_worker.quit()
-            self._usb_gps_worker = None
         if self._usb_gps_dialog:
             self._usb_gps_dialog.reject()
             self._usb_gps_dialog = None
         self.usb_gps_btn.setEnabled(True)
+        self._cleanup_usb_gps_worker()
 
     # ------------------------------------------------------------------
     # Slots
@@ -1048,6 +1097,10 @@ class LocationWidget(QWidget):
     def _on_geocoding_finished(self, result: dict) -> None:
         """Apply a successful geocoding result to the coordinate fields."""
         self.search_btn.setEnabled(True)
+        worker = self._geocoding_worker
+        self._geocoding_worker = None
+        if worker is not None:
+            worker.wait(1000)
 
         # Switch the combo to "Custom" – this enables the fields via
         # _on_location_changed.
@@ -1085,6 +1138,10 @@ class LocationWidget(QWidget):
     def _on_geocoding_error(self, error_msg: str) -> None:
         """Show an error after a failed geocoding request."""
         self.search_btn.setEnabled(True)
+        worker = self._geocoding_worker
+        self._geocoding_worker = None
+        if worker is not None:
+            worker.wait(1000)
         self.search_status_label.setText(f"✗ Error: {error_msg}")
         self.search_status_label.setStyleSheet(
             "QLabel { color: #c40000; font-style: italic; }"

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.10.5] - 2026-07-01
+
+### Fixed
+- SEW crashes when loading location from GPS (Issue #130).
+
 ## [1.10.4] - 2026-06-25
 
 ### Fixed
