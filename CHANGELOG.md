@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.10.6] - 2026-07-01
+
+### Fixed
+- take_burst not working on Canon R10 (Issue #131).  This problem was introduced by the update to gphoto2 2.6.4.
+
 ## [1.10.5] - 2026-07-01
 
 ### Fixed
