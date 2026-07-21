@@ -101,14 +101,14 @@ pip install solareclipseworkbench
 - Install gstreamer to be able to play the sound notifications by executing the following line in the terminal
 
 ```bash
-sudo apt-get update
+sudo apt update
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.14-venv
 ```
 
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
 
 ```bash
-sudo apt-get install gphoto2 libgphoto2-dev python3-gphoto2
+sudo apt install gphoto2 libgphoto2-dev python3-gphoto2
 ```
 
 - Make sure that gvfs is not started automatically. Use `systemctl --user mask` to properly disable the gvfs gphoto2 services. **Do not use `chmod -x`** — removing the execute bit causes the Files (Nautilus) application to hang on open because GVFS still attempts to launch the binaries and waits for a timeout before giving up.
@@ -153,37 +153,34 @@ pip install solareclipseworkbench
 - Install gstreamer to be able to play the sound notifications by executing the following line in the terminal
 
 ```bash
-sudo apt-get update
+sudo apt update
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv
 ```
 
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
 
 ```bash
-sudo apt-get install gphoto2 libgphoto2-dev python3-gphoto2
+sudo apt install gphoto2 libgphoto2-dev python3-gphoto2
 ```
 
-- Make sure that gvfs is not started automatically. Use `systemctl --user mask` to properly disable the gvfs gphoto2 services. **Do not use `chmod -x`** — removing the execute bit causes the Files (Nautilus) application to hang on open because GVFS still attempts to launch the binaries and waits for a timeout before giving up.
+- Make sure that gvfs is not started automatically. Use `systemctl --user mask` to properly disable the gvfs gphoto2 service. **Do not use `chmod -x`** — removing the execute bit causes the Files (Nautilus) application to hang on open because GVFS still attempts to launch the binary and waits for a timeout before giving up.
 
-  If you previously used `chmod -x`, first restore the execute bits:
+  If you previously used `chmod -x`, first restore the execute bit:
 
   ```bash
   sudo chmod +x /usr/lib/gvfs/gvfs-gphoto2-volume-monitor
-  sudo chmod +x /usr/lib/gvfs/gvfsd-gphoto2
   ```
 
-  Then mask the systemd user services so they are never started:
+  Then mask the systemd user service so it is never started:
 
   ```bash
   systemctl --user mask gvfs-gphoto2-volume-monitor.service
-  systemctl --user mask gvfsd-gphoto2.service
   ```
 
   To verify:
 
   ```bash
   systemctl --user status gvfs-gphoto2-volume-monitor.service
-  systemctl --user status gvfsd-gphoto2.service
   ```
 
   Both should show `masked`.
@@ -232,7 +229,7 @@ wsl.exe --install Ubuntu-24.04
 - Install gstreamer to be able to play the sound notifications by executing the following line in the terminal
 
 ```bash
-sudo apt-get update
+sudo apt update
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv
 sudo apt install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-ugly gstreamer1.0-plugins-bad libgstreamer1.0-dev pulseaudio \
@@ -242,7 +239,7 @@ sudo apt install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-pl
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
 
 ```bash
-sudo apt-get install gphoto2/noble libgphoto2-dev python3-gphoto2 python3-pip
+sudo apt install gphoto2/noble libgphoto2-dev python3-gphoto2 python3-pip
 ```
 
 - Create a new python environment.  You can use venv or any python environment manager for this (like anaconda, micromamba, ...)
@@ -869,7 +866,7 @@ uv sync --group dev
 - Eventually, to make the sound notifications a bit faster, install pygobject:
 
 ```bash
-sudo apt install libcairo2-dev libgirepository1.0-dev gcc
+sudo apt install libcairo2-dev libgirepository-2.0-dev gcc
 uv pip install pygobject
 ```
 
@@ -914,7 +911,7 @@ sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcomm
 - Eventually, to make the sound notifications a bit faster, install pygobject:
 
 ```bash
-sudo apt install libcairo2-dev libgirepository1.0-dev gcc python3-dev gobject-* gir1.2-*
+sudo apt install libcairo2-dev libgirepository-2.0-dev gcc python3-dev gobject-* gir1.2-*
 uv pip install pygobject
 ```
 
