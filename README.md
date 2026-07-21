@@ -67,7 +67,8 @@
 
 ```bash
 python -m venv solareclipseworkbench
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 ```
 
 - For modern Apple Mac computers (using Apple Silicon processors), install [homebrew](https://brew.sh/). Add your homebrew/bin directory to your PATH. Then install gphoto2 and GDAL (required by geopandas) using homebrew:
@@ -85,7 +86,8 @@ brew install python@3.11
 
 # create and activate the venv using the Homebrew Python
 python3.11 -m venv solareclipseworkbench
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 ```
 
 - Install the Solar Eclipse Workbench:
@@ -135,7 +137,8 @@ sudo apt install libgdal-dev gdal-bin python3-pip
 
 ```bash
 python3 -m venv solareclipseworkbench
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 ```
 
 - Install the Solar Eclipse Workbench:
@@ -195,7 +198,8 @@ sudo apt install libgdal-dev gdal-bin python3-pip
 
 ```bash
 python3 -m venv solareclipseworkbench
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 ```
 
 - Install the Solar Eclipse Workbench:
@@ -246,7 +250,8 @@ sudo apt-get install gphoto2/noble libgphoto2-dev python3-gphoto2 python3-pip
 ```bash
 cd
 python3 -m venv solareclipseworkbench
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 ```
 
 - Eventually, to make the sound notifications a bit faster, install pygobject:
@@ -368,8 +373,8 @@ Short guidance
 To upgrade Solar Eclipse Workbench to the latest version, activate your Python environment and run:
 
 ```bash
-cd
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 pip install --upgrade solareclipseworkbench
 ```
 
@@ -384,8 +389,8 @@ pip show solareclipseworkbench
 - Start Solar Eclipse Workbench by executing the following commands:
 
 ```bash
-cd
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 sew
 ```
 
@@ -393,13 +398,14 @@ sew
 
 ```bash
 # On macos, start the commands with sudo
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 sudo sew -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
 sudo sew
 
 # In Linux or using WSL on Windows, start the command without sudo
-cd
-source solareclipseworkbench/bin/activate
+cd solareclipseworkbench
+source bin/activate
 sew -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
 sew
 ```
