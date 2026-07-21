@@ -275,7 +275,7 @@ class SolarEclipseModel:
 class SolarEclipseView(QMainWindow, Observable):
     """ View for the Solar Eclipse Workbench UI in the MVC pattern. """
 
-    def __init__(self, is_simulator: bool = False):
+    def __init__(self, is_simulator: bool = False, low_cpu_mode: bool = False):
         """ Initialisation of the view of the Solar Eclipse Workbench UI.
 
         This view is responsible for:
@@ -305,6 +305,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.controller = None
         self.is_simulator = is_simulator
+        self.low_cpu_mode = low_cpu_mode
 
         self.setGeometry(300, 300, 1500, 1000)
         try:
@@ -702,6 +703,14 @@ class SolarEclipseView(QMainWindow, Observable):
         self.live_view_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.live_view_action)
 
+        # Refresh Plot
+        if self.low_cpu_mode:
+            self.refresh_plot_action = QAction("Refresh Plot", self)
+            self.refresh_plot_action.setStatusTip("Manually update the eclipse geometry plot")
+            self.refresh_plot_action.setIcon(QIcon(str(ICON_PATH / "refresh.png")))
+            self.refresh_plot_action.triggered.connect(self.on_toolbar_button_click)
+            self.toolbar.addAction(self.refresh_plot_action)
+
     def on_toolbar_button_click(self):
         """ Action triggered when a toolbar button is clicked."""
 
@@ -892,7 +901,10 @@ class SolarEclipseView(QMainWindow, Observable):
 class SolarEclipseController(Observer):
     """ Controller for the Solar Eclipse Workbench UI in the MVC pattern. """
 
-    def __init__(self, model: SolarEclipseModel, view: SolarEclipseView, is_simulator: bool):
+    def __init__(self, model: SolarEclipseModel,
+                 view: SolarEclipseView,
+                 is_simulator: bool,
+                 low_cpu_mode: bool):
         """ Initialisation of the controller of the Solar Eclipse Workbench UI.
 
         Args:
@@ -932,7 +944,9 @@ class SolarEclipseController(Observer):
         self.visualization_timer = QTimer()
         self.visualization_timer.timeout.connect(self.update_visualization)
         self.visualization_timer.setInterval(5000)
-        self.visualization_timer.start()
+
+        if not low_cpu_mode:
+            self.visualization_timer.start()
 
         self._live_view_window: Union[LiveViewWindow, None] = None
 
@@ -1216,6 +1230,9 @@ class SolarEclipseController(Observer):
 
         elif text == "Live View":
             self._open_live_view()
+
+        elif text == "Refresh Plot":
+            self.update_visualization()
 
     def sync_camera_time(self):
         """ Set the time of all connected cameras to the time of the computer."""
@@ -2941,6 +2958,14 @@ def main():
         default=False,
     )
 
+    parser.add_argument(
+        "-lc",
+        "--low-cpu",
+        help="Disable the eclipse visualization plot auto-update",
+        action='store_true',
+        default=False,
+    )
+
     args = parser.parse_args()
 
     # args[1:1] = ["-stylesheet", str(styles_location)]
@@ -2950,11 +2975,16 @@ def main():
     app.setApplicationName("Solar Eclipse Workbench")
 
     model = SolarEclipseModel()
-    view = SolarEclipseView(is_simulator=args.sim)
+    view = SolarEclipseView(is_simulator=args.sim,low_cpu_mode=args.low_cpu)
     # Attach virtual camera defaults to the view so other parts can query them
     view.virtual_camera_enabled = args.virtual_camera
 
-    controller = SolarEclipseController(model, view, is_simulator=args.sim)
+    controller = SolarEclipseController(
+        model,
+        view,
+        is_simulator=args.sim,
+        low_cpu_mode=args.low_cpu
+    )
 
     # Make the view available to the camera overview model so it can read simulator flags
     model.camera_overview.view = view

@@ -128,7 +128,8 @@ sudo apt-get install gphoto2 libgphoto2-dev python3-gphoto2
 - Install `gdal-config`, required by `geopandas` (especially on Raspberry Pi):
 
 ```bash
-sudo apt install libgdal-dev gdal-bin python3-pip```
+sudo apt install libgdal-dev gdal-bin python3-pip
+```
 
 - Create a new python environment.  You can use venv or any python environment manager for this (like anaconda, micromamba, ...)
 
@@ -187,7 +188,8 @@ sudo apt-get install gphoto2 libgphoto2-dev python3-gphoto2
 - Install `gdal-config`, required by `geopandas` (especially on Raspberry Pi):
 
 ```bash
-sudo apt install libgdal-dev gdal-bin python3-pip```
+sudo apt install libgdal-dev gdal-bin python3-pip
+```
 
 - Create a new python environment.  You can use venv or any python environment manager for this (like anaconda, micromamba, ...)
 
@@ -952,3 +954,4 @@ See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes and updates to t
 - <a href="https://www.flaticon.com/free-icons/folder" title="folder icons">Folder icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/simulation" title="simulation icons">Simulation icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/save" title="save icons">Save icons created by Freepik - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/refresh" title="refresh icons">Refresh icons created by Magnific - Flaticon</a>
