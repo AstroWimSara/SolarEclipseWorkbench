@@ -889,13 +889,22 @@ class SolarEclipseView(QMainWindow, Observable):
         self.sunset_time_local_label.setText(format_time(sunset_info.time_local, self.time_format))
 
     def closeEvent(self, close_event: QCloseEvent):
-        """ Disconnect cameras when the UI is closed.
+        """ Ask for confirmation before closing the application. """
+        reply = QMessageBox.question(
+            self,
+            "Confirm Exit",
+            "Are you sure you want to exit Solar Eclipse Workbench?\n\n"
+            "Any running scheduler will be stopped.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
 
-        Args:
-            - close_event: Event that occurs when the UI window is closed
-        """
-
-        self.notify_observers(close_event)
+        if reply == QMessageBox.StandardButton.Yes:
+            # Notify controller so it can clean up cameras, scheduler, etc.
+            self.notify_observers(close_event)
+            close_event.accept()
+        else:
+            close_event.ignore()
 
 
 class SolarEclipseController(Observer):

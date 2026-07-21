@@ -386,6 +386,8 @@ pip show solareclipseworkbench
 
 ## Running Solar Eclipse Workbench
 
+- Ensure that you are connected to the Internet the first time you run and use Solar Eclipse Workbench, as it will require to download several files required for calculations.
+
 - Start Solar Eclipse Workbench by executing the following commands:
 
 ```bash
