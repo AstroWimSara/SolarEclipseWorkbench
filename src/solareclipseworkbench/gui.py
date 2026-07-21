@@ -1220,15 +1220,23 @@ class SolarEclipseController(Observer):
                 LOGGER.warning(f"File {filename} does not contain scheduled jobs")
 
         elif text == "Stop":
-            try:
-                if self.scheduler:
-                    self.scheduler.shutdown()
-                    self.jobs_model.clear_jobs_overview()
+            # Ask for confirmation before stopping the scheduler
+            if not hasattr(self, 'scheduler') or not self.scheduler or not self.scheduler.get_jobs():
+                # No active jobs → no need to confirm
+                self._shutdown_scheduler()
+                return
 
-                    self.view.camera_action.setEnabled(True)
-            except SchedulerNotRunningError:
-                # Scheduler not running
-                pass
+            reply = QMessageBox.question(
+                self.view,
+                "Confirm Stop",
+                "Are you sure you want to stop the scheduler?\n\n"
+                "All pending jobs will be cancelled.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self._shutdown_scheduler()
 
         elif text == "Datetime format":
             self.settings_popup = SettingsPopup(self)
@@ -1433,6 +1441,19 @@ class SolarEclipseController(Observer):
 
         reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
         self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+
+    def _shutdown_scheduler(self):
+        """Safely shut down the scheduler and update UI."""
+        try:
+            if self.scheduler:
+                self.scheduler.shutdown()
+                self.jobs_model.clear_jobs_overview()
+                self.view.camera_action.setEnabled(True)
+                LOGGER.info("Scheduler stopped by user")
+        except SchedulerNotRunningError:
+            pass  # already stopped
+        except Exception:
+            logging.exception("Error while shutting down scheduler")
 
 
 class LocationPopup(QWidget, Observable):
