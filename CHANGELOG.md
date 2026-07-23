@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.10.7] - 2026-07-23
+
+### Fixed
+
+- Fixed 'Skipping line in script (not enough fields)' messages for empty lines in CSV file: #141
+- 'Reference moments' button freezes the app when pressing first time.  Now showing a progress indicator: #136
+- 'command' command in csv script does not longer block the scheduler.  The command is now started and the scheduler continues to the next command.  
+- Removed extra scrollbar in GUI: #142
+- First PR by @fliker09
+  - Documentation update
+  - Extended timeout for GPS location retrieval from 2 minutes to 3 minutes.
+  - Add `--low-cpu` option to `sew` command line to prevent auto-refresh of eclipse plot on low powered devices.
+  - Made Stop button ask for confirmation, to avoid accidental disruption.
+
 ## [1.10.6] - 2026-07-01
 
 ### Fixed
