@@ -575,41 +575,17 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview.setFixedHeight(300)
         input_hbox.addWidget(self.camera_overview)
 
-
-        # eclipse_figure = Figure(figsize=(5, 4))
-        # self.eclipse_visualization = FigureCanvas(eclipse_figure)
-        #
-        # self.eclipse_visualization.figure.plot(np.arange(10))
-
-        # pg.setConfigOptions(antialias=True)
-        # self.eclipse_visualization = EclipsePlot()
-
-        # self.eclipse_visualization = pg.PlotWidget(background="w")
-        #
-        # self.eclipse_visualization.setAspectLocked(True, ratio=1)
-        # self.eclipse_visualization.showGrid(x=True, y=True, alpha=0.25)
-        # self.eclipse_visualization.setLabel("left", "North (solar radii)")
-        # self.eclipse_visualization.setLabel("bottom", "East (solar radii)")
-
-        scroll = QScrollArea()
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidgetResizable(True)
-
-        scroll.setWidget(self.jobs_table)
-
         # noinspection SpellCheckingInspection
         output_hbox = QHBoxLayout()
         output_hbox.addWidget(self.eclipse_visualization)
         # output_hbox.addWidget(self.canvas)
-        output_hbox.addWidget(scroll)
+        output_hbox.addWidget(self.jobs_table)
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
         global_layout.addWidget(self.sony_reminder_label)
         global_layout.addLayout(input_hbox)
 
-        # global_layout.addWidget(scroll)
         global_layout.addLayout(output_hbox)
 
         app_frame.setLayout(global_layout)
