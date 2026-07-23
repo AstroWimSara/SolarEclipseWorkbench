@@ -155,6 +155,12 @@ def convert_script(filename, reference_moments) -> io.StringIO:
         if not line:
             break
         # Drop empty lines and comments (starting with #)
+        
+        stripped_line = line.lstrip()
+        
+        if not stripped_line or stripped_line.startswith("#"):
+            continue
+
         if not line.startswith('#') and not len(line) == 0: 
             # FOR loops in the Solar Eclipse Maestro scripts
             if line.startswith('FOR'):

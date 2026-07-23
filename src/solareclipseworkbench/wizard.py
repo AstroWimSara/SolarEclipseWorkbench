@@ -8,18 +8,20 @@ import math
 import json
 import time
 import requests
+import threading
+import queue
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List
 
-from PyQt6.QtCore import Qt, QSettings, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, QThread, pyqtSignal, QTimer, QEventLoop, QObject
 from PyQt6.QtGui import QDoubleValidator, QIntValidator, QFont
 from PyQt6.QtWidgets import (
     QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, 
     QGridLayout, QLabel, QLineEdit, QComboBox, QCheckBox, QRadioButton,
     QSpinBox, QDoubleSpinBox, QGroupBox, QButtonGroup, QTextEdit,
-    QFileDialog, QPushButton, QMessageBox, QWidget, QScrollArea
+    QFileDialog, QPushButton, QMessageBox, QProgressDialog, QDialog, QPlainTextEdit, QProgressBar, QWidget, QScrollArea
 )
 
 from solareclipseworkbench.location_ui import ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget
@@ -1253,6 +1255,94 @@ class SummaryPage(QWizardPage):
         )
         if filename:
             self.save_path_edit.setText(filename)
+
+    def _calculate_reference_moments_with_progress(self, longitude, latitude, altitude, eclipse_time):
+        """Run calculate_reference_moments in a background thread and show a modal dialog
+        with an indeterminate progress bar and a live log view that captures stdout/stderr.
+
+        Returns: (timings, magnitude, type) or raises exception on error.
+        """
+        # Dialog with progress and log
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Downloading")
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        layout = QVBoxLayout(dialog)
+
+        # Compact UI: a short label and indeterminate progress bar
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)  # indeterminate
+        layout.addWidget(progress_bar)
+
+        label = QLabel("Loading helper files...")
+        layout.addWidget(label)
+
+        dialog.setLayout(layout)
+
+        result = {}
+
+        class _DevNull:
+            def write(self, s):
+                return
+
+            def flush(self):
+                return
+
+        def worker():
+            # Redirect stdout/stderr to devnull and temporarily silence root logging
+            old_out = sys.stdout
+            old_err = sys.stderr
+            sys.stdout = _DevNull()
+            sys.stderr = _DevNull()
+            import logging
+            root_logger = logging.getLogger()
+            old_handlers = list(root_logger.handlers)
+            old_level = root_logger.level
+            try:
+                # Remove handlers so external libraries don't print to terminal
+                root_logger.handlers = []
+                # Run the actual computation
+                res = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
+                result['res'] = res
+            except Exception:
+                import traceback
+
+                result['error'] = traceback.format_exc()
+            finally:
+                # Restore stdout/stderr and logging handlers
+                sys.stdout = old_out
+                sys.stderr = old_err
+                root_logger.handlers = old_handlers
+                root_logger.setLevel(old_level)
+
+        th = threading.Thread(target=worker, daemon=True)
+
+        # Show dialog immediately so the user sees the busy UI before downloads start.
+        try:
+            dialog.show()
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+        logging = __import__('logging')
+        logging.getLogger(__name__).debug("Starting reference-moments worker thread")
+
+        th.start()
+
+        timer = QTimer(dialog)
+
+        def pump_logs_and_check():
+            if not th.is_alive():
+                timer.stop()
+                dialog.accept()
+
+        timer.timeout.connect(pump_logs_and_check)
+        timer.start(100)
+
+        dialog.exec()
+
+        if 'error' in result:
+            raise Exception(result['error'])
+        return result.get('res', (None, None, None))
     
     def _generate_script(self):
         """Generate the photography script based on configuration."""
@@ -1302,16 +1392,24 @@ class SummaryPage(QWizardPage):
             from dateutil import parser
             parsed_date = parser.parse(eclipse_date_str)
             eclipse_time = Time(parsed_date)
-            
+
             # Get location
             longitude = float(wizard.field('longitude'))
             latitude = float(wizard.field('latitude'))
             altitude = float(wizard.field('altitude'))
-            
-            # Calculate all exposures
+
+            # Pre-compute reference moments first (shows modal dialog and captures download output)
+            timings = None
+            try:
+                timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+            except Exception:
+                # If precomputation fails, leave timings as None and fallback to calculate inside exposures
+                timings = None
+
+            # Calculate all exposures; pass precomputed timings when available to avoid re-downloading ephemerides
             exposures = calculate_eclipse_exposures(
-                eclipse_time, longitude, latitude, altitude, 
-                preferred_iso, aperture, nd_filter
+                eclipse_time, longitude, latitude, altitude,
+                preferred_iso, aperture, nd_filter, timings=timings
             )
             
             # Add exposure summary to header
@@ -1340,10 +1438,13 @@ class SummaryPage(QWizardPage):
         # "Total" eclipse has no C2/C3 at their location.
         has_totality = False
         try:
-            _pre_timings, _, _ = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
-            has_totality = 'C2' in _pre_timings and 'C3' in _pre_timings
+            if timings is None:
+                timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+            if timings:
+                has_totality = 'C2' in timings and 'C3' in timings
         except Exception:
             # Fallback: assume totality only for globally total/annular/hybrid eclipses
+            timings = None
             has_totality = eclipse_type in ["Total", "Annular", "Hybrid"]
 
         # Voice prompts - load from file if enabled
@@ -1457,8 +1558,9 @@ class SummaryPage(QWizardPage):
         if wizard.field('c1_c4'):
             # Check if sun is above horizon at C1
             try:
-                timings, _, _ = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
-                if 'C1' in timings:
+                if timings is None:
+                    timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                if timings and 'C1' in timings:
                     c1_time = timings['C1'].time_utc
                     c1_sun_alt = calculate_sun_altitude_at_time(
                         c1_time, eclipse_time, longitude, latitude, altitude
@@ -1483,10 +1585,11 @@ class SummaryPage(QWizardPage):
         # Partial phase - equispaced shots with filter
         if wizard.field('equispaced'):
             try:
-                # Get reference moments for detailed partial phase planning
-                timings, _, _ = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
+                # Get reference moments for detailed partial phase planning (reuse cached result when available)
+                if timings is None:
+                    timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
 
-                if has_totality and 'C1' in timings and 'C2' in timings and 'C3' in timings and 'C4' in timings:
+                if timings and has_totality and 'C1' in timings and 'C2' in timings and 'C3' in timings and 'C4' in timings:
                     c1_time = timings['C1'].time_utc
                     c2_time = timings['C2'].time_utc
                     c3_time = timings['C3'].time_utc
@@ -1807,10 +1910,11 @@ class SummaryPage(QWizardPage):
             # Totality/Annularity - Corona
             if wizard.field('corona'):
                 try:
-                    # Get totality duration to fill it optimally
-                    timings, _, _ = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
-                    
-                    if 'C2' in timings and 'C3' in timings:
+                    # Get totality duration to fill it optimally (reuse cached result when available)
+                    if timings is None:
+                        timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+
+                    if timings and 'C2' in timings and 'C3' in timings:
                         totality_c2 = timings['C2'].time_utc
                         totality_c3 = timings['C3'].time_utc
                         totality_duration = (totality_c3 - totality_c2).total_seconds()
@@ -2036,10 +2140,11 @@ class SummaryPage(QWizardPage):
             if wizard.field('earthshine'):
                 # Check if earthshine fits within totality
                 try:
-                    # Get reference moments to calculate totality duration
-                    timings, _, _ = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
-                    
-                    if 'C2' in timings and 'C3' in timings:
+                    # Get reference moments to calculate totality duration (reuse cached result when available)
+                    if timings is None:
+                        timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+
+                    if timings and 'C2' in timings and 'C3' in timings:
                         totality_c2 = timings['C2'].time_utc
                         totality_c3 = timings['C3'].time_utc
                         totality_duration = (totality_c3 - totality_c2).total_seconds()
@@ -2125,8 +2230,9 @@ class SummaryPage(QWizardPage):
         if wizard.field('c1_c4'):
             # Check if sun is above horizon at C4
             try:
-                timings, _, _ = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
-                if 'C4' in timings:
+                if timings is None:
+                    timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                if timings and 'C4' in timings:
                     c4_time = timings['C4'].time_utc
                     c4_sun_alt = calculate_sun_altitude_at_time(
                         c4_time, eclipse_time, longitude, latitude, altitude

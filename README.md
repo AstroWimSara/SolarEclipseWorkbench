@@ -44,6 +44,7 @@
     - [General remarks](#general-remarks)
     - [Reference moments](#reference-moments-1)
     - [Commands](#commands)
+  - [Astronomical calculations](#astronomical-calculations)
   - [Shortcomings](#shortcomings)
   - [Converting scripts from Solar Eclipse Maestro](#converting-scripts-from-solar-eclipse-maestro)
   - [Error handling](#error-handling)
@@ -793,6 +794,12 @@ endfor
 | TAKEBST              | 1.0           |
 | TAKEBKT              | 1.0           |
 
+
+## Astronomical calculations
+
+- Astropy/IERS is used to compute Delta T (TT − UT1) for eclipse reference times.  This is the most up to date information available, but it requires an internet connection to download the latest IERS tables.  If no internet is available, a CSV-based fallback is used.
+  - For the 2026 eclipse, the fallback value for Delta T is 69.1085.
+- The used solar radius is equal to 959.95 ±0.05 arcseconds. This value is slightly larger than the canonical solar radius (i.e. 959.63 arcseconds).  This is the latest value from the Besselian Elements team (L. Quaglia et al.).
 
 ## Shortcomings
 
