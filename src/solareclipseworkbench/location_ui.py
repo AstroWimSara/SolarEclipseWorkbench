@@ -854,7 +854,7 @@ class LocationWidget(QWidget):
         btn_box.rejected.connect(self._cancel_usb_gps_capture)
         dlg_layout.addWidget(btn_box)
 
-        self._usb_gps_worker = UsbGpsWorker(fix_timeout=120.0, parent=None)
+        self._usb_gps_worker = UsbGpsWorker(fix_timeout=180.0, parent=None)
         self._usb_gps_worker.status.connect(self._on_usb_gps_status)
         self._usb_gps_worker.location_received.connect(
             self._on_usb_gps_location_received

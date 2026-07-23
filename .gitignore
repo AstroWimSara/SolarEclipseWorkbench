@@ -163,4 +163,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# They will be auto-donwloaded
 de421.bsp
+de440s.bsp
+
+# uv lock file should be excluded, it's tied to a specific installation
+uv.lock
