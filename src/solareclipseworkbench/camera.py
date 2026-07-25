@@ -8,6 +8,7 @@ import gphoto2
 import gphoto2 as gp
 from datetime import datetime
 import os
+import re
 
 from gphoto2 import Camera
 
@@ -1382,6 +1383,43 @@ def _parse_bracket_steps(steps: str) -> int:
         raise ValueError(f"Could not parse bracket steps '{steps}' to a positive stop count")
     return thirds
 
+
+def calculate_bracket_exposures(bracket_str: str, base_shutter_speed: str | float) -> float:
+    """Parses a camera bracketing string and base shutter speed to calculate
+
+    all shot durations and the total execution time.
+    """
+    # 1. Extract EV step size and number of pictures
+    match = re.search(r"Bracketing C (\d+\.\d+) Steps (\d+) Pictures", bracket_str)
+    if not match:
+        raise ValueError(f"Invalid bracketing string format: '{bracket_str}'")
+
+    ev_step = float(match.group(1))
+    num_pictures = int(match.group(2))
+
+    # 2. Parse the base shutter speed into seconds (handles floats or "1/125" fractions)
+    if isinstance(base_shutter_speed, str):
+        base_shutter_speed = base_shutter_speed.strip()
+        if "/" in base_shutter_speed:
+            num, denom = base_shutter_speed.split("/")
+            base_seconds = float(num) / float(denom)
+        else:
+            base_seconds = float(base_shutter_speed)
+    else:
+        base_seconds = float(base_shutter_speed)
+
+    # 3. Calculate EV offsets symmetrically around 0 EV
+    # e.g., 5 steps with 0.5 EV step -> [-1.0, -0.5, 0.0, 0.5, 1.0]
+    half_count = num_pictures // 2
+    ev_offsets = [i * ev_step for i in range(-half_count, half_count + 1)]
+
+    # 4. Calculate exact duration for each exposure (t = base * 2^EV)
+    exposures_sec = [base_seconds * (2**ev) for ev in ev_offsets]
+    total_duration_sec = sum(exposures_sec)
+
+    return total_duration_sec
+
+
 @_serialised_on_camera
 def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) -> None:
     """ Take a bracketing of images with the selected camera.
@@ -1488,6 +1526,55 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         gp.gp_widget_set_value(speed_widget, choices[base_idx])
         _set_gp_config(camera, config, context)
         logging.info('take_bracket (Nikon): bracket complete')
+
+    elif getattr(camera, 'vendor', None) == 'Sony':
+        # Sony bracketing: enable continuous bracketing mode, turn on the bulb,
+        # sleep for the chosen amount of time, turn off the bulb and
+        # lastly drain camera's events
+        target = camera._camera if hasattr(camera, '_camera') else camera
+        base_speed = camera_settings.shutter_speed.strip()
+        bracket_duration = calculate_bracket_exposures(steps, base_speed)
+
+        # Switch to continuous bracketing mode
+        try:
+            capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+            if steps is not None:
+                gp.gp_widget_set_value(capture_mode, steps)
+                _set_gp_config(camera, config, context)
+                logging.debug('Set Sony capturemode to "%s" for bracketing', steps)
+            else:
+                logging.debug('Sony capturemode: no "%s" choice found, firing without mode change', steps)
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('Could not set Sony capturemode to "%s": %s', steps, e)
+
+        try:
+            _sony_drain_events(target, context)
+            bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
+            gp.gp_widget_set_value(bulb_mode, 1)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 1')
+            time.sleep(bracket_duration)
+            gp.gp_widget_set_value(bulb_mode, 0)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 0')
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('Sony burst capture failed: %s', e)
+
+        # Reset to single-frame mode
+        config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
+        try:
+            capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'capturemode'))
+            single_choice = _find_capturemode_choice(capture_mode_reset, want_continuous=False)
+            if single_choice is not None:
+                gp.gp_widget_set_value(capture_mode_reset, single_choice)
+                _set_gp_config(camera, config_reset, context)
+                logging.debug('Reset Sony capturemode to "%s" after bracketing', single_choice)
+            else:
+                logging.debug('Sony capturemode: no "single" choice found for reset after burst')
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('Could not reset Sony capturemode to Single after burst: %s', e)
+
 
 def _parse_shutter_speed_seconds(speed_str: str) -> float:
     """Parse a gphoto2 shutter speed string to seconds as a float.
