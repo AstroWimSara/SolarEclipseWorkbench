@@ -72,9 +72,6 @@ LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%a, %d %b %Y %H:%M:%S', filename="/tmp/solareclipseworkbench.log", filemode='w')
 
 
-from PyQt6.QtWidgets import QFrame, QLabel, QToolButton, QHBoxLayout
-from PyQt6.QtCore import Qt
-
 class BannerNotification(QFrame):
     def __init__(self, text="", parent=None):
         super().__init__(parent)
