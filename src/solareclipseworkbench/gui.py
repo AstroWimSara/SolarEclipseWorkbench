@@ -75,13 +75,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(me
 class BannerNotification(QFrame):
     def __init__(self, text="", parent=None):
         super().__init__(parent)
+
+        # Scope style ONLY to this class to prevent internal widget inheritance bugs
         self.setStyleSheet('''
-            QFrame {
+            BannerNotification {
                 background-color: #FFF3CD;
                 border-radius: 4px;
             }
             QLabel {
                 color: #856404;
+                background: transparent;
                 border: none;
             }
             QToolButton {
@@ -104,12 +107,14 @@ class BannerNotification(QFrame):
         self.close_btn = QToolButton()
         self.close_btn.setText("✕")
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Explicitly hide the root frame (self) when clicked
         self.close_btn.clicked.connect(self.hide)
 
         layout.addWidget(self.label, 1)
         layout.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
 
-    def setText(self, text):
+    def setText(self, text: str):
         self.label.setText(text)
 
 
@@ -2966,10 +2971,12 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             continue
                         dest = get_sony_save_destination(cam)
                         image_quality = get_sony_image_quality(cam)
+                        print(image_quality)
                         # Start downloader only when destination clearly says
                         # PC-only. If destination is unavailable (common with
                         # localized camera menus), avoid downloading to protect
                         # shot timing.
+                        sony_banner_label_visibility = True
                         if dest == "sdram":
                             sony_banner_label_text = getattr(cam, 'name', None) + ": currently saving photos to PC. We recommend testing if 'PC+Camera' mode is faster for you or not."
                             if image_quality != "RAW":
@@ -2989,14 +2996,20 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         else:
                             if image_quality != "RAW":
                                 sony_banner_label_text = getattr(cam, 'name', None) + ": 'Quality' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                            else:
+                                sony_banner_label_visibility = False
                             try:
                                 cam.start_background_downloader()
                             except Exception:
                                 logging.exception('Failed to start downloader for: ' + getattr(cam, 'name', None))
                         if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
-                            sony_banner_label_text += " If this info is wrong or you want to re-check after an update to the settings - just press again the 'Camera(s)' button!"
-                            self.view.sony_banner_label.setVisible(True)
-                            self.view.sony_banner_label.setText(sony_banner_label_text)
+                            if sony_banner_label_visibility:
+                                full_text = f"{sony_banner_label_text} If this info is wrong or you want to re-check after an update to the settings - just press again the 'Camera(s)' button!"
+                                self.view.sony_banner_label.setText(full_text)
+                                self.view.sony_banner_label.setVisible(True)
+                            else:
+                                # Hide it cleanly without touching inner text properties
+                                self.view.sony_banner_label.setVisible(False)
                     except Exception:
                         logging.debug('Error while checking Sony save destination', exc_info=True)
         except Exception:
