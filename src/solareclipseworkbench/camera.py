@@ -2637,73 +2637,26 @@ def get_sony_save_destination(camera) -> str | None:
     if camera is None:
         return None
     try:
-        ctx = gp.gp_context_new()
-        cfg = gp.check_result(gp.gp_camera_get_config(camera._camera if hasattr(camera, '_camera') else camera, ctx))
-    except Exception:
-        return None
-
-    KEYWORDS = ["save", "dest", "storage", "pc remote", "pcsave", "pc_save", "still img", "savemedia"]
-
-    def _walk(widget):
-        try:
-            wtype = gp.check_result(gp.gp_widget_get_type(widget))
-            name = gp.check_result(gp.gp_widget_get_name(widget))
-            label = gp.check_result(gp.gp_widget_get_label(widget))
-        except Exception:
-            return None
-        combined = (str(name) + " " + str(label)).lower()
-        # container types
-        if wtype in (gp.GP_WIDGET_WINDOW, gp.GP_WIDGET_SECTION, gp.GP_WIDGET_CONTAINER):
-            try:
-                n = gp.check_result(gp.gp_widget_count_children(widget))
-                for i in range(n):
-                    child = gp.check_result(gp.gp_widget_get_child(widget, i))
-                    v = _walk(child)
-                    if v is not None:
-                        return v
-            except Exception:
-                return None
-        else:
-            if any(kw in combined for kw in KEYWORDS):
-                try:
-                    val = gp.check_result(gp.gp_widget_get_value(widget))
-                    return str(val)
-                except Exception:
-                    return None
-        return None
-
-    try:
-        return _walk(cfg)
+        return camera.get_config().get_child_by_name('capturetarget').get_value()
     except Exception:
         return None
 
 
-def sony_save_destination_needs_downloader(destination: Optional[str]) -> bool:
-    """Return True only when destination string clearly indicates PC-only save.
+def get_sony_image_quality(camera: Camera) -> str:
+    """ Return the image quality of the selected Sony camera.
 
-    Destination values differ across camera firmwares and locales.  This helper
-    intentionally errs on the side of *not* downloading when unclear, to avoid
-    stealing USB bandwidth from scheduled captures.
+    Args:
+        - camera: Camera object
+
+    Returns: Image quality setting of the camera
     """
-    if destination is None:
-        return False
 
-    value = str(destination).strip().lower()
-    if not value:
-        return False
-
-    has_pc = ('pc' in value) or ('computer' in value)
-    has_camera_or_card = any(
-        token in value
-        for token in ('camera', 'camara', 'kamera', 'card', 'sd')
-    )
-
-    # Explicit mixed destinations like "PC+Camera" or "PC/Camera".
-    if has_pc and has_camera_or_card:
-        return False
-
-    # Any destination mentioning only PC/computer should enable downloading.
-    return has_pc and not has_camera_or_card
+    if camera is None:
+        return None
+    try:
+        return camera.get_config().get_child_by_name('imagequality').get_value()
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

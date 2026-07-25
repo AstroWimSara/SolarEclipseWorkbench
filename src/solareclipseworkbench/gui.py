@@ -24,8 +24,9 @@ import pandas as pd
 import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QSettings, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
-from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, QMessageBox
+from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
+QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
+QMessageBox, QToolButton
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -40,8 +41,8 @@ from skyfield.api import load, wgs84
 import threading
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
-    get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
-    sony_save_destination_needs_downloader
+get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, get_sony_save_destination, \
+get_sony_image_quality
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -69,6 +70,50 @@ REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%a, %d %b %Y %H:%M:%S', filename="/tmp/solareclipseworkbench.log", filemode='w')
+
+
+from PyQt6.QtWidgets import QFrame, QLabel, QToolButton, QHBoxLayout
+from PyQt6.QtCore import Qt
+
+class BannerNotification(QFrame):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setStyleSheet('''
+            QFrame {
+                background-color: #FFF3CD;
+                border-radius: 4px;
+            }
+            QLabel {
+                color: #856404;
+                border: none;
+            }
+            QToolButton {
+                border: none;
+                background: transparent;
+                color: #856404;
+                font-weight: bold;
+            }
+            QToolButton:hover {
+                color: #000000;
+            }
+        ''')
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+
+        self.label = QLabel(text)
+        self.label.setWordWrap(True)
+
+        self.close_btn = QToolButton()
+        self.close_btn.setText("✕")
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.clicked.connect(self.hide)
+
+        layout.addWidget(self.label, 1)
+        layout.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+
+    def setText(self, text):
+        self.label.setText(text)
 
 
 class SolarEclipseModel:
@@ -426,12 +471,9 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.jobs_table = QJobsTableView()
 
-        # One-line Sony reminder banner (hidden by default; shown when a Sony camera is present)
-        self.sony_reminder_label = QLabel()
-        self.sony_reminder_label.setText("Sony users: set 'PC Remote Settings → Save Destination' to 'PC+Camera' (or 'Camera Only') to keep images on the SD card and preserve tight shot timing")
-        self.sony_reminder_label.setWordWrap(True)
-        self.sony_reminder_label.setStyleSheet('background-color: #FFF3CD; color: #856404; padding: 6px; border-radius: 4px;')
-        self.sony_reminder_label.setVisible(False)
+        # One-line Sony banner (hidden by default; shown when a Sony camera is present)
+        self.sony_banner_label = BannerNotification()
+        self.sony_banner_label.setVisible(False)
 
         self.init_ui()
 
@@ -606,7 +648,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
-        global_layout.addWidget(self.sony_reminder_label)
+        global_layout.addWidget(self.sony_banner_label)
         global_layout.addLayout(input_hbox)
 
         # global_layout.addWidget(scroll)
@@ -1930,7 +1972,7 @@ class EclipsePlotWidget(QtWidgets.QWidget):
         when += self.offset
 
         if not self.is_location_set:
-            print("Location not set. Please use set_location() first.")
+            LOGGER.info("Location not set. Please use set_location() first.")
             return
 
         # Interpret naive datetimes as UTC for robustness
@@ -2472,7 +2514,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
         """ Update the camera overview. """
         logging.debug('CameraOverviewTableModel.update_camera_overview(): start (scheduling worker)')
         try:
-            print('CameraOverview: scheduling worker to probe cameras', flush=True)
+            LOGGER.info("CameraOverview: scheduling worker to probe cameras")
         except Exception:
             pass
 
@@ -2539,7 +2581,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     continue
             # schedule UI update on main thread
             try:
-                print('Worker: gathered camera overview data:', data, flush=True)
+                LOGGER.info("Worker: gathered camera overview data: " + data)
             except Exception:
                 pass
             # write pending data and the camera objects for the main thread poll to pick up
@@ -2554,7 +2596,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
 
     def _on_data_ready(self, data):
         try:
-            print('CameraOverview: on_data_ready called with', data, flush=True)
+            LOGGER.info("CameraOverview: on_data_ready called with " + data)
         except Exception:
             pass
         # Update internal dict for other parts of the app (store camera objects if available)
@@ -2638,7 +2680,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 except Exception:
                     pass
                 self.view.camera_overview.repaint()
-                print('CameraOverview: view updated', flush=True)
+                LOGGER.info("CameraOverview: view updated")
         except Exception:
             logging.exception('Could not update camera overview view after data ready')
 
@@ -2652,9 +2694,8 @@ class CameraOverviewTableModel(QAbstractTableModel):
             finally:
                 self.on_ready_callback = None
 
-        # Show/hide Sony reminder banner in the main view depending on whether
-        # a Sony camera is present. Use vendor attribute when available, else
-        # fall back to camera name containing 'sony'.
+        # Check if a Sony camera is present. Use vendor attribute when available,
+        # else fall back to camera name containing 'sony'.
         try:
             sony_present = False
             pm = getattr(self, 'camera_overview_dict', None)
@@ -2673,16 +2714,14 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     if 'sony' in name:
                         sony_present = True
                         break
-            if hasattr(self, 'view') and getattr(self.view, 'sony_reminder_label', None) is not None:
-                self.view.sony_reminder_label.setVisible(bool(sony_present))
         except Exception:
-            logging.debug('Could not update Sony reminder visibility', exc_info=True)
+            logging.debug('Could not check the presence of a Sony camera', exc_info=True)
 
         # If we have actual camera objects, start the Sony background downloader
         # automatically only when the camera reports PC-Only save destination.
+        # Also, show an informational banner about the relevant settings.
         try:
-            from solareclipseworkbench.camera import get_sony_save_destination
-            if pm:
+            if pm and sony_present:
                 for cam in pm.values():
                     try:
                         if cam is None:
@@ -2695,26 +2734,42 @@ class CameraOverviewTableModel(QAbstractTableModel):
                                 pass
                             continue
                         dest = get_sony_save_destination(cam)
+                        image_quality = get_sony_image_quality(cam)
                         # Start downloader only when destination clearly says
                         # PC-only. If destination is unavailable (common with
                         # localized camera menus), avoid downloading to protect
                         # shot timing.
-                        if sony_save_destination_needs_downloader(dest):
+                        if dest == "sdram":
+                            sony_banner_label_text = getattr(cam, 'name', None) + ": currently saving photos to PC. We recommend testing if 'PC+Camera' mode is faster for you or not."
+                            if image_quality != "RAW":
+                                sony_banner_label_text += " Also, 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
                             try:
                                 cam.start_background_downloader()
                             except Exception:
-                                logging.exception('Failed to start downloader for Sony camera')
-                        else:
+                                logging.exception('Failed to start downloader for: ' + getattr(cam, 'name', None))
+                        elif dest == "card+sdram":
+                            sony_banner_label_text = getattr(cam, 'name', None) + ": currently in 'PC+Camera' mode. We recommend testing if 'PC' mode is faster for you or not."
+                            if not image_quality.startswith("RAW+JPEG"):
+                                sony_banner_label_text += " Also, 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW+JPEG' and in 'PC Remote Settings' please choose 'JPEG Only' for 'RAW+J PC Save Img' option!"
                             try:
                                 cam.stop_background_downloader()
                             except Exception:
                                 pass
+                        else:
+                            if image_quality != "RAW":
+                                sony_banner_label_text = getattr(cam, 'name', None) + ": 'Quality' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                            try:
+                                cam.start_background_downloader()
+                            except Exception:
+                                logging.exception('Failed to start downloader for: ' + getattr(cam, 'name', None))
+                        if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                            sony_banner_label_text += " If this info is wrong or you want to re-check after an update to the settings - just press again the 'Camera(s)' button!"
+                            self.view.sony_banner_label.setVisible(True)
+                            self.view.sony_banner_label.setText(sony_banner_label_text)
                     except Exception:
                         logging.debug('Error while checking Sony save destination', exc_info=True)
         except Exception:
-            logging.debug('Could not auto-start Sony downloader', exc_info=True)
-        except Exception:
-            logging.debug('Could not update Sony reminder visibility', exc_info=True)
+            logging.debug('Could not auto-start Sony downloader and update Sony banner visibility', exc_info=True)
 
     def _try_apply_pending(self):
         """Poll for pending data written by the background worker and apply it on the GUI thread."""
@@ -2940,8 +2995,6 @@ def main():
     console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logging.getLogger().addHandler(console_handler)
     LOGGER.info("Starting up Solar Eclipse Workbench")
-    # Reminder for Sony users: prefer PC+Camera (writes to SD card + RAM)
-    LOGGER.info("Sony users: set 'PC Remote Settings → Save Destination' to 'PC+Camera' (or 'Camera Only') to keep images on the SD card and preserve tight shot timing")
 
     parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")
     parser.add_argument(
