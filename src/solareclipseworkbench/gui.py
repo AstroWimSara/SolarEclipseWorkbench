@@ -2971,7 +2971,6 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             continue
                         dest = get_sony_save_destination(cam)
                         image_quality = get_sony_image_quality(cam)
-                        print(image_quality)
                         # Start downloader only when destination clearly says
                         # PC-only. If destination is unavailable (common with
                         # localized camera menus), avoid downloading to protect
