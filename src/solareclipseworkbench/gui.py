@@ -2975,32 +2975,42 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         # PC-only. If destination is unavailable (common with
                         # localized camera menus), avoid downloading to protect
                         # shot timing.
+                        camera_model = getattr(cam, 'name', None)
                         sony_banner_label_visibility = True
                         if dest == "sdram":
-                            sony_banner_label_text = getattr(cam, 'name', None) + ": currently saving photos to PC. We recommend testing if 'PC+Camera' mode is faster for you or not."
+                            sony_banner_label_text = camera_model + ": currently saving photos to PC. We recommend testing if 'PC+Camera' mode is faster for you or not."
                             if image_quality != "RAW":
                                 sony_banner_label_text += " Also, 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
                             try:
                                 cam.start_background_downloader()
                             except Exception:
-                                logging.exception('Failed to start downloader for: ' + getattr(cam, 'name', None))
+                                logging.exception('Failed to start downloader for: ' + camera_model)
                         elif dest == "card+sdram":
-                            sony_banner_label_text = getattr(cam, 'name', None) + ": currently in 'PC+Camera' mode. We recommend testing if 'PC' mode is faster for you or not."
+                            sony_banner_label_text = camera_model + ": currently in 'PC+Camera' mode. We recommend testing if 'PC' mode is faster for you or not."
                             if not image_quality.startswith("RAW+JPEG"):
                                 sony_banner_label_text += " Also, 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW+JPEG' and in 'PC Remote Settings' please choose 'JPEG Only' for 'RAW+J PC Save Img' option!"
                             try:
                                 cam.stop_background_downloader()
                             except Exception:
                                 pass
+                        elif dest == "card":
+                            if image_quality != "RAW":
+                                sony_banner_label_text = camera_model + ": 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                            else:
+                                sony_banner_label_visibility = False
+                            try:
+                                cam.stop_background_downloader()
+                            except Exception:
+                                pass
                         else:
                             if image_quality != "RAW":
-                                sony_banner_label_text = getattr(cam, 'name', None) + ": 'Quality' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                                sony_banner_label_text = camera_model + ": 'Quality' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
                             else:
                                 sony_banner_label_visibility = False
                             try:
                                 cam.start_background_downloader()
                             except Exception:
-                                logging.exception('Failed to start downloader for: ' + getattr(cam, 'name', None))
+                                logging.exception('Failed to start downloader for: ' + camera_model)
                         if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
                             if sony_banner_label_visibility:
                                 full_text = f"{sony_banner_label_text} If this info is wrong or you want to re-check after an update to the settings - just press again the 'Camera(s)' button!"
