@@ -1118,21 +1118,23 @@ def __adapt_camera_settings(camera, camera_settings):
         elif vendor in ('Nikon', 'Sony'):
             try:
                 f_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number'))
-                # Inspect choices to detect whether widget expects values like 'f/5.6'
-                try:
-                    n_choices = gp.check_result(gp.gp_widget_count_choices(f_widget))
-                    sample = gp.check_result(gp.gp_widget_get_choice(f_widget, 0)) if n_choices > 0 else ''
-                except Exception:
-                    sample = ''
-                ap_val = str(camera_settings.aperture)
-                if isinstance(sample, str) and sample.startswith('f/') and not ap_val.startswith('f/'):
-                    ap_val = f'f/{ap_val}'
-                gp.gp_widget_set_value(f_widget, ap_val)
+                f_actual = str(gp.check_result(gp.gp_widget_get_value(f_widget)))
+                if f_actual != "f/0":
+                    # Inspect choices to detect whether widget expects values like 'f/5.6'
+                    try:
+                        n_choices = gp.check_result(gp.gp_widget_count_choices(f_widget))
+                        sample = gp.check_result(gp.gp_widget_get_choice(f_widget, 0)) if n_choices > 0 else ''
+                    except Exception:
+                        sample = ''
+                    ap_val = str(camera_settings.aperture)
+                    if isinstance(sample, str) and sample.startswith('f/') and not ap_val.startswith('f/'):
+                        ap_val = f'f/{ap_val}'
+                    gp.gp_widget_set_value(f_widget, ap_val)
+                    _set_gp_config(target, config, context)
+                    logging.debug('Set aperture to %s', camera_settings.aperture)
             except gphoto2.GPhoto2Error:
                 # f-number widget absent or not settable — ignore
                 raise
-        _set_gp_config(target, config, context)
-        logging.debug('Set aperture to %s', camera_settings.aperture)
 
         # Read-back check: verify the camera actually applied the requested aperture.
         # Some Sony Alpha bodies (and other cameras) silently accept set_config via PTP
@@ -1148,17 +1150,17 @@ def __adapt_camera_settings(camera, camera_settings):
                 config_rb = gp.check_result(gp.gp_camera_get_config(target, context))
                 widget_name = 'aperture' if vendor == 'Canon' else 'f-number'
                 rb_widget = gp.check_result(gp.gp_widget_get_child_by_name(config_rb, widget_name))
-                actual = str(gp.check_result(gp.gp_widget_get_value(rb_widget)))
+                rb_actual = str(gp.check_result(gp.gp_widget_get_value(rb_widget)))
 
                 def _strip_f(v: str) -> str:
                     return v[2:] if v.startswith('f/') else v
 
-                if _strip_f(actual) != _strip_f(ap_key):
+                if _strip_f(rb_actual) != _strip_f(ap_key):
                     logging.warning(
                         'Aperture read-back mismatch on %s: requested f/%s but camera reports %s. '
                         'The camera may not support remote aperture control via USB — '
                         'set the aperture manually on the lens/camera body.',
-                        cam_key, _strip_f(ap_key), actual)
+                        cam_key, _strip_f(ap_key), rb_actual)
                 # Mark as checked regardless — mismatch or not, no point repeating the warning.
                 _aperture_verified.setdefault(cam_key, set()).add(ap_key)
             except gphoto2.GPhoto2Error:
@@ -1291,16 +1293,9 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         except gphoto2.GPhoto2Error as e:
             logging.warning('Could not reset Nikon burstnumber to 1 after burst: %s', e)
     elif getattr(camera, 'vendor', None) == 'Sony':
-        # Sony burst: enable continuous capture mode, fire N trigger_capture
-        # calls (duration = number of frames), then reset to single-shot mode.
-        # Sony Alpha bodies do not emit GP_EVENT_CAPTURE_COMPLETE, so reusing
-        # _wait_for_capture_complete here adds an unnecessary ~3 s timeout after
-        # every frame.  That stretches a 30-frame C2 burst into ~90 s, causing
-        # nearby scheduled jobs to be dropped by the USB-lock timing guard.
-        # Keep burst handling aligned with the Sony take_picture path instead:
-        # drain stale queued events before each trigger, then drain the short
-        # initial property-change burst without waiting for card-write events.
-        n_frames = max(1, int(round(duration)))
+        # Sony burst: enable continuous capture mode, turn on the bulb,
+        # sleep for the chosen amount of time, turn off the bulb and
+        # lastly drain camera's events
         target = camera._camera if hasattr(camera, '_camera') else camera
 
         # Switch to continuous capture mode — look up the actual choice string so
@@ -1317,19 +1312,19 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         except gphoto2.GPhoto2Error as e:
             logging.warning('Could not set Sony capturemode to Continuous: %s', e)
 
-        # Fire N individually-triggered captures
-        for i in range(n_frames):
-            try:
-                _sony_drain_events(target, context)
-                gp.check_result(gp.gp_camera_trigger_capture(target, context))
-                logging.debug('Sony burst: triggered capture %d/%d', i + 1, n_frames)
-                _drain_camera_events(target, context, timeout_ms=100, max_events=60)
-            except gphoto2.GPhoto2Error as e:
-                logging.warning('Sony burst: capture %d/%d failed: %s', i + 1, n_frames, e)
-                try:
-                    camera.capture(gp.GP_CAPTURE_IMAGE, context)
-                except Exception:
-                    logging.exception('Sony burst: GP_CAPTURE_IMAGE fallback also failed at frame %d', i + 1)
+        try:
+            _sony_drain_events(target, context)
+            bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
+            gp.gp_widget_set_value(bulb_mode, 1)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 1')
+            time.sleep(duration)
+            gp.gp_widget_set_value(bulb_mode, 0)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 0')
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('Sony burst capture failed: %s', e)
 
         # Reset to single-frame mode
         config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
