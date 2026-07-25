@@ -24,9 +24,14 @@ import pandas as pd
 import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QSettings, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
+<<<<<<< HEAD
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
 QMessageBox, QToolButton
+=======
+from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
+    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, QMessageBox, QDialog, QPlainTextEdit, QProgressBar
+>>>>>>> main
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -617,41 +622,17 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview.setFixedHeight(300)
         input_hbox.addWidget(self.camera_overview)
 
-
-        # eclipse_figure = Figure(figsize=(5, 4))
-        # self.eclipse_visualization = FigureCanvas(eclipse_figure)
-        #
-        # self.eclipse_visualization.figure.plot(np.arange(10))
-
-        # pg.setConfigOptions(antialias=True)
-        # self.eclipse_visualization = EclipsePlot()
-
-        # self.eclipse_visualization = pg.PlotWidget(background="w")
-        #
-        # self.eclipse_visualization.setAspectLocked(True, ratio=1)
-        # self.eclipse_visualization.showGrid(x=True, y=True, alpha=0.25)
-        # self.eclipse_visualization.setLabel("left", "North (solar radii)")
-        # self.eclipse_visualization.setLabel("bottom", "East (solar radii)")
-
-        scroll = QScrollArea()
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidgetResizable(True)
-
-        scroll.setWidget(self.jobs_table)
-
         # noinspection SpellCheckingInspection
         output_hbox = QHBoxLayout()
         output_hbox.addWidget(self.eclipse_visualization)
         # output_hbox.addWidget(self.canvas)
-        output_hbox.addWidget(scroll)
+        output_hbox.addWidget(self.jobs_table)
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
         global_layout.addWidget(self.sony_banner_label)
         global_layout.addLayout(input_hbox)
 
-        # global_layout.addWidget(scroll)
         global_layout.addLayout(output_hbox)
 
         app_frame.setLayout(global_layout)
@@ -1181,8 +1162,92 @@ class SolarEclipseController(Observer):
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
-                self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+                # Run reference moments calculation in a background thread and show a
+                # modal dialog with progress and a live log view while ephemeris files
+                # (de440s/de421) are downloaded. Capture stdout/stderr into the dialog
+                # so the user sees progress in the GUI instead of the terminal.
+                dialog = QDialog(self.view)
+                dialog.setWindowTitle("Downloading")
+                dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+                dlg_layout = QVBoxLayout(dialog)
+
+                # Compact dialog: label + indeterminate progress bar
+                progress_bar = QProgressBar()
+                progress_bar.setRange(0, 0)  # indeterminate
+                dlg_layout.addWidget(progress_bar)
+
+                label = QLabel("Loading helper files...")
+                dlg_layout.addWidget(label)
+
+                dialog.setLayout(dlg_layout)
+
+                result_container = {}
+
+                class _DevNull:
+                    def write(self, s):
+                        return
+
+                    def flush(self):
+                        return
+
+                def worker():
+                    old_out = sys.stdout
+                    old_err = sys.stderr
+                    sys.stdout = _DevNull()
+                    sys.stderr = _DevNull()
+                    import logging
+                    root_logger = logging.getLogger()
+                    old_handlers = list(root_logger.handlers)
+                    old_level = root_logger.level
+                    try:
+                        root_logger.handlers = []
+                        rm, mag, typ = self.model.get_reference_moments()
+                        result_container["result"] = (rm, mag, typ)
+                    except Exception:
+                        import traceback
+
+                        result_container["error"] = traceback.format_exc()
+                    finally:
+                        sys.stdout = old_out
+                        sys.stderr = old_err
+                        root_logger.handlers = old_handlers
+                        root_logger.setLevel(old_level)
+
+                th = threading.Thread(target=worker, daemon=True)
+
+                # Show dialog immediately so it is visible before downloads start.
+                try:
+                    dialog.show()
+                    QApplication.processEvents()
+                except Exception:
+                    pass
+
+                logging.getLogger(__name__).debug("Starting GUI reference-moments worker thread")
+
+                th.start()
+
+                timer = QTimer(dialog)
+
+                def pump_logs_and_check():
+                    if not th.is_alive():
+                        timer.stop()
+                        dialog.accept()
+
+                timer.timeout.connect(pump_logs_and_check)
+                timer.start(100)
+
+                dialog.exec()
+
+                if "error" in result_container:
+                    LOGGER.exception("Error while calculating reference moments")
+                    QMessageBox.critical(
+                        self.view,
+                        "Reference moments failed",
+                        f"Error calculating reference moments:\n{result_container['error']}"
+                    )
+                else:
+                    rm, mag, typ = result_container["result"]
+                    self.view.show_reference_moments(rm, mag, typ)
 
         elif text == "Camera(s)":
             logging.debug('User requested Camera(s) update')
@@ -1418,10 +1483,17 @@ class SolarEclipseController(Observer):
         # Reference moments
 
         if is_location_loaded and is_eclipse_date_loaded:
+            # Defer reference-moments calculation so the main window can appear
+            # before any potential ephemeris downloads. Schedule it on the
+            # Qt event loop to run after the UI has been shown.
             try:
-                self.set_reference_moments()
-            except AttributeError:
-                pass
+                QTimer.singleShot(0, self.set_reference_moments)
+            except Exception:
+                # Fall back to synchronous call if scheduling fails for any reason
+                try:
+                    self.set_reference_moments()
+                except Exception:
+                    pass
 
     def set_datetime_format(self, date_format: str, time_format: str):
         """ Set the date and time format in the view. """
@@ -1480,9 +1552,91 @@ class SolarEclipseController(Observer):
 
     def set_reference_moments(self):
         """ Set the reference moments of the eclipse in the model and the view."""
+        # Run the possibly-slow calculation in a background thread while showing a
+        # compact modal dialog so the user sees that helper files are being loaded.
+        dialog = QDialog(self.view)
+        dialog.setWindowTitle("Loading helper files...")
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg_layout = QVBoxLayout(dialog)
 
-        reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
-        self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)  # indeterminate
+        dlg_layout.addWidget(progress_bar)
+
+        label = QLabel("Loading helper files...")
+        dlg_layout.addWidget(label)
+
+        dialog.setLayout(dlg_layout)
+
+        result_container = {}
+
+        class _DevNull:
+            def write(self, s):
+                return
+
+            def flush(self):
+                return
+
+        def worker():
+            old_out = sys.stdout
+            old_err = sys.stderr
+            sys.stdout = _DevNull()
+            sys.stderr = _DevNull()
+            import logging
+            root_logger = logging.getLogger()
+            old_handlers = list(root_logger.handlers)
+            old_level = root_logger.level
+            try:
+                # Prevent external libraries from printing to terminal while
+                # downloads happen.
+                root_logger.handlers = []
+                reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
+                result_container["result"] = (reference_moments, magnitude, eclipse_type)
+            except Exception:
+                import traceback
+
+                result_container["error"] = traceback.format_exc()
+            finally:
+                sys.stdout = old_out
+                sys.stderr = old_err
+                root_logger.handlers = old_handlers
+                root_logger.setLevel(old_level)
+
+        th = threading.Thread(target=worker, daemon=True)
+
+        # Show dialog immediately so it is visible before downloads start.
+        try:
+            dialog.show()
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+        LOGGER.debug("Starting reference-moments worker thread (controller)")
+
+        th.start()
+
+        timer = QTimer(dialog)
+
+        def pump_and_close():
+            if not th.is_alive():
+                timer.stop()
+                dialog.accept()
+
+        timer.timeout.connect(pump_and_close)
+        timer.start(100)
+
+        dialog.exec()
+
+        if "error" in result_container:
+            LOGGER.exception("Error while calculating reference moments")
+            QMessageBox.critical(
+                self.view,
+                "Reference moments failed",
+                f"Error calculating reference moments:\n{result_container['error']}"
+            )
+        else:
+            reference_moments, magnitude, eclipse_type = result_container["result"]
+            self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
 
     def _shutdown_scheduler(self):
         """Safely shut down the scheduler and update UI."""
@@ -1913,17 +2067,11 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
         self.offset = datetime.timedelta(minutes=0)
 
-        # self.east_left = bool(east_left)
-
-        # --- Lazy-load ephemerides and timescale (shared) ---
-        if EclipsePlotWidget.CACHED_TIMESCALE is None:
-            EclipsePlotWidget.CACHED_TIMESCALE = load.timescale()
-        if EclipsePlotWidget.CACHED_EPHEMERIDES is None:
-            # de440s: modern, compact; Skyfield caches it in ~/.cache/skyfield
-            EclipsePlotWidget.CACHED_EPHEMERIDES = load("de440s.bsp")
-
-        self.sun_ephemeris = self.CACHED_EPHEMERIDES["sun"]
-        self.moon_ephemeris = self.CACHED_EPHEMERIDES["moon"]
+        # Defer loading of Skyfield ephemerides until the plot is actually used.
+        # Loading can take time and may download large files; avoid doing that
+        # during UI construction so the main window can appear immediately.
+        self.sun_ephemeris = None
+        self.moon_ephemeris = None
 
         # --- Matplotlib figure canvas inside this QWidget ---
         self.fig = Figure(figsize=(6.0, 6.2), dpi=100)
@@ -1954,6 +2102,94 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
         self.is_location_set = True
 
+    def _ensure_ephemerides_loaded(self):
+        """Ensure shared Skyfield ephemerides and timescale are loaded.
+
+        This is intentionally called lazily from `plot()` so the GUI can
+        appear before any potential downloads start.
+        """
+        if EclipsePlotWidget.CACHED_TIMESCALE is not None and EclipsePlotWidget.CACHED_EPHEMERIDES is not None:
+            # Already loaded
+            self.sun_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["sun"]
+            self.moon_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["moon"]
+            return
+
+        # Show a compact modal dialog while we load ephemerides in background.
+        parent = self.window() if self.window() is not None else self
+        dialog = QDialog(parent)
+        dialog.setWindowTitle("Loading helper files...")
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg_layout = QVBoxLayout(dialog)
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)
+        dlg_layout.addWidget(progress_bar)
+        label = QLabel("Loading helper files...")
+        dlg_layout.addWidget(label)
+        dialog.setLayout(dlg_layout)
+
+        result = {}
+
+        class _DevNull:
+            def write(self, s):
+                return
+
+            def flush(self):
+                return
+
+        def worker():
+            old_out = sys.stdout
+            old_err = sys.stderr
+            sys.stdout = _DevNull()
+            sys.stderr = _DevNull()
+            import logging
+            root_logger = logging.getLogger()
+            old_handlers = list(root_logger.handlers)
+            old_level = root_logger.level
+            try:
+                # Temporarily remove handlers to avoid terminal noise
+                root_logger.handlers = []
+                if EclipsePlotWidget.CACHED_TIMESCALE is None:
+                    EclipsePlotWidget.CACHED_TIMESCALE = load.timescale()
+                if EclipsePlotWidget.CACHED_EPHEMERIDES is None:
+                    EclipsePlotWidget.CACHED_EPHEMERIDES = load("de440s.bsp")
+                result['ok'] = True
+            except Exception:
+                import traceback
+
+                result['error'] = traceback.format_exc()
+            finally:
+                sys.stdout = old_out
+                sys.stderr = old_err
+                root_logger.handlers = old_handlers
+                root_logger.setLevel(old_level)
+
+        th = threading.Thread(target=worker, daemon=True)
+
+        try:
+            dialog.show()
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+        th.start()
+
+        timer = QTimer(dialog)
+
+        def poll():
+            if not th.is_alive():
+                timer.stop()
+                dialog.accept()
+                if 'error' in result:
+                    raise Exception(result['error'])
+                # Populate instance references
+                self.sun_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["sun"]
+                self.moon_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["moon"]
+
+        timer.timeout.connect(poll)
+        timer.start(100)
+
+        dialog.exec()
+
     # ------------- Public API -------------
 
     def set_offset(self, offset):
@@ -1970,6 +2206,9 @@ class EclipsePlotWidget(QtWidgets.QWidget):
         """
 
         when += self.offset
+
+        # Ensure ephemerides are loaded lazily to avoid blocking UI startup.
+        self._ensure_ephemerides_loaded()
 
         if not self.is_location_set:
             LOGGER.info("Location not set. Please use set_location() first.")
@@ -3078,10 +3317,14 @@ def main():
     if args.date:
         controller.set_eclipse_date(args.date, date_format=None)
 
-    if args.longitude and args.latitude and args.altitude and args.date:
-        controller.set_reference_moments()
-
+    # Show the main window first, then schedule reference-moments calculation so
+    # the loading dialog is shown on top of the visible GUI if helper files
+    # need to be downloaded.
     view.show()
+
+    if args.longitude and args.latitude and args.altitude and args.date:
+        # Schedule after the event loop starts so the main window is painted.
+        QTimer.singleShot(0, controller.set_reference_moments)
 
     return app.exec()
 

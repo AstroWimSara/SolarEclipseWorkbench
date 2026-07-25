@@ -483,7 +483,8 @@ def calculate_eclipse_exposures(
     observer_altitude_m: float,
     iso: int,
     aperture: float,
-    nd_filter: Optional[float] = None
+    nd_filter: Optional[float] = None,
+    timings: Optional[dict] = None
 ) -> Dict[str, Dict[str, any]]:
     """
     Calculate optimal exposures for all eclipse phenomena based on location and camera settings.
@@ -505,13 +506,14 @@ def calculate_eclipse_exposures(
             ...
         }
     """
-    if not HAS_REFERENCE_MOMENTS:
-        raise ImportError("reference_moments module not available")
-    
-    # Calculate reference moments to get sun altitudes at key times
-    timings, magnitude, eclipse_type = calculate_reference_moments(
-        longitude, latitude, observer_altitude_m, eclipse_time
-    )
+    # If reference moments are required but not provided, compute them.
+    if timings is None:
+        if not HAS_REFERENCE_MOMENTS:
+            raise ImportError("reference_moments module not available")
+        # Calculate reference moments to get sun altitudes at key times
+        timings, magnitude, eclipse_type = calculate_reference_moments(
+            longitude, latitude, observer_altitude_m, eclipse_time
+        )
     
     exposures = {}
     
