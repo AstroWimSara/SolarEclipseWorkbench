@@ -10,6 +10,9 @@ from datetime import datetime
 import os
 
 from gphoto2 import Camera
+from abc import ABC, abstractmethod
+from typing import Any, Tuple, Optional
+from solareclipseworkbench import configuration
 
 
 class CameraError(Exception):
@@ -79,10 +82,6 @@ class CameraSettings:
         self.shutter_speed = shutter_speed
         self.aperture = _normalise_aperture(str(aperture))
         self.iso = iso
-
-
-from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional
 
 
 class BaseCamera(ABC):
@@ -534,24 +533,39 @@ def _find_closest_shutter_choice(widget, target_speed: str) -> Optional[str]:
     return best_choice
 
 
-def _find_capturemode_choice(widget, want_continuous: bool = False) -> Optional[str]:
+def _find_capturemode_choice(
+    widget,
+    want_continuous: bool = False,
+    custom_keyword: Optional[str] = None,
+) -> Optional[str]:
     """Return the choice string for single or continuous capture mode.
 
     Scans all available choices of the ``capturemode`` widget and returns the
-    first one whose label contains 'single' (or 'continuous' when
-    *want_continuous* is True).  Returns None when no matching choice is found,
-    so the caller can skip setting the widget rather than sending an invalid
-    value that would cause the entire set_config transaction to fail.
+    first one whose label contains *custom_keyword* (if provided), falling back
+    to 'single' (or 'continuous' when *want_continuous* is True) if no match is
+    found. Returns None when no matching choice is found.
     """
-    keyword = 'continuous' if want_continuous else 'single'
+    keyword = (
+        custom_keyword
+        if custom_keyword is not None
+        else ("continuous" if want_continuous else "single")
+    )
+
     try:
         n = gp.check_result(gp.gp_widget_count_choices(widget))
         for i in range(n):
             choice = gp.check_result(gp.gp_widget_get_choice(widget, i))
-            if keyword in choice.lower():
+            if keyword.lower() in choice.lower():
                 return choice
     except gphoto2.GPhoto2Error:
         pass
+
+    # If a custom keyword was provided and yielded no match, re-run with default logic
+    if custom_keyword is not None:
+        return _find_capturemode_choice(
+            widget, want_continuous=want_continuous, custom_keyword=None
+        )
+
     return None
 
 
@@ -1304,7 +1318,7 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         # we never send an invalid value that would cause set_config to fail.
         try:
             capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
-            continuous_choice = _find_capturemode_choice(capture_mode, want_continuous=True)
+            continuous_choice = _find_capturemode_choice(capture_mode, want_continuous=True, custom_keyword=configuration.SONY_CONTINUOUS_MODE)
             if continuous_choice is not None:
                 gp.gp_widget_set_value(capture_mode, continuous_choice)
                 _set_gp_config(camera, config, context)
@@ -2345,6 +2359,7 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
     Returns:
         Dict mapping camera name/alias → BaseCamera adapter.
     """
+    print(configuration.SONY_CONTINUOUS_MODE)
     if is_simulator:
         # Return a single VirtualCamera for simulator mode
         vc = VirtualCamera()

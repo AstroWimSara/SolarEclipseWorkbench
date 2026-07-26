@@ -48,6 +48,7 @@ from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget
 from solareclipseworkbench.constants import SUN_RADIUS, MOON_RADIUS
+from solareclipseworkbench import configuration
 
 ICON_PATH = Path(__file__).parent.resolve() / "img"
 
@@ -3322,8 +3323,14 @@ def main():
         default=False,
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "-scm",
+        "--sony-cont-mode",
+        help="Specify continuous mode name for Sony cameras"
+    )
 
+    args = parser.parse_args()
+    configuration.SONY_CONTINUOUS_MODE = args.sony_cont_mode
     # args[1:1] = ["-stylesheet", str(styles_location)]
     app = QApplication(list(sys.argv))
     apply_system_color_scheme(app)
