@@ -1326,20 +1326,6 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         except gphoto2.GPhoto2Error as e:
             logging.warning('Sony burst capture failed: %s', e)
 
-        # Reset to single-frame mode
-        config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
-        try:
-            capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'capturemode'))
-            single_choice = _find_capturemode_choice(capture_mode_reset, want_continuous=False)
-            if single_choice is not None:
-                gp.gp_widget_set_value(capture_mode_reset, single_choice)
-                _set_gp_config(camera, config_reset, context)
-                logging.debug('Reset Sony capturemode to "%s" after burst', single_choice)
-            else:
-                logging.debug('Sony capturemode: no "single" choice found for reset after burst')
-        except gphoto2.GPhoto2Error as e:
-            logging.warning('Could not reset Sony capturemode to Single after burst: %s', e)
-
 
 def _parse_bracket_steps(steps: str) -> int:
     """Parse a bracket steps string to the number of 1/3-stop index increments.
@@ -1560,20 +1546,6 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except gphoto2.GPhoto2Error as e:
             logging.warning('Sony burst capture failed: %s', e)
-
-        # Reset to single-frame mode
-        config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
-        try:
-            capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'capturemode'))
-            single_choice = _find_capturemode_choice(capture_mode_reset, want_continuous=False)
-            if single_choice is not None:
-                gp.gp_widget_set_value(capture_mode_reset, single_choice)
-                _set_gp_config(camera, config_reset, context)
-                logging.debug('Reset Sony capturemode to "%s" after bracketing', single_choice)
-            else:
-                logging.debug('Sony capturemode: no "single" choice found for reset after burst')
-        except gphoto2.GPhoto2Error as e:
-            logging.warning('Could not reset Sony capturemode to Single after burst: %s', e)
 
 
 def _parse_shutter_speed_seconds(speed_str: str) -> float:
