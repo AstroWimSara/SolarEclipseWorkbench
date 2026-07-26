@@ -1094,13 +1094,15 @@ def __adapt_camera_settings(camera, camera_settings):
             logging.warning('Could not set closest shutter speed: %s', e2)
 
     # Always save to the camera's memory card, never to the computer.
-    # This must be re-asserted on every shot because some cameras (notably Sony Alpha
-    # via PTP) reset capturetarget to 'Internal RAM' when the USB session is re-used.
+    # This must be re-asserted on every shot because some cameras reset
+    # capturetarget to 'Internal RAM' when the USB session is re-used.
+    # Skip Sony cameras, as this option is set in stone once USB is connected
     try:
-        capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-        card_value = _find_memory_card_choice(capture_target_w)
-        gp.gp_widget_set_value(capture_target_w, card_value)
-        logging.debug('Asserted capturetarget="%s" before capture', card_value)
+        if not _is_sony_camera_instance(camera):
+            capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            card_value = _find_memory_card_choice(capture_target_w)
+            gp.gp_widget_set_value(capture_target_w, card_value)
+            logging.debug('Asserted capturetarget="%s" before capture', card_value)
     except gphoto2.GPhoto2Error:
         pass  # Widget absent on some cameras — the init-time setting is sufficient
 
@@ -1831,15 +1833,17 @@ def get_camera(camera_name: str):
 
     # Post-init configuration (capture target, drive mode)
     try:
-        # find the capture target config item (to save to the memory card)
         config = gp.check_result(gp.gp_camera_get_config(camera, context))
-        capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-        # set value — search for the memory-card entry by name, not by blind index
-        value = _find_memory_card_choice(capture_target)
-        gp.gp_widget_set_value(capture_target, value)
-        logging.debug('Set capturetarget to "%s" for %s', value, camera_name)
-        # set config
-        gp.gp_camera_set_config(camera, config, context)
+        # Skip Sony cameras, as this option is set in stone once USB is connected
+        if not _is_sony_camera_instance(camera):
+            # find the capture target config item (to save to the memory card)
+            capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            # set value — search for the memory-card entry by name, not by blind index
+            value = _find_memory_card_choice(capture_target)
+            gp.gp_widget_set_value(capture_target, value)
+            logging.debug('Set capturetarget to "%s" for %s', value, camera_name)
+            # set config
+            gp.gp_camera_set_config(camera, config, context)
 
         # Try to set the drivemode to Continuous high speed (for cameras that support it)
         # Note: Not all cameras have this widget (e.g., Nikon Z-series mirrorless cameras)
@@ -1917,12 +1921,14 @@ def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) 
     # Post-init configuration (capture target, drive mode)
     try:
         config = gp.check_result(gp.gp_camera_get_config(camera, context))
-        capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-        # search for the memory-card entry by name, not by blind index
-        value = _find_memory_card_choice(capture_target)
-        gp.gp_widget_set_value(capture_target, value)
-        logging.debug('Set capturetarget to "%s" for %s', value, display_name)
-        gp.gp_camera_set_config(camera, config, context)
+        # Skip Sony cameras, as this option is set in stone once USB is connected
+        if not _is_sony_camera_instance(camera):
+            capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            # search for the memory-card entry by name, not by blind index
+            value = _find_memory_card_choice(capture_target)
+            gp.gp_widget_set_value(capture_target, value)
+            logging.debug('Set capturetarget to "%s" for %s', value, display_name)
+            gp.gp_camera_set_config(camera, config, context)
 
         try:
             drive_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
