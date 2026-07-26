@@ -42,7 +42,7 @@ import threading
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
 get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, get_sony_save_destination, \
-get_sony_image_quality
+get_sony_image_quality, _is_sony_camera_instance
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -2770,65 +2770,95 @@ class CameraOverviewTableModel(QAbstractTableModel):
         QTimer.singleShot(200, self._try_apply_pending)
 
     def _gather_camera_info(self):
-        try:
-            is_sim = getattr(self.view, 'is_simulator', False) and getattr(self.view, 'virtual_camera_enabled', False)
-            vc_fps = getattr(self.view, 'virtual_camera_fps', 1)
-            # Reuse existing camera objects if available to avoid opening a new USB
-            # connection while a previous connection (e.g. from take_picture) is still held.
-            existing_map = getattr(self, 'camera_overview_dict', None)
-            if existing_map and all(v is not None for v in existing_map.values()):
-                camera_dict = existing_map
-                logging.debug('CameraOverview: reusing %d existing camera object(s)', len(camera_dict))
-            else:
-                alias_map = ConfigManager().get_camera_aliases() or None
-                camera_dict = get_camera_dict(is_simulator=is_sim, alias_map=alias_map)
+        max_retries = 2
+        attempt = 0
 
-            data = []
-            seen_camera_ids: set = set()
-            for camera_name, camera in camera_dict.items():
-                # Skip bare-key aliases that point to the same physical camera object
-                # already added under its full gphoto2 name (e.g. "Sony Alpha-A7r II"
-                # is a duplicate of "Sony Alpha-A7r II (Control)").
-                cam_id = id(camera)
-                if cam_id in seen_camera_ids:
-                    logging.debug('Worker: skipping duplicate alias "%s" (same camera object)', camera_name)
-                    continue
-                seen_camera_ids.add(cam_id)
-                try:
-                    logging.debug('Worker: processing camera %s', camera_name)
-                    battery_level = get_battery_level(camera).rstrip('%')
-                    free_space_gb = get_free_space(camera)
-                    total_space = get_space(camera)
-                    if free_space_gb < 0 or total_space <= 0:
-                        free_space_gb_str = 'N/A'
-                        free_space_pct_str = 'N/A'
-                    else:
-                        free_space_gb_str = str(free_space_gb)
-                        free_space_pct_str = str(int(free_space_gb / total_space * 100))
-                    data.append([camera_name, str(battery_level), free_space_gb_str, free_space_pct_str])
-                except Exception:
-                    logging.exception('Worker: exception while processing camera %s', camera_name)
-                    # Preserve the camera row with N/A values when probing fails so
-                    # the camera does not disappear from the UI.
+        while attempt < max_retries:
+            try:
+                is_sim = getattr(self.view, 'is_simulator', False) and getattr(self.view, 'virtual_camera_enabled', False)
+                vc_fps = getattr(self.view, 'virtual_camera_fps', 1)
+
+                # Reuse existing camera objects if available to avoid opening a new USB
+                # connection while a previous connection (e.g. from take_picture) is still held.
+                existing_map = getattr(self, 'camera_overview_dict', None)
+                force_refresh = getattr(self, '_force_camera_refresh', False)
+
+                if force_refresh or not existing_map or not all(v is not None for v in existing_map.values()):
+                    if force_refresh:
+                        logging.info(f"CameraOverview: forcing fresh detection (attempt {attempt+1})")
+                        self._force_camera_refresh = False
+
+                    alias_map = ConfigManager().get_camera_aliases() or None
+                    camera_dict = get_camera_dict(is_simulator=is_sim, alias_map=alias_map)
+                    logging.debug('CameraOverview: fresh camera detection performed')
+                else:
+                    camera_dict = existing_map
+                    logging.debug('CameraOverview: reusing %d existing camera object(s)', len(camera_dict))
+
+                data = []
+                seen_camera_ids: set = set()
+                needs_refresh = False
+
+                for camera_name, camera in camera_dict.items():
+                    # Skip bare-key aliases that point to the same physical camera object
+                    # already added under its full gphoto2 name (e.g. "Sony Alpha-A7r II"
+                    # is a duplicate of "Sony Alpha-A7r II (Control)").
+                    cam_id = id(camera)
+                    if cam_id in seen_camera_ids:
+                        logging.debug('Worker: skipping duplicate alias "%s" (same camera object)', camera_name)
+                        continue
+                    seen_camera_ids.add(cam_id)
                     try:
-                        data.append([camera_name, 'N/A', 'N/A', 'N/A'])
-                    except Exception:
-                        pass
+                        logging.debug('Worker: processing camera %s', camera_name)
+                        battery_level = get_battery_level(camera).rstrip('%')
+                        free_space_gb = get_free_space(camera)
+                        total_space = get_space(camera)
+                        if free_space_gb < 0 or total_space <= 0:
+                            free_space_gb_str = 'N/A'
+                            free_space_pct_str = 'N/A'
+                        else:
+                            free_space_gb_str = str(free_space_gb)
+                            free_space_pct_str = str(int(free_space_gb / total_space * 100))
+                        data.append([camera_name, str(battery_level), free_space_gb_str, free_space_pct_str])
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if any(x in error_str for x in ['-52', '-2', 'could not find the requested device', 'bad parameters']):
+                            logging.warning(f"Stale camera connection detected on {camera_name} ({e})")
+                            needs_refresh = True
+                            self._force_camera_refresh = True
+                        # Preserve the camera row with N/A values when probing fails so
+                        # the camera does not disappear from the UI.
+                        try:
+                            data.append([camera_name, 'N/A', 'N/A', 'N/A'])
+                        except Exception:
+                            pass
+                        continue
+
+                # If we hit critical errors, retry once with fresh objects
+                if needs_refresh and attempt == 0:
+                    logging.info("Critical USB errors detected - resetting camera_overview_dict and retrying...")
+                    self.camera_overview_dict = None
+                    attempt += 1
                     continue
-            # schedule UI update on main thread
-            try:
-                LOGGER.info("Worker: gathered camera overview data: " + data)
+
+                # schedule UI update on main thread
+                try:
+                    LOGGER.info("Worker: gathered camera overview data: " + data)
+                except Exception:
+                    pass
+                # write pending data and the camera objects for the main thread poll to pick up
+                try:
+                    self._pending_data = data
+                    # keep the mapping of camera name -> camera object for later actions
+                    self._pending_camera_map = camera_dict
+                except Exception:
+                    logging.exception('Worker: could not set pending data')
+                break
             except Exception:
-                pass
-            # write pending data and the camera objects for the main thread poll to pick up
-            try:
-                self._pending_data = data
-                # keep the mapping of camera name -> camera object for later actions
-                self._pending_camera_map = camera_dict
-            except Exception:
-                logging.exception('Worker: could not set pending data')
-        except Exception:
-            logging.exception('Worker: failed to gather camera info')
+                logging.exception('Worker: failed to gather camera info')
+                attempt += 1
+                if attempt >= max_retries:
+                    break
 
     def _on_data_ready(self, data):
         try:
@@ -2937,17 +2967,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
             pm = getattr(self, 'camera_overview_dict', None)
             if pm:
                 for cam in pm.values():
-                    if cam is None:
-                        # fallback to names in data rows
-                        break
-                    if getattr(cam, 'vendor', None) == 'Sony':
-                        sony_present = True
-                        break
-            if not sony_present:
-                # fallback: check camera names from the table rows
-                for row in data:
-                    name = str(row[0]).lower()
-                    if 'sony' in name:
+                    if cam is not None and _is_sony_camera_instance(cam):
                         sony_present = True
                         break
         except Exception:

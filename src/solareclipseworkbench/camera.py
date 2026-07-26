@@ -2030,59 +2030,7 @@ def get_free_space(camera: Camera) -> float:
                 'Camera %s does not expose storage info via PTP (Sony -1); returning -1.0',
                 getattr(camera, 'name', str(camera)))
             return -1.0
-        # Error -53 means the OS has reclaimed the USB device (common on macOS when
-        # ptpcamerad / Image Capture grabs the camera after gphoto2 releases it).
-        if getattr(e, 'code', None) == -53:
-            cached = getattr(camera, '_cached_free_space', None)
-            if cached is not None:
-                # Camera was working before; return the last known value.
-                logging.debug(
-                    'Camera %s USB reclaimed by OS (-53), returning cached free space %.1f GB',
-                    getattr(camera, 'name', str(camera)), cached)
-                return cached
-            # No cached value: this is the very first poll.  Attempt one reinitialisation —
-            # on Sony in PC Remote mode gphoto2 can reclaim the device from ptpcamerad
-            # because the camera keeps its side of the PTP session open.
-            logging.warning(
-                'Camera %s: free-space query hit -53 with no prior cache; attempting reinit',
-                getattr(camera, 'name', str(camera)))
-            try:
-                if hasattr(camera, 'name'):
-                    new_cam = get_camera(camera.name)
-                    result = round(new_cam.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
-                    try:
-                        camera._cached_free_space = result
-                    except Exception:
-                        pass
-                    return result
-            except Exception:
-                logging.warning('Reinit also failed for free-space query on %s; returning -1.0',
-                                getattr(camera, 'name', str(camera)))
-            return -1.0
-        # For other errors, try to reinitialise the camera once and retry
-        try:
-            if hasattr(camera, 'name'):
-                logging.info('Reinitialising camera %s to retry storage query', camera.name)
-                new_cam = get_camera(camera.name)
-                try:
-                    return round(new_cam.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
-                except gphoto2.GPhoto2Error:
-                    # Try lower level gp call with explicit context
-                    try:
-                        ctx = gp.gp_context_new()
-                        stor = gp.check_result(gp.gp_camera_get_storageinfo(new_cam._camera if hasattr(new_cam, '_camera') else new_cam, ctx))
-                        return round(stor[0].freekbytes / 1024 / 1024, 1)
-                    except Exception:
-                        raise
-        except Exception:
-            logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-        # If recovery failed, propagate the original error so caller can handle it
-        try:
-            ctx = gp.gp_context_new()
-            stor = gp.check_result(gp.gp_camera_get_storageinfo(camera._camera if hasattr(camera, '_camera') else camera, ctx))
-            return round(stor[0].freekbytes / 1024 / 1024, 1)
-        except Exception:
-            raise CameraError(f"Could not read storage info for {getattr(camera, 'name', camera)}: {e}") from e
+        raise CameraError(f"Could not read storage info for {getattr(camera, 'name', camera)}: {e}") from None
     except IndexError:
         # get_storageinfo() returned an empty list — common on Sony via PTP during
         # the initial handshake or when ptpcamerad briefly relinquishes the device.
@@ -2131,38 +2079,7 @@ def get_space(camera: Camera) -> float:
                 'Camera %s does not expose storage capacity via PTP (Sony -1); returning -1.0',
                 getattr(camera, 'name', str(camera)))
             return -1.0
-        # Error -53: OS reclaimed the USB device (macOS ptpcamerad / Image Capture).
-        # Return previously cached value if available.
-        if getattr(e, 'code', None) == -53:
-            cached = getattr(camera, '_cached_total_space', -1.0)
-            logging.debug(
-                'Camera %s USB reclaimed by OS (-53), returning cached total space %.1f GB',
-                getattr(camera, 'name', str(camera)), cached)
-            return cached
-        logging.warning('gphoto2 error reading capacity for %s: %s', getattr(camera, 'name', str(camera)), e)
-        # Try to reinitialise the camera once and retry
-        try:
-            if hasattr(camera, 'name'):
-                logging.info('Reinitialising camera %s to retry capacity query', camera.name)
-                new_cam = get_camera(camera.name)
-                try:
-                    return round(new_cam.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)
-                except gphoto2.GPhoto2Error:
-                    try:
-                        ctx = gp.gp_context_new()
-                        stor = gp.check_result(gp.gp_camera_get_storageinfo(new_cam._camera if hasattr(new_cam, '_camera') else new_cam, ctx))
-                        return round(stor[0].capacitykbytes / 1024 / 1024, 1)
-                    except Exception:
-                        raise
-        except Exception:
-            logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-        # If recovery failed, propagate the original error so caller can handle it
-        try:
-            ctx = gp.gp_context_new()
-            stor = gp.check_result(gp.gp_camera_get_storageinfo(camera._camera if hasattr(camera, '_camera') else camera, ctx))
-            return round(stor[0].capacitykbytes / 1024 / 1024, 1)
-        except Exception:
-            raise CameraError(f"Could not read storage capacity for {getattr(camera, 'name', camera)}: {e}") from e
+        raise CameraError(f"Could not read storage capacity for {getattr(camera, 'name', camera)}: {e}") from None
     except IndexError:
         # get_storageinfo() returned an empty list — camera not yet ready to report storage.
         cached = getattr(camera, '_cached_total_space', None)
@@ -2266,24 +2183,7 @@ def get_battery_level(camera: Camera) -> str:
             return 'AC'
         return str(value)
     except gphoto2.GPhoto2Error as e:
-        if getattr(e, 'code', None) == -53:
-            # -53: another process (e.g. ptpcamerad on macOS) has reclaimed the USB device.
-            # Attempt one reinitialisation — on Sony in PC Remote mode gphoto2 can win the
-            # device back because the camera keeps its side of the PTP session open.
-            logging.debug('Camera %s busy (USB claimed, -53); attempting reinit for battery read',
-                          getattr(camera, 'name', str(camera)))
-            try:
-                if hasattr(camera, 'name'):
-                    new_cam = get_camera(camera.name)
-                    return new_cam.get_config().get_child_by_name('batterylevel').get_value()
-            except Exception:
-                logging.debug('Reinit also failed for battery read on %s; returning Unknown',
-                              getattr(camera, 'name', str(camera)))
-        else:
-            logging.warning('gphoto2 error reading battery level for %s: %s',
-                            getattr(camera, 'name', str(camera)), e)
-        # Return unknown battery level to avoid crashing the UI
-        return "Unknown"
+        raise CameraError(f"Could not read battery level for {getattr(camera, 'name', camera)}: {e}") from None
     except Exception:
         # VirtualCamera and other non-gphoto cameras don't expose battery info
         if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
