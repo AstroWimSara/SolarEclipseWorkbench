@@ -8,7 +8,6 @@ import gphoto2
 import gphoto2 as gp
 from datetime import datetime
 import os
-import re
 
 from gphoto2 import Camera
 
@@ -1390,7 +1389,8 @@ def calculate_bracket_exposures(bracket_str: str, base_shutter_speed: str | floa
     all shot durations and the total execution time.
     """
     # 1. Extract EV step size and number of pictures
-    match = re.search(r"Bracketing C (\d+\.\d+) Steps (\d+) Pictures", bracket_str)
+    import re as _re
+    match = _re.search(r"(\d+\.\d+).+?(\d+)", bracket_str)
     if not match:
         raise ValueError(f"Invalid bracketing string format: '{bracket_str}'")
 
