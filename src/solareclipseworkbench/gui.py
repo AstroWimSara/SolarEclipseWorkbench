@@ -53,8 +53,9 @@ from solareclipseworkbench import configuration
 ICON_PATH = Path(__file__).parent.resolve() / "img"
 
 TIME_FORMATS = {
-    "24 hours": "%H:%M:%S",
-    "12 hours": "%I:%M:%S"}
+    "24 hours": "%H:%M:%S.%f",
+    "12 hours": "%I:%M:%S.%f"
+}
 
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
@@ -2669,19 +2670,19 @@ def format_countdown(countdown: datetime.timedelta):
 
 
 def format_time(time: datetime.datetime, time_format: str) -> str:
-    """ Format the given time according to the given time format.
+    """Format the given time according to the given time format."""
 
-    Args:
-        - time: Time as datetime
+    # Format with standard strftime (includes 6 digits of microseconds)
+    formatted = time.strftime(TIME_FORMATS[time_format])
 
-    Returns: Formatted time, according to the given time format.
-    """
+    # Slice off the last 5 digits of %f, leaving 1 decimal place (.f)
+    formatted = formatted[:-5]
 
     suffix = ""
     if time_format == "12 hours":
         suffix = " am" if time.hour < 12 else " pm"
 
-    return f"{datetime.datetime.strftime(time, TIME_FORMATS[time_format])}{suffix}"
+    return f"{formatted}{suffix}"
 
 
 class CameraOverviewTableColumnNames(Enum):
