@@ -2751,7 +2751,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
         """ Update the camera overview. """
         logging.debug('CameraOverviewTableModel.update_camera_overview(): start (scheduling worker)')
         try:
-            LOGGER.info("CameraOverview: scheduling worker to probe cameras")
+            LOGGER.debug("CameraOverview: scheduling worker to probe cameras")
         except Exception:
             pass
 
@@ -2947,7 +2947,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 except Exception:
                     pass
                 self.view.camera_overview.repaint()
-                LOGGER.info("CameraOverview: view updated")
+                LOGGER.debug("CameraOverview: view updated")
         except Exception:
             logging.exception('Could not update camera overview view after data ready')
 

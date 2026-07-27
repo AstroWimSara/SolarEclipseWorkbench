@@ -2329,7 +2329,7 @@ def set_time(camera: Camera) -> None:
         except Exception:
             logging.error('Could not apply date & time to camera')
     else:
-        logging.info('Could not set date & time')
+        logging.warning('Could not set date & time')
 
 
 def __set_datetime(config) -> bool:
