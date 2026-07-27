@@ -2863,7 +2863,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
 
     def _on_data_ready(self, data):
         try:
-            LOGGER.info("CameraOverview: on_data_ready called with " + data)
+            LOGGER.debug("CameraOverview: on_data_ready called with " + data)
         except Exception:
             pass
         # Update internal dict for other parts of the app (store camera objects if available)
@@ -2951,16 +2951,6 @@ class CameraOverviewTableModel(QAbstractTableModel):
         except Exception:
             logging.exception('Could not update camera overview view after data ready')
 
-        # Notify controller that cameras are ready (fires sync_camera_time + check_camera_state)
-        cb = getattr(self, 'on_ready_callback', None)
-        if cb is not None:
-            try:
-                cb()
-            except Exception:
-                logging.exception('on_ready_callback raised an exception')
-            finally:
-                self.on_ready_callback = None
-
         # Check if a Sony camera is present. Use vendor attribute when available,
         # else fall back to camera name containing 'sony'.
         try:
@@ -2979,17 +2969,14 @@ class CameraOverviewTableModel(QAbstractTableModel):
         # Also, show an informational banner about the relevant settings.
         try:
             if pm and sony_present:
+                seen = set()
                 for cam in pm.values():
                     try:
                         if cam is None:
                             continue
-                        if getattr(cam, 'vendor', None) != 'Sony':
-                            # ensure any previously running downloader is stopped
-                            try:
-                                cam.stop_background_downloader()
-                            except Exception:
-                                pass
+                        if id(cam) in seen:
                             continue
+                        seen.add(id(cam))
                         dest = get_sony_save_destination(cam)
                         image_quality = get_sony_image_quality(cam)
                         # Start downloader only when destination clearly says
@@ -3035,6 +3022,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
                             if sony_banner_label_visibility:
                                 full_text = f"{sony_banner_label_text} If this info is wrong or you want to re-check after an update to the settings - just press again the 'Camera(s)' button!"
+                                logging.info('%s', full_text)
                                 self.view.sony_banner_label.setText(full_text)
                                 self.view.sony_banner_label.setVisible(True)
                             else:
@@ -3044,6 +3032,16 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         logging.debug('Error while checking Sony save destination', exc_info=True)
         except Exception:
             logging.debug('Could not auto-start Sony downloader and update Sony banner visibility', exc_info=True)
+
+        # Notify controller that cameras are ready (fires sync_camera_time + check_camera_state)
+        cb = getattr(self, 'on_ready_callback', None)
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                logging.exception('on_ready_callback raised an exception')
+            finally:
+                self.on_ready_callback = None
 
     def _try_apply_pending(self):
         """Poll for pending data written by the background worker and apply it on the GUI thread."""
