@@ -1071,17 +1071,6 @@ def __adapt_camera_settings(camera, camera_settings):
                 gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "Off")
         except gphoto2.GPhoto2Error as e:
             logging.debug('Could not disable auto ISO: %s', e)
-    elif vendor == 'Sony':
-        # Disable Auto ISO on Sony cameras so the manually programmed ISO is used.
-        try:
-            gp.gp_widget_set_value(
-                gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "0")
-        except gphoto2.GPhoto2Error:
-            try:
-                gp.gp_widget_set_value(
-                    gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "Off")
-            except gphoto2.GPhoto2Error as e:
-                logging.debug('Could not disable Sony auto ISO: %s', e)
 
     try:
         gp.gp_widget_set_value(
