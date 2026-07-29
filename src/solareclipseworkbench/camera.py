@@ -869,6 +869,24 @@ class LiveViewThread(threading.Thread):
         """Resume suspended preview capture."""
         self._paused.clear()
 
+    def exit_live_view(self):
+        """Force the camera out of live-view mode (important for Nikon DSLRs)."""
+        if not hasattr(self, '_camera') or not hasattr(self._camera, '_camera'):
+            return
+        try:
+            target = self._camera._camera if hasattr(self._camera, '_camera') else self._camera
+            context = gp.gp_context_new()
+
+            # Nikon DSLRs (like D610) often need this to drop the mirror
+            gp.check_result(gp.gp_camera_exit(target, context))
+            logging.info(f"LiveViewThread: requested exit live view for {getattr(self._camera, 'name', 'camera')}")
+
+            # Optional: small delay + re-init can help some bodies
+            time.sleep(0.3)
+            # gp.gp_camera_init(target, context)  # uncomment if needed
+        except Exception as e:
+            logging.debug("LiveViewThread: could not exit live view: %s", e)
+
     @property
     def is_paused(self) -> bool:
         return self._paused.is_set()

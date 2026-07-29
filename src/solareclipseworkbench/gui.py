@@ -2509,6 +2509,8 @@ class LiveViewWindow(QWidget):
             self._toggle_btn.setText("Disable Live View")
         else:
             self._thread.pause()
+            # Actually exit live view on the camera (Nikon D610 etc.)
+            self._thread.exit_live_view()
             self._toggle_btn.setText("Enable Live View")
         self._update_status_label()
 
