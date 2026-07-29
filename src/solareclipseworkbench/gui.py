@@ -3312,6 +3312,7 @@ def main():
         action='store_true'
     )
     parser.add_argument(
+        "-vc",
         "--virtual-camera",
         help="Enable virtual camera (when starting GUI in simulator mode)",
         action='store_true',

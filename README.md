@@ -340,30 +340,23 @@ Sony bodies expose a *Save Destination* that controls where still images are wri
 - Recommended value: **PC+Camera**
   - Writes each image to the SD card *and* keeps a copy in camera RAM so `FILE_ADDED` events still fire.
   - This gives SEW a guaranteed backup (SD card) while still allowing SEW to observe `FILE_ADDED` if desired.
-- Alternative: **Camera Only** — images go to the SD card only (safe, fast).
-- Avoid: **PC Only** — images are kept in camera RAM and must be downloaded over USB.
-  - Downloading large RAW files (e.g. ARW) synchronously between shots can take several seconds and will break short-interval shot timing.
+- Alternative: **Camera Only** — images go to the SD card only (safe and fast, but supported only by post-2020 models).
+- Might lose to `PC Only` mode if the SD card is slow, please test it!
 
 Important note for Sony bodies in `PC Only` or when the Save Destination option is not available
 ---------------------------------------------------------------------------------------------
 
-- If the camera is in **PC Only** mode (or the camera does not expose a Save Destination widget
-  to gphoto2), every captured image is stored in the camera's RAM and must be transferred
-  to the computer over USB. Large RAW files can take several seconds to transfer. Expect a
-  practical capture rate of no more than one picture every 10 seconds in this mode.
-- Images captured in **PC Only** mode are NOT written to the camera's SD card — SEW saves
-  downloaded files to `~/Pictures/SolarEclipseWorkbench` by default. Check that folder for
-  your images after a test capture.
+- If the camera is in **PC Only** mode (or the camera does not expose a Save Destination widget to `gphoto2`), every captured image is stored in the camera's RAM and must be transferred to the computer over USB. Expect a low practical capture rate if your camera does not support USB3 connection.
+- Images captured in **PC Only** mode are NOT written to the camera's SD card - SEW saves downloaded files to `~/Pictures/SolarEclipseWorkbench` by default (double-check with a test if they are indeed written there).
 
-If possible, set the camera to **PC+Camera** or **Camera Only** (recommended) so images are
-written to the SD card while SEW observes `FILE_ADDED` events; this preserves timing and
-guarantees a local backup on the card.
+If possible, set the camera to **PC+Camera** or **Camera Only** (recommended) so images are written to the SD card while SEW observes `FILE_ADDED` events; this preserves timing and guarantees a local backup on the card.
 
 If the camera is configured to write to the SD card (PC+Camera or Camera Only), SEW will no longer attempt blocking RAW downloads during the trigger loop. Instead SEW drains PTP events quickly so triggers remain on schedule and does not block on large USB transfers.
 
-Short guidance
+Short guidance:
 - If you want reliable, on-time sequences (1–2 s intervals): set **PC+Camera** or **Camera Only** on the camera. SEW will trigger on schedule and your images will be safe on the SD card.
 - If your camera is left in **PC Only** mode, expect slower operation and possible missed/dropped triggers while large RAW files are downloaded.
+- Please test the assumptions above, because in some cases USB3 speed might higher than that of a medium-class SD card.
 
 
 ## Upgrading Solar Eclipse Workbench
@@ -418,15 +411,17 @@ sew
 The following command line parameters can be used to start up gui.py.
 
 
-| Short parameter  | Long parameter        | Description                                                                |
-|------------------|-----------------------|----------------------------------------------------------------------------|
-| -h               | --help                | Show the help message and exit                                             |
-| -d DATE          | --date DATE           | Date of the solar eclipse (in YYYY-MM-DD format)                           |
-| -lon LONGITUDE   | --longitude LONGITUDE | Longitude of the location where to watch the solar eclipse (W is negative) |
-| -lat LATITUDE    | --latitude LATITUDE   | Latitude of the location where to watch the solar eclipse (N is positive)  |
-| -alt ALTITUDE    | --altitude ALTITUDE   | Altitude of the location where to watch the solar eclipse (in meters)      |
-| -s               | --sim                 | Start the application in simulation mode                                   |
-| --virtual-camera | --virtual-camera      | Use a virtual camera.  Only for simulation mode!                           |
+| Short parameter  | Long parameter        | Description                                                                   |
+|------------------|-----------------------|-------------------------------------------------------------------------------|
+| -h               | --help                | Show the help message and exit                                                |
+| -d DATE          | --date DATE           | Date of the solar eclipse (in YYYY-MM-DD format)                              |
+| -lon LONGITUDE   | --longitude LONGITUDE | Longitude of the location where to watch the solar eclipse (W is negative)    |
+| -lat LATITUDE    | --latitude LATITUDE   | Latitude of the location where to watch the solar eclipse (N is positive)     |
+| -alt ALTITUDE    | --altitude ALTITUDE   | Altitude of the location where to watch the solar eclipse (in meters)         |
+| -s               | --sim                 | Start the application in simulation mode                                      |
+| -vc              | --virtual-camera      | Use a virtual camera. Only for simulation mode!                               |
+| -lc              | --low-cpu             | Disable auto update for eclipse visualization (essential for single core CPU) |
+| -scm             | --sony-cont-mode      | Specify continuous mode search keyword name for Sony cameras                  |
 
 ### UI functionality
 
@@ -728,15 +723,15 @@ Solar Eclipse Workbench can use the following commands:
 
 This command will take a picture 1 minutes and 2 seconds before first contact (C1) with the Canon EOS 80D.  The ISO will be set to 200, aperture to 8.0 and shutter speed to 1/1250s.
 
-- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon; Nikon and Sony will take 3 pictures in burst mode).
+- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon and Sony; Nikon will take 3 pictures in burst mode instead).
 
 ```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
 
-- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps.  This method only works in Canon cameras.  Make sure to have 5 steps enabled for bracketing.  Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3
+- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps. Make sure to have 5 steps enabled for bracketing. Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3. This method only works in Canon. It kind of works with Nikon as well, but not in a true burst mode, it just tries to replicate it (there is a rewrite in progress for a proper burst support). Sony doesn't support this syntaxis, so instead you have to provide the desired mode name (e.g. `"Bracketing C 3.0 Steps 5 Pictures"`). You can check for available modes using this command: `gphoto2  --get-config=/main/capturesettings/capturemode`.
 
 ```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "+/- 1 2/3", "Bracket test"```
 
-- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card.  The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports.  Works on Canon EOS, Nikon, and Sony Alpha cameras.  Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint).
+- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card.  The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports.  Works on Canon and Nikon cameras (Sony is in the works).  Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint).
 
   The sequence for `stops=4` starting at `1/2000` would be: `1/2000 → 1/1000 → 1/500 → 1/250 → 1/125 → 1/250 → 1/500 → 1/1000 → 1/2000` (9 shots).
 

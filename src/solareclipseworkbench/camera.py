@@ -1371,23 +1371,9 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
                 logging.exception('Nikon low-level capture failed')
                 raise
 
-        # Reset camera back to single-frame mode so subsequent take_picture calls
-        # are not affected by the burst settings left on the camera.
+        # Reset burst number back to 1, to avoid interference with further shooting
         target = camera._camera if hasattr(camera, '_camera') else camera
         config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
-        try:
-            capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'capturemode'))
-            gp.gp_widget_set_value(capture_mode_reset, 'Single')
-            _set_gp_config(camera, config_reset, context)
-            logging.debug('Reset Nikon capturemode to Single after burst')
-        except gphoto2.GPhoto2Error:
-            try:
-                capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'stillcapturemode'))
-                gp.gp_widget_set_value(capture_mode_reset, 0)  # 0 = Single Frame
-                _set_gp_config(camera, config_reset, context)
-                logging.debug('Reset Nikon stillcapturemode to Single Frame (0) after burst')
-            except gphoto2.GPhoto2Error as e:
-                logging.warning('Could not reset Nikon capture mode to single after burst: %s', e)
         try:
             burst_number_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'burstnumber'))
             gp.gp_widget_set_value(burst_number_reset, 1)
