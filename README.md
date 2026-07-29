@@ -723,11 +723,11 @@ Solar Eclipse Workbench can use the following commands:
 
 This command will take a picture 1 minutes and 2 seconds before first contact (C1) with the Canon EOS 80D.  The ISO will be set to 200, aperture to 8.0 and shutter speed to 1/1250s.
 
-- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon and Sony; Nikon will take 3 pictures in burst mode instead).
+- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon and Sony; Nikon will take 3 pictures in burst mode instead). Note - for Sony cameras the automatically chosen Continuous mode might be either High Speed or Low Speed (completely depends on the cameras's model). If you want to be define a specific mode - check out the `--sony-cont-mode` command line option.
 
 ```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
 
-- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps. Make sure to have 5 steps enabled for bracketing. Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3. This method only works in Canon. It kind of works with Nikon as well, but not in a true burst mode, it just tries to replicate it (there is a rewrite in progress for a proper burst support). Sony doesn't support this syntaxis, so instead you have to provide the desired mode name (e.g. `"Bracketing C 3.0 Steps 5 Pictures"`). You can check for available modes using this command: `gphoto2  --get-config=/main/capturesettings/capturemode`.
+- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps. Make sure to have 5 steps enabled for bracketing. Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3. This method only works in Canon. It kind of works with Nikon as well, but not in a true burst mode, it just tries to replicate it (there is a rewrite in progress for a proper burst support). Sony doesn't support this syntax, so instead you have to provide the desired mode name (e.g. `"Bracketing C 3.0 Steps 5 Pictures"`). You can check for available modes using this command: `gphoto2  --get-config=/main/capturesettings/capturemode`.
 
 ```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "+/- 1 2/3", "Bracket test"```
 
