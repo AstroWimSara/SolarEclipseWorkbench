@@ -2788,6 +2788,15 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 if force_refresh or not existing_map or not all(v is not None for v in existing_map.values()):
                     if force_refresh:
                         logging.info(f"CameraOverview: forcing fresh detection (attempt {attempt+1})")
+                        seen = set()
+                        for camera_name, camera in camera_dict.items():
+                            if id(camera) in seen:
+                                continue
+                            seen.add(id(camera))
+                            bg_downloader = getattr(camera, '_bg_downloader', None)
+                            # Check if a downloader exists AND is actively running
+                            if bg_downloader is not None:
+                                camera.stop_background_downloader()
                         self._force_camera_refresh = False
 
                     alias_map = ConfigManager().get_camera_aliases() or None
@@ -3159,8 +3168,8 @@ class JobsTableModel(QAbstractTableModel, Observable):
                 self.execution_times_local_as_datetime.append(execution_time_local)
                 formatted_execution_time_local = format_time(execution_time_local, self.time_format)
 
-                data.append([countdown, formatted_execution_time_local, formatted_execution_time_utc, job_string,
-                             description])
+                data.append([countdown, formatted_execution_time_local, formatted_execution_time_utc,
+                             job_string, description])
 
         self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.COUNTDOWN.value,
                                                  JobsTableColumnNames.EXEC_TIME_LOCAL.value,

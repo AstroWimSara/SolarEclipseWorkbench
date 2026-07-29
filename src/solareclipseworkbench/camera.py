@@ -288,7 +288,7 @@ class GPhotoCameraAdapter(BaseCamera):
         # The fix resets the PTP session (exit + init) once, before the first capture,
         # when capture_preview has already been called.  See _reset_canon_eos_ptp_session().
         self._capture_preview_was_called: bool = False  # set by LiveViewThread
-        self._first_capture_done: bool = False           # set by take_picture / take_hdr
+        self._first_capture_done: bool = False          # set by take_picture / take_hdr
 
     def __getattr__(self, item):
         # Delegate attribute access to the underlying gphoto Camera
@@ -341,31 +341,28 @@ class SonyCamera(GPhotoCameraAdapter):
 
     'PC+Camera' is recommended: every shot is written to the SD card
     (guaranteed backup) AND a FILE_ADDED event fires over USB so SEW
-    can confirm the shot was taken.  No image download is attempted.
+    can confirm the shot was taken. No image download is attempted.
     """
 
     def __init__(self, gp_camera, name: str):
         super().__init__(gp_camera, name)
         self.vendor = 'Sony'
-        # Background downloader thread (started lazily)
         self._bg_downloader = None
 
     def disconnect(self) -> None:
         """Disconnect; drain any queued camera events first."""
+        # 1. MUST stop background activity FIRST to release the USB interface
+        self.stop_background_downloader()
+
+        # 2. Now safely drain remaining events without thread contention
         try:
             context = gp.gp_context_new()
             target = self._camera
-            _sony_drain_events(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except Exception:
             logging.debug('SonyCamera.disconnect: event drain raised (non-fatal)')
-        # Stop background downloader if running
-        try:
-            if getattr(self, '_bg_downloader', None) is not None:
-                self._bg_downloader.stop()
-                self._bg_downloader.join(timeout=2.0)
-                self._bg_downloader = None
-        except Exception:
-            logging.debug('SonyCamera.disconnect: background downloader stop raised (non-fatal)')
+
+        # 3. Close the camera connection
         try:
             self._camera.exit()
         except Exception:
@@ -373,15 +370,13 @@ class SonyCamera(GPhotoCameraAdapter):
         self._connected = False
 
     def start_background_downloader(self) -> None:
-        """Start a background downloader thread that fetches FILE_ADDED paths.
-
-        The downloader attempts to download FILE_ADDED targets as they appear.
-        It will only perform downloads when it can acquire the per-camera USB
-        lock quickly — this avoids delaying scheduled shots.  Downloads are
-        written to `~/Pictures/SolarEclipseWorkbench`.
-        """
-        if self._bg_downloader is not None:
+        # If a thread exists AND is actively running, don't start another one
+        if self._bg_downloader is not None and self._bg_downloader.is_alive():
             return
+
+        # If an old dead thread reference is laying around, clear it first
+        self._bg_downloader = None
+
         try:
             ctx = gp.gp_context_new()
             self._bg_downloader = _SonyBackgroundDownloader(self, ctx)
@@ -394,9 +389,24 @@ class SonyCamera(GPhotoCameraAdapter):
     def stop_background_downloader(self) -> None:
         if self._bg_downloader is None:
             return
+
+        downloader = self._bg_downloader
         try:
-            self._bg_downloader.stop()
-            self._bg_downloader.join(timeout=2.0)
+            downloader.stop()
+            downloader.join(timeout=2.0)
+
+            # Check if the thread actually exited
+            if downloader.is_alive():
+                logging.warning('Sony background downloader failed to terminate within timeout.')
+
+                # Force-release the USB lock if the thread is stuck and holding it
+                if hasattr(self, '_usb_lock') and self._usb_lock.locked():
+                    try:
+                        self._usb_lock.release()
+                        logging.warning('Forced release of _usb_lock after downloader thread timeout.')
+                    except RuntimeError:
+                        # Raised if release() is called on an unacquired or cross-thread locked RLock/Lock
+                        pass
         except Exception as e:
             logging.debug('Error stopping Sony background downloader: %s', e)
         finally:
@@ -681,7 +691,7 @@ class _SonyBackgroundDownloader(threading.Thread):
             "next_try": now,
             "attempts": 0,
         }
-        logging.info("Background downloader queued %s", name)
+        logging.info("Sony background downloader queued %s", name)
 
     def _download_one(self, target, ctx, folder: str, name: str) -> None:
         cam_file = gp.CameraFile()
@@ -716,10 +726,16 @@ class _SonyBackgroundDownloader(threading.Thread):
         while not self._stop_event.is_set():
             acquired = False
             try:
+                # Use a non-blocking or low-timeout attempt to acquire lock
                 acquired = self.adapter._usb_lock.acquire(timeout=0.05)
                 if not acquired:
-                    time.sleep(cycle_sleep)
+                    # Interruptible sleep check
+                    self._stop_event.wait(cycle_sleep)
                     continue
+
+                # Check if stop requested right after obtaining lock
+                if self._stop_event.is_set():
+                    break
 
                 now = time.monotonic()
 
@@ -729,14 +745,14 @@ class _SonyBackgroundDownloader(threading.Thread):
                         gp.gp_camera_wait_for_event(target, event_timeout_ms, ctx)
                     )
                 except gphoto2.GPhoto2Error as e:
-                    logging.debug("Background downloader: wait_for_event failed: %s", e)
+                    logging.debug("Sony background downloader: wait_for_event failed: %s", e)
                     event_type, event_data = gp.GP_EVENT_TIMEOUT, None
                     error_str = str(e).lower()
                     if any(x in error_str for x in ['-52', 'could not find the requested device']):
-                        logging.info(f"Background downloader: Seems like camera got disconnected, shutting down")
+                        logging.info(f"Sony background downloader: camera got disconnected, shutting down")
                         self.stop()
                     if any(x in error_str for x in ['-110', 'i/o in progress']):
-                        logging.warning(f"Background downloader: Seems like camera is busy, safe to ignore")
+                        logging.warning(f"Sony background downloader: camera is busy, safe to ignore")
 
                 if event_type in (gp.GP_EVENT_FILE_ADDED, gp.GP_EVENT_FOLDER_ADDED) and event_data is not None:
                     folder = getattr(event_data, "folder", "/")
@@ -751,7 +767,7 @@ class _SonyBackgroundDownloader(threading.Thread):
                             name = files.get_name(i)
                             self._queue_path("/", name, now)
                     except Exception as exc:
-                        logging.debug("Background downloader: fallback list failed: %s", exc)
+                        logging.debug("Sony background downloader: fallback list failed: %s", exc)
                     last_fallback_scan = now
 
                 # 3) Try any queued downloads whose retry delay has expired.
@@ -771,7 +787,7 @@ class _SonyBackgroundDownloader(threading.Thread):
                         )
                         state["next_try"] = now + delay
                         logging.debug(
-                            "Background downloader: download not ready for %s: %s (retry in %.1fs)",
+                            "Sony background downloader: download not ready for %s: %s (retry in %.1fs)",
                             name,
                             exc,
                             delay,
@@ -784,7 +800,7 @@ class _SonyBackgroundDownloader(threading.Thread):
                         )
                         state["next_try"] = now + delay
                         logging.info(
-                            "Background downloader: download failed for %s: %s (retry in %.1fs)",
+                            "Sony background downloader: download failed for %s: %s (retry in %.1fs)",
                             name,
                             exc,
                             delay,
@@ -797,7 +813,8 @@ class _SonyBackgroundDownloader(threading.Thread):
                     except Exception:
                         pass
 
-            time.sleep(cycle_sleep)
+            # Responsive wait instead of un-interruptible time.sleep
+            self._stop_event.wait(cycle_sleep)
 
 
 class LiveViewThread(threading.Thread):
@@ -993,10 +1010,13 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     if getattr(camera, 'vendor', None) == 'Nikon':
         target = camera._camera if hasattr(camera, '_camera') else camera
         try:
-            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
-            gp.gp_widget_set_value(capture_mode_widget, 'Single')
-            _set_gp_config(camera, config, context)
-            logging.debug('Ensured Nikon capturemode is Single before take_picture')
+            cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
+            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(cfg2, 'capturemode'))
+            single_choice = _find_capturemode_choice(capture_mode_widget, want_continuous=False)
+            if single_choice is not None:
+                gp.gp_widget_set_value(capture_mode_widget, single_choice)
+                _set_gp_config(camera, cfg2, context)
+                logging.debug('Ensured Nikon capturemode="%s" before take_picture', single_choice)
         except gphoto2.GPhoto2Error:
             try:
                 capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
@@ -1118,10 +1138,21 @@ def __adapt_camera_settings(camera, camera_settings):
     except gphoto2.GPhoto2Error as e:
         logging.warning('Could not set ISO to %s: %s', camera_settings.iso, e)
 
+    if vendor == 'Sony':
+        sony_exception_ss = {"3.2", "3", "2.5", "1.6", "1.3", "0.8", "0.6", "0.5", "1/2", "0.4"}
+        if camera_settings.shutter_speed in sony_exception_ss:
+            ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+            closest = _find_closest_shutter_choice(ss_widget, camera_settings.shutter_speed)
+            if closest is not None:
+                camera_settings.shutter_speed = closest
+                logging.warning('Using closest shutter speed choice: %s', closest)
+            else:
+                logging.warning('No suitable shutter speed choice found for %s',
+                                camera_settings.shutter_speed)
+
     try:
-        gp.gp_widget_set_value(
-            gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed')),
-            str(camera_settings.shutter_speed))
+        gp.gp_widget_set_value(gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed')),
+                               str(camera_settings.shutter_speed))
     except gphoto2.GPhoto2Error as e:
         logging.warning('Could not set shutterspeed to %s: %s — trying closest available choice',
                         camera_settings.shutter_speed, e)
@@ -1132,7 +1163,8 @@ def __adapt_camera_settings(camera, camera_settings):
                 gp.gp_widget_set_value(ss_widget, closest)
                 logging.warning('Using closest shutter speed choice: %s', closest)
             else:
-                logging.warning('No suitable shutter speed choice found for %s', camera_settings.shutter_speed)
+                logging.warning('No suitable shutter speed choice found for %s',
+                                camera_settings.shutter_speed)
         except gphoto2.GPhoto2Error as e2:
             logging.warning('Could not set closest shutter speed: %s', e2)
 
@@ -2064,7 +2096,7 @@ def get_free_space(camera: Camera) -> float:
                 'Camera %s: get_storageinfo() returned empty list; returning cached %.1f GB',
                 getattr(camera, 'name', str(camera)), cached)
             return cached
-        logging.warning(
+        logging.debug(
             'Camera %s: get_storageinfo() returned empty list with no cache; returning -1.0',
             getattr(camera, 'name', str(camera)))
         return -1.0
@@ -2111,7 +2143,7 @@ def get_space(camera: Camera) -> float:
                 'Camera %s: get_storageinfo() returned empty list; returning cached total %.1f GB',
                 getattr(camera, 'name', str(camera)), cached)
             return cached
-        logging.warning(
+        logging.debug(
             'Camera %s: get_storageinfo() returned empty list with no cache; returning -1.0',
             getattr(camera, 'name', str(camera)))
         return -1.0
@@ -2198,21 +2230,28 @@ def get_battery_level(camera: Camera) -> str:
     Returns: Current battery level of the camera [%]
     """
 
+    if camera is None:
+        return None
+
+    camera_name = getattr(camera, 'name', str(camera))
+
     try:
         value = camera.get_config().get_child_by_name('batterylevel').get_value()
         # gphoto2 reports 253 (0xFD) for Sony cameras (and some others) when the
         # camera is powered via an AC adapter rather than a battery.
         if str(value).rstrip('%') == '253':
+            logging.info("%s: connected to AC. If wrong - press 'Camera(s)' button again", camera_name)
             return 'AC'
+        logging.info('%s: battery level is %s', camera_name, str(value))
         return str(value)
     except gphoto2.GPhoto2Error as e:
-        logging.warning('gphoto2 error reading batterylevel for %s: %s', getattr(camera, 'name', str(camera)), e)
+        logging.debug('gphoto2 error reading batterylevel for %s: %s', camera_name, e)
         error_str = str(e).lower()
         if any(x in error_str for x in ['-110', 'i/o in progress']):
-            logging.warning(f"Seems like camera is busy, unable to get batterylevel, trying again")
+            logging.debug("%s: busy, will try to read battery level again", camera_name)
             time.sleep(0.1)
             return get_battery_level(camera)
-        raise CameraError(f"Could not read battery level for {getattr(camera, 'name', camera)}: {e}") from None
+        raise CameraError(f"Could not read battery level for {camera_name}: {e}") from None
     except Exception:
         # VirtualCamera and other non-gphoto cameras don't expose battery info
         if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
@@ -2301,7 +2340,7 @@ def set_time(camera: Camera) -> None:
     try:
         config = camera.get_config()
     except gphoto2.GPhoto2Error as e:
-        logging.warning('gphoto2 error getting time from %s: %s', getattr(camera, 'name', str(camera)), e)
+        logging.debug('gphoto2 error getting time from %s: %s', getattr(camera, 'name', str(camera)), e)
         error_str = str(e).lower()
         if any(x in error_str for x in ['-110', 'i/o in progress']):
             logging.warning(f"Seems like camera is busy, unable to set the time, trying again")
@@ -2329,7 +2368,7 @@ def set_time(camera: Camera) -> None:
         except Exception:
             logging.error('Could not apply date & time to camera')
     else:
-        logging.warning('Could not set date & time')
+        logging.warning('Could not set date & time (unsupported operation?)')
 
 
 def __set_datetime(config) -> bool:
@@ -2659,15 +2698,23 @@ def get_sony_save_destination(camera) -> str | None:
     """
     if camera is None:
         return None
+
+    sony_camera_name = getattr(camera, 'name', str(camera))
+
     try:
-        return camera.get_config().get_child_by_name('capturetarget').get_value()
+        sony_capture_target = camera.get_config().get_child_by_name('capturetarget').get_value()
+        logging.info("%s: capture target is %s", sony_camera_name, sony_capture_target)
+        return sony_capture_target
     except gphoto2.GPhoto2Error as e:
-        logging.warning('gphoto2 error reading capturetarget for %s: %s', getattr(camera, 'name', str(camera)), e)
+        logging.debug('gphoto2 error reading capturetarget for %s: %s', sony_camera_name, e)
         error_str = str(e).lower()
         if any(x in error_str for x in ['-110', 'i/o in progress']):
-            logging.warning(f"Seems like camera is busy, unable to get capturetarget, trying again")
+            logging.warning("%s: busy, unable to get capture target, trying again", sony_camera_name)
             time.sleep(0.1)
             return get_sony_save_destination(camera)
+        else:
+            logging.warning("%s: lacks capture target setting", sony_camera_name)
+            return None
     except Exception:
         return None
 
@@ -2680,16 +2727,21 @@ def get_sony_image_quality(camera: Camera) -> str:
 
     Returns: Image quality setting of the camera
     """
-
     if camera is None:
         return None
+
+    sony_camera_name = getattr(camera, 'name', str(camera))
+
     try:
-        return camera.get_config().get_child_by_name('imagequality').get_value()
+        sony_image_quality = camera.get_config().get_child_by_name('imagequality').get_value()
+        logging.info("%s: file format / quality is %s", sony_camera_name, sony_image_quality)
+        return sony_image_quality
     except gphoto2.GPhoto2Error as e:
-        logging.warning('gphoto2 error reading imagequality for %s: %s', getattr(camera, 'name', str(camera)), e)
+        logging.debug('gphoto2 error reading imagequality for %s: %s', getattr(camera, 'name', str(camera)), e)
         error_str = str(e).lower()
         if any(x in error_str for x in ['-110', 'i/o in progress']):
-            logging.warning(f"Seems like camera is busy, unable to get imagequality, trying again")
+            logging.warning(
+                "%s: busy, unable to get image quality, trying again", sony_camera_name)
             time.sleep(0.1)
             return get_sony_image_quality(camera)
     except Exception:
