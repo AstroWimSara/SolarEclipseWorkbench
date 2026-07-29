@@ -2978,6 +2978,9 @@ class CameraOverviewTableModel(QAbstractTableModel):
         try:
             if pm and sony_present:
                 seen = set()
+                banner_lines = []
+                sony_banner_label_visibility = False
+
                 for cam in pm.values():
                     try:
                         if cam is None:
@@ -2985,61 +2988,83 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         if id(cam) in seen:
                             continue
                         seen.add(id(cam))
+
                         dest = get_sony_save_destination(cam)
                         image_quality = get_sony_image_quality(cam)
-                        # Start downloader only when destination clearly says
-                        # PC-only. If destination is unavailable (common with
-                        # localized camera menus), avoid downloading to protect
-                        # shot timing.
-                        camera_model = getattr(cam, 'name', None)
-                        sony_banner_label_visibility = True
+                        camera_model = getattr(cam, 'name', 'Unknown Sony')
+
+                        # Decide action + message for this camera
                         if dest == "sdram":
-                            sony_banner_label_text = camera_model + ": currently saving photos to PC. We recommend testing if 'PC+Camera' mode is faster for you or not."
+                            text = (f"{camera_model}: currently saving photos to PC. "
+                                    f"We recommend testing if 'PC+Camera' mode is faster.")
                             if image_quality != "RAW":
-                                sony_banner_label_text += " Also, 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                                text += f" Also, 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
                             try:
                                 cam.start_background_downloader()
                             except Exception:
-                                logging.exception('Failed to start downloader for: ' + camera_model)
+                                logging.warning('%s: failed to start Background Downloader', camera_model)
+
+                            banner_lines.append(text)
+                            sony_banner_label_visibility = True
+
                         elif dest == "card+sdram":
-                            sony_banner_label_text = camera_model + ": currently in 'PC+Camera' mode. We recommend testing if 'PC' mode is faster for you or not."
+                            text = (f"{camera_model}: currently in 'PC+Camera' mode. "
+                                    f"We recommend testing if 'PC' mode is faster.")
                             if not image_quality.startswith("RAW+JPEG"):
-                                sony_banner_label_text += " Also, 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW+JPEG' and in 'PC Remote Settings' please choose 'JPEG Only' for 'RAW+J PC Save Img' option!"
+                                text += (" Also, 'File Format' is set to '{}'."
+                                         " Please set it to 'RAW+JPEG' and choose 'JPEG Only' "
+                                         "for 'RAW+J PC Save Img'.").format(image_quality)
                             try:
                                 cam.stop_background_downloader()
                             except Exception:
                                 pass
+
+                            banner_lines.append(text)
+                            sony_banner_label_visibility = True
+
                         elif dest == "card":
                             if image_quality != "RAW":
-                                sony_banner_label_text = camera_model + ": 'File Format' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                                text = f"{camera_model}: 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                banner_lines.append(text)
+                                sony_banner_label_visibility = True
                             else:
-                                sony_banner_label_visibility = False
-                            try:
-                                cam.stop_background_downloader()
-                            except Exception:
-                                pass
+                                # No banner needed for good RAW + Card-only config
+                                try:
+                                    cam.stop_background_downloader()
+                                except Exception:
+                                    pass
                         else:
+                            # Unknown / unavailable destination
                             if image_quality != "RAW":
-                                sony_banner_label_text = camera_model + ": 'Quality' is set to ''" + image_quality + "'. Please set it to 'RAW'!"
+                                text = f"{camera_model}: 'Quality' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                banner_lines.append(text)
+                                sony_banner_label_visibility = True
                             else:
-                                sony_banner_label_visibility = False
-                            try:
-                                cam.start_background_downloader()
-                            except Exception:
-                                logging.exception('Failed to start downloader for: ' + camera_model)
-                        if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
-                            if sony_banner_label_visibility:
-                                full_text = f"{sony_banner_label_text} If this info is wrong or you want to re-check after an update to the settings - just press again the 'Camera(s)' button!"
-                                logging.info('%s', full_text)
-                                self.view.sony_banner_label.setText(full_text)
-                                self.view.sony_banner_label.setVisible(True)
-                            else:
-                                # Hide it cleanly without touching inner text properties
-                                self.view.sony_banner_label.setVisible(False)
+                                try:
+                                    cam.start_background_downloader()
+                                except Exception:
+                                    logging.warning(
+                                        '%s: failed to start Background Downlaoder', camera_model)
+
                     except Exception:
-                        logging.debug('Error while checking Sony save destination', exc_info=True)
+                        logging.debug('Error while checking Sony save destination for a camera', exc_info=True)
+
+                # === Build final banner text ===
+                if banner_lines:
+                    full_text = "\n".join(banner_lines)
+                    full_text += "\nIf this info is wrong or you changed settings - press 'Camera(s)' again!"
+
+                    if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                        self.view.sony_banner_label.setText(full_text)
+                        self.view.sony_banner_label.setVisible(sony_banner_label_visibility)
+                        logging.info("Sony banner updated:\n%s", full_text)
+                else:
+                    # Hide banner if no messages
+                    if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                        self.view.sony_banner_label.setVisible(False)
+
         except Exception:
-            logging.debug('Could not auto-start Sony downloader and update Sony banner visibility', exc_info=True)
+            logging.exception("Error updating Sony banner / background downloaders")
 
         # Notify controller that cameras are ready (fires sync_camera_time + check_camera_state)
         cb = getattr(self, 'on_ready_callback', None)
