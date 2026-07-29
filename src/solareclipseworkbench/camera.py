@@ -360,7 +360,7 @@ class SonyCamera(GPhotoCameraAdapter):
             target = self._camera
             _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except Exception:
-            logging.debug('SonyCamera.disconnect: event drain raised (non-fatal)')
+            logging.debug('%s: SonyCamera.disconnect() event drain raised (non-fatal)')
 
         # 3. Close the camera connection
         try:
@@ -382,9 +382,9 @@ class SonyCamera(GPhotoCameraAdapter):
             self._bg_downloader = _SonyBackgroundDownloader(self, ctx)
             self._bg_downloader.daemon = True
             self._bg_downloader.start()
-            logging.info('Sony background downloader started')
+            logging.info('%s: Background Downloader started', self.name)
         except Exception:
-            logging.exception('Failed to start Sony background downloader')
+            logging.exception('%s: failed to start Background Downloader', self.name)
 
     def stop_background_downloader(self) -> None:
         if self._bg_downloader is None:
@@ -397,18 +397,18 @@ class SonyCamera(GPhotoCameraAdapter):
 
             # Check if the thread actually exited
             if downloader.is_alive():
-                logging.warning('Sony background downloader failed to terminate within timeout.')
+                logging.warning('%s: Background Downloader failed to terminate within timeout.', self.name)
 
                 # Force-release the USB lock if the thread is stuck and holding it
                 if hasattr(self, '_usb_lock') and self._usb_lock.locked():
                     try:
                         self._usb_lock.release()
-                        logging.warning('Forced release of _usb_lock after downloader thread timeout.')
+                        logging.warning('%s: forced release of _usb_lock after downloader thread timeout.')
                     except RuntimeError:
                         # Raised if release() is called on an unacquired or cross-thread locked RLock/Lock
                         pass
         except Exception as e:
-            logging.debug('Error stopping Sony background downloader: %s', e)
+            logging.debug('%s: error stopping Background Downloader (%s)', self.name, e)
         finally:
             self._bg_downloader = None
 
@@ -672,6 +672,9 @@ class _SonyBackgroundDownloader(threading.Thread):
         # (folder, name) -> state dict
         self._pending = {}
 
+        # For proper logging
+        self.camera_name = getattr(adapter, 'name', 'Sony')
+
     def stop(self):
         self._stop_event.set()
 
@@ -691,7 +694,7 @@ class _SonyBackgroundDownloader(threading.Thread):
             "next_try": now,
             "attempts": 0,
         }
-        logging.info("Sony background downloader queued %s", name)
+        logging.info("%s: queued %s", self.camera_name, name)
 
     def _download_one(self, target, ctx, folder: str, name: str) -> None:
         cam_file = gp.CameraFile()
@@ -708,7 +711,7 @@ class _SonyBackgroundDownloader(threading.Thread):
         save_path = os.path.join(self.save_dir, name)
         gp.check_result(gp.gp_file_save(cam_file, save_path))
         size = os.path.getsize(save_path)
-        logging.info("Sony downloader saved %s (%d bytes)", save_path, size)
+        logging.info("%s: saved %s (%d bytes)", self.camera_name, save_path, size)
         self._seen_on_disk.add(name)
 
     def run(self):
@@ -745,14 +748,16 @@ class _SonyBackgroundDownloader(threading.Thread):
                         gp.gp_camera_wait_for_event(target, event_timeout_ms, ctx)
                     )
                 except gphoto2.GPhoto2Error as e:
-                    logging.debug("Sony background downloader: wait_for_event failed: %s", e)
+                    logging.debug("%s Background Downloader: wait_for_event failed: %s", self.camera_name, e)
                     event_type, event_data = gp.GP_EVENT_TIMEOUT, None
                     error_str = str(e).lower()
                     if any(x in error_str for x in ['-52', 'could not find the requested device']):
-                        logging.info(f"Sony background downloader: camera got disconnected, shutting down")
+                        logging.info(
+                            "%s Background Downloader: camera got disconnected, shutting down", self.camera_name)
                         self.stop()
                     if any(x in error_str for x in ['-110', 'i/o in progress']):
-                        logging.warning(f"Sony background downloader: camera is busy, safe to ignore")
+                        logging.warning(
+                            "%s Background Downloader: camera is busy, safe to ignore", self.camera_name)
 
                 if event_type in (gp.GP_EVENT_FILE_ADDED, gp.GP_EVENT_FOLDER_ADDED) and event_data is not None:
                     folder = getattr(event_data, "folder", "/")
@@ -767,7 +772,8 @@ class _SonyBackgroundDownloader(threading.Thread):
                             name = files.get_name(i)
                             self._queue_path("/", name, now)
                     except Exception as exc:
-                        logging.debug("Sony background downloader: fallback list failed: %s", exc)
+                        logging.debug(
+                            "%s Background Downloader: fallback list failed: %s", self.camera_name,  exc)
                     last_fallback_scan = now
 
                 # 3) Try any queued downloads whose retry delay has expired.
@@ -787,7 +793,8 @@ class _SonyBackgroundDownloader(threading.Thread):
                         )
                         state["next_try"] = now + delay
                         logging.debug(
-                            "Sony background downloader: download not ready for %s: %s (retry in %.1fs)",
+                            "%s Background Downloader: download not ready for %s: %s (retry in %.1fs)",
+                            self.camera_name,
                             name,
                             exc,
                             delay,
@@ -800,7 +807,8 @@ class _SonyBackgroundDownloader(threading.Thread):
                         )
                         state["next_try"] = now + delay
                         logging.info(
-                            "Sony background downloader: download failed for %s: %s (retry in %.1fs)",
+                            "%s Background Downloader: download failed for %s: %s (retry in %.1fs)",
+                            self.camera_name,
                             name,
                             exc,
                             delay,

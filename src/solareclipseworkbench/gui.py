@@ -2793,10 +2793,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             if id(camera) in seen:
                                 continue
                             seen.add(id(camera))
-                            bg_downloader = getattr(camera, '_bg_downloader', None)
-                            # Check if a downloader exists AND is actively running
-                            if bg_downloader is not None:
-                                camera.stop_background_downloader()
+                            camera.disconnect()
                         self._force_camera_refresh = False
 
                     alias_map = ConfigManager().get_camera_aliases() or None
@@ -2837,6 +2834,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             logging.warning(f"Stale camera connection detected on {camera_name} ({e})")
                             needs_refresh = True
                             self._force_camera_refresh = True
+                            break
                         # Preserve the camera row with N/A values when probing fails so
                         # the camera does not disappear from the UI.
                         try:
