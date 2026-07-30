@@ -10,14 +10,16 @@ Provides:
       gui.py (LocationPopup) and wizard.py (EclipseConfigPage).
 """
 import json
+import logging
 import time
 import requests
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
 
+import qrcode
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QDoubleValidator
+from PyQt6.QtGui import QDoubleValidator, QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QComboBox, QPushButton, QMessageBox,
@@ -31,6 +33,43 @@ try:
     GEOPY_AVAILABLE = True
 except ImportError:
     GEOPY_AVAILABLE = False
+
+
+def make_qr_pixmap(text: str, module_pixels: int = 6, quiet_zone: int = 3) -> Optional[QPixmap]:
+    """Render *text* as a QR code and return it as a QPixmap.
+
+    The QR matrix is drawn directly into a QImage rather than going through the ``qrcode``
+    library's image factories, so Pillow is not needed.  Colours are fixed black-on-white
+    because that is what phone cameras scan most reliably — a QR code that follows a dark UI
+    theme is markedly harder to read.
+
+    Returns None when the code cannot be produced, so the caller can fall back to showing
+    just the URL rather than failing to offer GPS capture at all.
+    """
+    try:
+        qr = qrcode.QRCode(border=quiet_zone, box_size=1)
+        qr.add_data(text)
+        qr.make(fit=True)
+        matrix = qr.get_matrix()
+    except Exception:
+        logging.exception("Could not generate QR code for %s", text)
+        return None
+
+    size = len(matrix) * module_pixels
+    image = QImage(size, size, QImage.Format.Format_RGB32)
+    image.fill(QColor("white"))
+
+    black = QColor("black").rgb()
+    for row, cells in enumerate(matrix):
+        for col, is_dark in enumerate(cells):
+            if not is_dark:
+                continue
+            for dy in range(module_pixels):
+                scan_y = row * module_pixels + dy
+                for dx in range(module_pixels):
+                    image.setPixel(col * module_pixels + dx, scan_y, black)
+
+    return QPixmap.fromImage(image)
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +516,7 @@ class LocationWidget(QWidget):
         self._gps_dialog: Optional[QDialog] = None
         self._gps_status_label: Optional[QLabel] = None
         self._gps_url_label: Optional[QLabel] = None
+        self._gps_qr_label: Optional[QLabel] = None
         self._usb_gps_worker = None
         self._usb_gps_dialog: Optional[QDialog] = None
         self._usb_gps_status_label: Optional[QLabel] = None
@@ -713,6 +753,13 @@ class LocationWidget(QWidget):
         self._gps_url_label.setMinimumHeight(80)
         dlg_layout.addWidget(self._gps_url_label)
 
+        # QR code for the LAN URL, so the phone can be pointed at the screen instead of
+        # the URL (including its port and https scheme) being typed in by hand.
+        self._gps_qr_label = QLabel("")
+        self._gps_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._gps_qr_label.setVisible(False)
+        dlg_layout.addWidget(self._gps_qr_label)
+
         note = QLabel(
             "<small><i>"
             "No WiFi at your eclipse site? Enable your phone\u2019s hotspot,<br>"
@@ -755,6 +802,19 @@ class LocationWidget(QWidget):
                 "/ \u2018Visit this website\u2019 (Safari)"
                 "</small></p>"
             )
+
+        if self._gps_qr_label:
+            pixmap = make_qr_pixmap(lan_url)
+            if pixmap:
+                self._gps_qr_label.setPixmap(pixmap)
+                self._gps_qr_label.setToolTip(lan_url)
+                # The dialog is already on screen by the time the server reports its URL, so
+                # it does not re-fit itself around the new pixmap: reserve the space the QR
+                # needs and grow the dialog explicitly, otherwise the code is clipped.
+                self._gps_qr_label.setMinimumHeight(pixmap.height())
+                self._gps_qr_label.setVisible(True)
+                if self._gps_dialog:
+                    self._gps_dialog.adjustSize()
 
     def _on_gps_location_received(self, data: dict) -> None:
         """Fill coordinate fields with the received GPS fix and close the dialog."""
