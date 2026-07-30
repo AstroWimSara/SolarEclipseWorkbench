@@ -15,8 +15,7 @@
     - [Installation on Windows 11](#installation-on-windows-11)
     - [Make cameras accessible in wsl](#make-cameras-accessible-in-wsl)
       - [Replace the Windows USB driver with WinUSB (required for gphoto2)](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2)
-    - [Sony PC Remote settings (recommended)](#sony-pc-remote-settings-recommended)
-  - [Important note for Sony bodies in `PC Only` or when the Save Destination option is not available](#important-note-for-sony-bodies-in-pc-only-or-when-the-save-destination-option-is-not-available)
+    - [Sony PC Remote settings discussion](#sony-pc-remote-settings-discussion)
   - [Upgrading Solar Eclipse Workbench](#upgrading-solar-eclipse-workbench)
   - [Running Solar Eclipse Workbench](#running-solar-eclipse-workbench)
     - [Command line parameters](#command-line-parameters)
@@ -328,35 +327,22 @@ usbipd attach --wsl --busid <busid>
 
 You only need to do this once; the WinUSB driver persists across reboots for that USB device.
 
-> **Sony Alpha cameras** additionally require **PC Remote** mode to be active on the camera itself before gphoto2 can communicate with it:
-> Camera Menu → Network → PC Remote Settings → PC Remote → **On**
-> The camera will show `(PC Control)` in its model name when correctly connected.
 
-### Sony PC Remote settings (recommended)
+### Sony PC Remote settings discussion
 
-Sony bodies expose a *Save Destination* that controls where still images are written when `PC Remote` is enabled. Set this once on the camera menu to avoid timing and reliability problems when running rapid sequences from SEW.
+To enable `PC Remote` mode on your Sony camera, please go to `MENU`, then go to `Tools` section and look for `USB Connection` setting (most probably, you will find it on the 4th screen). Press on it and choose `PC Remote` option. Note - this path applies for pre-2020 cameras; for post-2020 cameras the location of this setting might be different.
 
-- Menu path: `MENU → Network → PC Remote Settings → Save Destination`
-- Recommended value: **PC+Camera**
-  - Writes each image to the SD card *and* keeps a copy in camera RAM so `FILE_ADDED` events still fire.
-  - This gives SEW a guaranteed backup (SD card) while still allowing SEW to observe `FILE_ADDED` if desired.
-- Alternative: **Camera Only** — images go to the SD card only (safe and fast, but supported only by post-2020 models).
-- Might lose to `PC Only` mode if the SD card is slow, please test it!
+On the same screen, also search for `PC Remote Settings`. If you can't find it, it means your camera does not support saving photos to your SD card when it's being controlled from PC through USB connection. If you do find it, then you have the ability to choose between saving to `PC` or `PC+Camera` (post-2020 cameras also support `Camera` option).
 
-Important note for Sony bodies in `PC Only` or when the Save Destination option is not available
----------------------------------------------------------------------------------------------
+For cameras which lack `PC Remote Settings`, using USB connection will come with the penalty of slow transfer of the photos, as these cameras usually have only micro USB port, which supports only USB2.0 speeds. For a 12MP camera, this might be acceptable (a 5 frame bracketing takes between 8 to 12 seconds to complete, depending on the camera's initial configuration), but for 24MP and moreso for 42MP cameras, this might be unacceptable. We would suggest you try using Wi-Fi connection through scripts and `command` commands, as it should be much faster (but requires you are tech savvy enough to write such scripts; if you want a reference, you can take a look [here](https://github.com/fliker09/sec2025-scripts) - search for scripts which contain `http` keyword in their name). Another option would be to install an app right on your camera, which will work in a similar way to SEW - you can find it [here](https://github.com/pyzahl/SoFiMagic) (this also requires you are a bit tech savvy, but at least no scripting is involved).
 
-- If the camera is in **PC Only** mode (or the camera does not expose a Save Destination widget to `gphoto2`), every captured image is stored in the camera's RAM and must be transferred to the computer over USB. Expect a low practical capture rate if your camera does not support USB3 connection.
-- Images captured in **PC Only** mode are NOT written to the camera's SD card - SEW saves downloaded files to `~/Pictures/SolarEclipseWorkbench` by default (double-check with a test if they are indeed written there).
+For cameras which do have `PC Remote Settings` available, the situation is much better. These cameras usually have an USB-C port, which provides USB3.0 speeds (they are much higher than USB2.0 ones!). There is also an option of saving RAW files to SD card (`PC+Camera` option), but this option should be compared against the `PC` one, as your card's write speed might be, in fact, slower than the USB3.0 transfer speed. Test both options and see which one is faster for you! On a Sony A7R IIIA, both `PC` and `PC+Camera` options take around 8 to 12 seconds for a 5 frame bracketing sequence to complete.
 
-If possible, set the camera to **PC+Camera** or **Camera Only** (recommended) so images are written to the SD card while SEW observes `FILE_ADDED` events; this preserves timing and guarantees a local backup on the card.
+A note on multiple Sony cameras connected - if they all fire in parallel or at least close enough in timing to clash in their data transfers periods, it's preferable that no more than one of the cameras save to PC, with the other(s) having `PC+Camera` option chosen instead.
 
-If the camera is configured to write to the SD card (PC+Camera or Camera Only), SEW will no longer attempt blocking RAW downloads during the trigger loop. Instead SEW drains PTP events quickly so triggers remain on schedule and does not block on large USB transfers.
+Warning: if you intend to use `PC` option with a camera which has an USB-C port, please ensure that the cable is USB3.0 rated and that the port on the PC to which this cable connects is, in fact, a proper USB3.0 one.
 
-Short guidance:
-- If you want reliable, on-time sequences (1–2 s intervals): set **PC+Camera** or **Camera Only** on the camera. SEW will trigger on schedule and your images will be safe on the SD card.
-- If your camera is left in **PC Only** mode, expect slower operation and possible missed/dropped triggers while large RAW files are downloaded.
-- Please test the assumptions above, because in some cases USB3 speed might higher than that of a medium-class SD card.
+Final note on the `PC+Camera` option - SEW will not actually save JPEG files to PC, they will be ignored and the PTP events on camera flushed, with RAW files being consistently written to SD card (please don't forget to set `RAW+J PC Save Img` setting with `JPEG only` option!).
 
 
 ## Upgrading Solar Eclipse Workbench
