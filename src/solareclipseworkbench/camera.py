@@ -423,9 +423,13 @@ def _raise_camera_init_error(camera_name: str, error: Exception) -> None:
       Sony cameras must also have **PC Remote** mode enabled on the camera itself:
       Menu → Network → PC Remote Settings → PC Remote → On.
 
-    * **macOS**: ``ptpcamerad`` / ``PTPCamera`` grabs the device immediately.  Quit
-      Image Capture and Sony Imaging Edge, then:
-          sudo pkill -9 PTPCamera
+    * **macOS**: the system PTP daemon grabs the device immediately.  Quit Image Capture,
+      Photos and Sony Imaging Edge, then stop the daemon.  It is called ``ptpcamerad`` on
+      macOS 13 and later and ``PTPCamera`` on older releases; the binary does not exist
+      under the old name on current systems, so kill both:
+          pkill -9 ptpcamerad; pkill -9 PTPCamera
+      The daemon runs as the logged-in user, so no privileges are needed.  launchd restarts
+      it on demand, but once gphoto2 holds the interface it cannot be taken back.
 
     * **Linux**: A stale gphoto2 process or gvfs-gphoto2-volume-monitor may hold the
       device.  Check with ``gphoto2 --auto-detect`` and kill conflicting processes.
@@ -441,7 +445,8 @@ def _raise_camera_init_error(camera_name: str, error: Exception) -> None:
             f"Cannot claim USB device for '{camera_name}' (gphoto2 error -53 — device busy).\n"
             "On Windows/WSL: run Zadig on the Windows host, select the camera, switch the\n"
             "driver to WinUSB, then re-run: usbipd detach && usbipd attach --wsl.\n"
-            "On macOS: quit Image Capture / Sony Imaging Edge, then: sudo pkill -9 PTPCamera.\n"
+            "On macOS: quit Image Capture / Photos / Sony Imaging Edge, then stop the system\n"
+            "PTP daemon: pkill -9 ptpcamerad  (older macOS: pkill -9 PTPCamera).\n"
             "On Linux: check for conflicting processes with: gphoto2 --auto-detect"
             + sony_note
         ) from error
