@@ -1411,7 +1411,9 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             gp.gp_widget_set_value(bulb_mode, 0)
             _set_gp_config(camera, config, context)
             logging.debug('Set Sony bulb mode to 0')
-            if 'card' in (get_sony_save_destination(camera) or ''):
+            if not (hasattr(camera, '_bg_downloader')
+                    and camera._bg_downloader is not None
+                    and camera._bg_downloader.is_alive()):
                 _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except gphoto2.GPhoto2Error as e:
             logging.warning('Sony burst capture failed: %s', e)
@@ -1633,8 +1635,10 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             gp.gp_widget_set_value(bulb_mode, 0)
             _set_gp_config(camera, config, context)
             logging.debug('Set Sony bulb mode to 0')
-            if 'card' in (get_sony_save_destination(camera) or ''):
-                _drain_camera_events(target, context, timeout_ms=100, max_events=60)
+            if not (hasattr(camera, '_bg_downloader')
+                    and camera._bg_downloader is not None
+                    and camera._bg_downloader.is_alive()):
+                _drain_camera_events(target, context, timeout_ms=700, max_events=60)
         except gphoto2.GPhoto2Error as e:
             logging.warning('Sony burst capture failed: %s', e)
 
