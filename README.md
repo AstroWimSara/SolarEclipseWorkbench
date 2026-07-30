@@ -789,7 +789,8 @@ endfor
 ## Shortcomings
 
 - In normal mode, only one picture per two seconds can be made.
-- The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS and Linux using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/). 
+- The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS and Linux using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/).
+- Sony cameras after cold boot might return wrong configuration values. Please press `Camera(s)` button to retrieve them one more time.
 
 ## Converting scripts from Solar Eclipse Maestro
 
@@ -808,6 +809,7 @@ Note - this should work fine even if multiple cameras are connected and only one
 ## Development Guide
 
 When you want to help with the development of Solar Eclipse Workbench, some extra installation is needed.
+
 ### Installation on macOS
 
 - For modern Apple Mac computers (using Apple Silicon processors), install [homebrew](https://brew.sh/). Add your homebrew/bin directory to your PATH. Then install gphoto2 and GDAL (required by geopandas) using homebrew:

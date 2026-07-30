@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.11.0] - 2026-07-31
+
+### Added
+- Sony: `take_bracket` is now supported, please consult README (Issue #146)
+- It is now possible to re-connect cameras without restarting the app, please consult README (Issue #149)
+- Sony: `--sony-cont-mode` command line option has been added, to override automatic selection of the Continuous capture mode, please consult README (Issue #145)
+- Timings for reference moments now show milliseconds to first digit (Issue #137)
+- Scheduler has been replaced, it now supports precision down to microseconds (Issue #137)
+- Sony: banner with warning(s) can now be closed
+
+## Fixed
+- Sony: `take_burst` is now properly supported, please consult README (Issue #145)
+- Sony: `PC` mode is now working correctly and downloads all files from camera(s)
+- Sony: no more 4 seconds delay before shooting if no lens is detected
+- Sony: many small vendor specific fixes and additions (Issues #147, #150 and #151)
+- Live View: it can now be properly disabled
+- Improved log messaging (more to come)
+- Rewrote the Sony section in the README
+- Sony: banner with warning(s) is now more informative (updated the text)
+
 ## [1.10.7] - 2026-07-23
 
 ### Fixed
