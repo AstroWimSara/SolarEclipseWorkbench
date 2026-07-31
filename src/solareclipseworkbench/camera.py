@@ -1407,6 +1407,11 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
             gp.gp_widget_set_value(remote_release, "Release Full")
             _set_gp_config(camera, config, context)
+
+            # Ensure that the camera truly finished, so it won't affect next commands
+            target = camera._camera if hasattr(camera, '_camera') else camera
+            _wait_for_capture_complete(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except gphoto2.GPhoto2Error:
             # If 'eosremoterelease' is not supported (e.g. Canon 1000D), then
             # fallback to just take as number of shots equal to `burst_number`
@@ -1893,6 +1898,9 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
                     '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
     else:
         target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # Ensure that no lingering events are left before proceeding with the HDR sequence
+    _drain_camera_events(target, context, timeout_ms=100, max_events=60)
 
     # Build the ordered shutter-speed list from this camera's actual capabilities
     choices = _get_shutter_speed_choices(config)
