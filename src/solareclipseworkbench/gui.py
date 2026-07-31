@@ -1099,7 +1099,15 @@ class SolarEclipseController(Observer):
 
                 camera: Camera
                 for camera in cameras:
-                    camera.exit()
+                    # Close every camera even if one refuses.  Without this, the
+                    # first camera to raise aborts the loop and leaves the rest
+                    # open, still holding their USB devices, so the next run
+                    # cannot claim them and fails with a device-busy error.
+                    try:
+                        camera.exit()
+                    except Exception:
+                        LOGGER.exception("Could not close camera %s",
+                                         getattr(camera, "name", camera))
 
             return
 
