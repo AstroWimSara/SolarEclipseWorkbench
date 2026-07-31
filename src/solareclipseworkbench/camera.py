@@ -1,6 +1,8 @@
 import functools
 import locale
 import logging
+import subprocess
+import sys
 import threading
 import time
 
@@ -404,6 +406,85 @@ class SonyCamera(GPhotoCameraAdapter):
 
 
 
+# macOS starts ptpcamerad (the daemon behind Image Capture and Photos) as soon as a PTP
+# camera is plugged in or touched, and it claims USB interface 0 exclusively — gphoto2 then
+# fails with -53.  Killing it opens a window; these bound how hard we try to hit that window.
+_PTP_CLAIM_ATTEMPTS = 10
+_PTP_CLAIM_RETRY_DELAY = 0.3
+
+# Daemon names to stop.  macOS 13+ uses ptpcamerad; older releases used PTPCamera.
+_MACOS_PTP_DAEMONS = ('ptpcamerad', 'PTPCamera')
+
+
+def _release_macos_ptp_daemon() -> bool:
+    """Stop macOS' PTP daemon so gphoto2 can claim the camera.
+
+    Returns True when a daemon process was actually signalled.
+
+    The daemon runs as the logged-in user, so no privileges are required to stop it —
+    ``sudo`` is not needed and is deliberately not used.  launchd restarts it on demand
+    afterwards, which is harmless: the kill only has to open a window long enough for
+    ``camera.init()`` to claim the interface.  Once we hold it, a respawned daemon cannot
+    take it back, so this is a start-up race rather than a permanent conflict.
+
+    Note that ``launchctl disable`` is *not* a reliable alternative on recent macOS: the
+    daemon is also started on demand through ImageCaptureCore's XPC service, which bypasses
+    the disabled launchd job, and SIP refuses ``launchctl bootout``.
+    """
+    if sys.platform != 'darwin':
+        return False
+
+    killed = False
+    for daemon in _MACOS_PTP_DAEMONS:
+        try:
+            # -u limits the kill to this user's processes, so a shared machine is unaffected.
+            result = subprocess.run(
+                ['/usr/bin/pkill', '-9', '-u', str(os.getuid()), '-x', daemon],
+                capture_output=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            logging.debug('Could not run pkill for %s: %s', daemon, e)
+            continue
+        # pkill exits 0 when it matched something, 1 when nothing matched.
+        if result.returncode == 0:
+            logging.info('Stopped macOS %s so the camera can be claimed', daemon)
+            killed = True
+    return killed
+
+
+def _init_camera_claiming_usb(camera, context, camera_name: str) -> None:
+    """Initialise *camera*, working around macOS' PTP daemon holding the USB device.
+
+    On a -53 (USB claim) failure on macOS the PTP daemon is stopped and the init retried,
+    because the daemon reliably wins the race against application start-up.  Any other
+    error, or a -53 on another platform, is reported immediately — there the fix is a
+    driver or permissions change that no amount of retrying will achieve.
+    """
+    try:
+        camera.init(context)
+        return
+    except gphoto2.GPhoto2Error as e:
+        if getattr(e, 'code', None) != -53 or sys.platform != 'darwin':
+            _raise_camera_init_error(camera_name, e)
+        last_error = e
+
+    logging.info('%s is busy (macOS PTP daemon); reclaiming the USB device', camera_name)
+    for attempt in range(1, _PTP_CLAIM_ATTEMPTS + 1):
+        _release_macos_ptp_daemon()
+        time.sleep(_PTP_CLAIM_RETRY_DELAY)
+        try:
+            camera.init(context)
+            logging.info('Claimed %s after %d attempt(s)', camera_name, attempt)
+            return
+        except gphoto2.GPhoto2Error as e:
+            last_error = e
+            if getattr(e, 'code', None) != -53:
+                break
+            logging.debug('Claim attempt %d/%d for %s failed', attempt, _PTP_CLAIM_ATTEMPTS, camera_name)
+
+    _raise_camera_init_error(camera_name, last_error)
+
+
 def _raise_camera_init_error(camera_name: str, error: Exception) -> None:
     """Raise a CameraError with an actionable message for camera initialisation failures.
 
@@ -423,9 +504,13 @@ def _raise_camera_init_error(camera_name: str, error: Exception) -> None:
       Sony cameras must also have **PC Remote** mode enabled on the camera itself:
       Menu → Network → PC Remote Settings → PC Remote → On.
 
-    * **macOS**: ``ptpcamerad`` / ``PTPCamera`` grabs the device immediately.  Quit
-      Image Capture and Sony Imaging Edge, then:
-          sudo pkill -9 PTPCamera
+    * **macOS**: the system PTP daemon grabs the device immediately.  Quit Image Capture,
+      Photos and Sony Imaging Edge, then stop the daemon.  It is called ``ptpcamerad`` on
+      macOS 13 and later and ``PTPCamera`` on older releases; the binary does not exist
+      under the old name on current systems, so kill both:
+          pkill -9 ptpcamerad; pkill -9 PTPCamera
+      The daemon runs as the logged-in user, so no privileges are needed.  launchd restarts
+      it on demand, but once gphoto2 holds the interface it cannot be taken back.
 
     * **Linux**: A stale gphoto2 process or gvfs-gphoto2-volume-monitor may hold the
       device.  Check with ``gphoto2 --auto-detect`` and kill conflicting processes.
@@ -441,7 +526,8 @@ def _raise_camera_init_error(camera_name: str, error: Exception) -> None:
             f"Cannot claim USB device for '{camera_name}' (gphoto2 error -53 — device busy).\n"
             "On Windows/WSL: run Zadig on the Windows host, select the camera, switch the\n"
             "driver to WinUSB, then re-run: usbipd detach && usbipd attach --wsl.\n"
-            "On macOS: quit Image Capture / Sony Imaging Edge, then: sudo pkill -9 PTPCamera.\n"
+            "On macOS: quit Image Capture / Photos / Sony Imaging Edge, then stop the system\n"
+            "PTP daemon: pkill -9 ptpcamerad  (older macOS: pkill -9 PTPCamera).\n"
             "On Linux: check for conflicting processes with: gphoto2 --auto-detect"
             + sony_note
         ) from error
@@ -1770,10 +1856,7 @@ def get_camera(camera_name: str):
     context = gp.gp_context_new()
 
     # Initialize the camera
-    try:
-        camera.init(context)
-    except gphoto2.GPhoto2Error as e:
-        _raise_camera_init_error(camera_name, e)
+    _init_camera_claiming_usb(camera, context, camera_name)
 
     # Post-init configuration (capture target, drive mode)
     try:
@@ -1855,10 +1938,7 @@ def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) 
 
     context = gp.gp_context_new()
 
-    try:
-        camera.init(context)
-    except gphoto2.GPhoto2Error as e:
-        _raise_camera_init_error(model_name, e)
+    _init_camera_claiming_usb(camera, context, model_name)
 
     # Post-init configuration (capture target, drive mode)
     try:
