@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0rc1] - 2026-07-31
+
+### Fixed
+
+- Stop the previous scheduler when a new script is loaded- #163 by @mrosseel
+  - Loading a second script left two schedulers running and every command fired twice.
+
 ## [1.10.7] - 2026-07-23
 
 ### Fixed
