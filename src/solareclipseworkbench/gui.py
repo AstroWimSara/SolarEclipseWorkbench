@@ -992,13 +992,21 @@ class SolarEclipseController(Observer):
         self.model.local_time = current_time_local
         self.model.utc_time = current_time_utc
 
-        countdown_c1 = self.model.c1_info.time_utc - current_time_utc if self.model.c1_info else None
-        countdown_c2 = self.model.c2_info.time_utc - current_time_utc if self.model.c2_info else None
-        countdown_max = self.model.max_info.time_utc - current_time_utc if self.model.max_info else None
-        countdown_c3 = self.model.c3_info.time_utc - current_time_utc if self.model.c3_info else None
-        countdown_c4 = self.model.c4_info.time_utc - current_time_utc if self.model.c4_info else None
-        countdown_sunrise = self.model.sunrise_info.time_utc - current_time_utc if self.model.sunrise_info else None
-        countdown_sunset = self.model.sunset_info.time_utc - current_time_utc if self.model.sunset_info else None
+        # When simulating, the scheduler has moved every command so that the chosen reference
+        # moment happens now-ish.  The countdowns must follow that same shift, otherwise they
+        # keep showing the real time to the eclipse (days away) while the commands fire.  This
+        # is the offset the eclipse visualization already applies in plot(); zero when not
+        # simulating, so the normal case is unaffected.
+        offset = getattr(self.view.eclipse_visualization, 'offset', datetime.timedelta(0))
+        reference_now = current_time_utc + offset
+
+        countdown_c1 = self.model.c1_info.time_utc - reference_now if self.model.c1_info else None
+        countdown_c2 = self.model.c2_info.time_utc - reference_now if self.model.c2_info else None
+        countdown_max = self.model.max_info.time_utc - reference_now if self.model.max_info else None
+        countdown_c3 = self.model.c3_info.time_utc - reference_now if self.model.c3_info else None
+        countdown_c4 = self.model.c4_info.time_utc - reference_now if self.model.c4_info else None
+        countdown_sunrise = self.model.sunrise_info.time_utc - reference_now if self.model.sunrise_info else None
+        countdown_sunset = self.model.sunset_info.time_utc - reference_now if self.model.sunset_info else None
 
         self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
                               countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
@@ -1012,7 +1020,7 @@ class SolarEclipseController(Observer):
             in_totality = (
                 c2 is not None
                 and c3 is not None
-                and (c2.time_utc - _MARGIN) <= current_time_utc <= (c3.time_utc + _MARGIN)
+                and (c2.time_utc - _MARGIN) <= reference_now <= (c3.time_utc + _MARGIN)
             )
             self._live_view_window.set_totality_paused(in_totality)
 
