@@ -397,20 +397,12 @@ sew
 - You can add a parameters to set the needed parameters for the eclipse.  Some examples:
 
 ```bash
-# On macos, start the commands with sudo
-cd solareclipseworkbench
-source bin/activate
-sudo sew -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
-sudo sew
-
-# In Linux or using WSL on Windows, start the command without sudo
 cd solareclipseworkbench
 source bin/activate
 sew -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
 sew
 ```
 
-- There is a problem with `gphoto2`.  On macOS, Solar Eclipse Workbench needs to be started with sudo rights to be able to connect to the cameras.  In Linux (or Windows using wsl), sudo should not be used.
 - The first time you run Solar Eclipse Workbench, some files are downloaded from the internet.  Make sure to do this before eclipse day!
 
 ### Command line parameters
