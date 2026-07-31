@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Scheduler has been replaced, it now supports precision down to microseconds (Issue #137) by @fliker09
 - Sony: banner with warning(s) can now be closed by @fliker09
 
-## Fixed
+### Fixed
 - Sony: `take_burst` is now properly supported, please consult README (Issue #145) by @fliker09
 - Sony: `PC` mode is now working correctly and downloads all files from camera(s) by @fliker09
 - Sony: no more 4 seconds delay before shooting if no lens is detected by @fliker09
