@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - Simulation mode now shows the correct countdown.  Apply the simulation offset to countdowns and live-view pause #162 by @mrosseel
+- Show camera problems in the GUI instead of only in the log- #166 by @mrosseel
 
 ### Fixed
 
