@@ -1312,6 +1312,14 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
         gp.gp_widget_set_value(remote_release, "Release Full")
         _set_gp_config(camera, config, context)
+
+        # A 3 s burst leaves one CaptureComplete + ObjectAdded pair per frame on
+        # the USB queue and several hundred MB of RAW still flushing to the card.
+        # Returning here would report success while the camera is still busy, so
+        # the next scheduled step (e.g. take_hdr) fails with -110 I/O in progress.
+        target = camera._camera if hasattr(camera, '_camera') else camera
+        _wait_for_capture_complete(target, context)
+        _drain_camera_events(target, context, timeout_ms=100, max_events=120)
     elif getattr(camera, 'vendor', None) == 'Nikon':
         # Set capture mode to burst/continuous
         # Try different widget names (differs between DSLR and mirrorless models)
@@ -1684,6 +1692,12 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             raise
 
     target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # A preceding step may have left the camera busy (a burst queues one
+    # CaptureComplete + ObjectAdded pair per frame).  Without this the very
+    # first trigger below raises -110 I/O in progress and the whole HDR
+    # sequence is lost — every shot, not just the one that collided.
+    _drain_camera_events(target, context, timeout_ms=100, max_events=120)
 
     # Build the ordered shutter-speed list from this camera's actual capabilities
     choices = _get_shutter_speed_choices(config)
