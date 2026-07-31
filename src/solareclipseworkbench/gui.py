@@ -2976,95 +2976,87 @@ class CameraOverviewTableModel(QAbstractTableModel):
         except Exception:
             logging.exception('Could not update camera overview view after data ready')
 
-        # Check if a Sony camera is present. Use vendor attribute when available,
-        # else fall back to camera name containing 'sony'.
-        try:
-            sony_present = False
-            pm = getattr(self, 'camera_overview_dict', None)
-            if pm:
-                for cam in pm.values():
-                    if cam is not None and _is_sony_camera_instance(cam):
-                        sony_present = True
-                        break
-        except Exception:
-            logging.debug('Could not check the presence of a Sony camera', exc_info=True)
-
         # If we have actual camera objects, start the Sony background downloader
         # automatically only when the camera reports PC-Only save destination.
         # Also, show an informational banner about the relevant settings.
         try:
-            if pm and sony_present:
+            pm = getattr(self, 'camera_overview_dict', None)
+
+            if pm:
                 seen = set()
                 banner_lines = []
                 sony_banner_label_visibility = False
 
                 for cam in pm.values():
-                    try:
-                        if cam is None:
-                            continue
-                        if id(cam) in seen:
-                            continue
-                        seen.add(id(cam))
+                    camera_vendor = getattr(cam, 'vendor', None)
 
-                        dest = get_sony_save_destination(cam)
-                        image_quality = get_sony_image_quality(cam)
-                        camera_model = getattr(cam, 'name', 'Unknown Sony')
+                    if camera_vendor == "Sony":
+                        try:
+                            if cam is None:
+                                continue
+                            if id(cam) in seen:
+                                continue
+                            seen.add(id(cam))
 
-                        # Decide action + message for this camera
-                        if dest == "sdram":
-                            text = (f"{camera_model}: currently saving photos to PC. "
-                                    f"We recommend testing if 'PC+Camera' mode is faster.")
-                            if image_quality != "RAW":
-                                text += f" Also, 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
-                            try:
-                                cam.start_background_downloader()
-                            except Exception:
-                                logging.warning('%s: failed to start Background Downloader', camera_model)
+                            dest = get_sony_save_destination(cam)
+                            image_quality = get_sony_image_quality(cam)
+                            camera_model = getattr(cam, 'name', 'Unknown Sony')
 
-                            banner_lines.append(text)
-                            sony_banner_label_visibility = True
+                            # Decide action + message for this camera
+                            if dest == "sdram":
+                                text = (f"{camera_model}: currently saving photos to PC. "
+                                        f"We recommend testing if 'PC+Camera' mode is faster.")
+                                if image_quality != "RAW":
+                                    text += f" Also, 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                try:
+                                    cam.start_background_downloader()
+                                except Exception:
+                                    logging.warning('%s: failed to start Background Downloader', camera_model)
 
-                        elif dest == "card+sdram":
-                            text = (f"{camera_model}: currently in 'PC+Camera' mode. "
-                                    f"We recommend testing if 'PC' mode is faster.")
-                            if not image_quality.startswith("RAW+JPEG"):
-                                text += (" Also, 'File Format' is set to '{}'."
-                                         " Please set it to 'RAW+JPEG' and choose 'JPEG Only' "
-                                         "for 'RAW+J PC Save Img'.").format(image_quality)
-                            try:
-                                cam.stop_background_downloader()
-                            except Exception:
-                                pass
-
-                            banner_lines.append(text)
-                            sony_banner_label_visibility = True
-
-                        elif dest == "card":
-                            if image_quality != "RAW":
-                                text = f"{camera_model}: 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
                                 banner_lines.append(text)
                                 sony_banner_label_visibility = True
-                            else:
-                                # No banner needed for good RAW + Card-only config
+
+                            elif dest == "card+sdram":
+                                text = (f"{camera_model}: currently in 'PC+Camera' mode. "
+                                        f"We recommend testing if 'PC' mode is faster.")
+                                if not image_quality.startswith("RAW+JPEG"):
+                                    text += (" Also, 'File Format' is set to '{}'."
+                                            " Please set it to 'RAW+JPEG' and choose 'JPEG Only' "
+                                            "for 'RAW+J PC Save Img'.").format(image_quality)
                                 try:
                                     cam.stop_background_downloader()
                                 except Exception:
                                     pass
-                        else:
-                            # Unknown / unavailable destination
-                            if image_quality != "RAW":
-                                text = f"{camera_model}: 'Quality' is set to '{image_quality}'. Please set it to 'RAW'!"
+
                                 banner_lines.append(text)
                                 sony_banner_label_visibility = True
-                            else:
-                                try:
-                                    cam.start_background_downloader()
-                                except Exception:
-                                    logging.warning(
-                                        '%s: failed to start Background Downlaoder', camera_model)
 
-                    except Exception:
-                        logging.debug('Error while checking Sony save destination for a camera', exc_info=True)
+                            elif dest == "card":
+                                if image_quality != "RAW":
+                                    text = f"{camera_model}: 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                    banner_lines.append(text)
+                                    sony_banner_label_visibility = True
+                                else:
+                                    # No banner needed for good RAW + Card-only config
+                                    try:
+                                        cam.stop_background_downloader()
+                                    except Exception:
+                                        pass
+                            else:
+                                # Unknown / unavailable destination
+                                if image_quality != "RAW":
+                                    text = f"{camera_model}: 'Quality' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                    banner_lines.append(text)
+                                    sony_banner_label_visibility = True
+                                else:
+                                    try:
+                                        cam.start_background_downloader()
+                                    except Exception:     to
+                                        logging.warning(
+                                            '%s: failed to start Background Downlaoder', camera_model)
+
+                        except Exception:
+                            logging.debug('Error while checking Sony save destination for a camera', exc_info=True)
 
                 # === Build final banner text ===
                 if banner_lines:
@@ -3074,12 +3066,15 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
                         self.view.sony_banner_label.setText(full_text)
                         self.view.sony_banner_label.setVisible(sony_banner_label_visibility)
-                        logging.info("Sony banner updated:\n%s", full_text)
+                        logging.info("Sony banner updated to:\n%s", full_text)
                 else:
                     # Hide banner if no messages
                     if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
                         self.view.sony_banner_label.setVisible(False)
-
+            else:
+                # Hide banner if no Sony cameras connected
+                if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                    self.view.sony_banner_label.setVisible(False)
         except Exception:
             logging.exception("Error updating Sony banner / background downloaders")
 
