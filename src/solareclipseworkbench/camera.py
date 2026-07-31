@@ -1132,7 +1132,7 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
                 logging.debug('%s: ensured capturemode="%s" before take_picture', camera_name, single_choice)
             else:
                 logging.warning('%s: no "single" choice found for capture mode, leaving as-is', camera_name)
-        except gphoto2.GPhoto2Error:
+        except gphoto2.GPhoto2Error as exc:
             if vendor == "Nikon":
                 try:
                     capture_mode_widget = gp.check_result(
@@ -1146,7 +1146,7 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
                         '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
             else:
                 logging.warning(
-                    '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
+                    '%s: could not ensure single-frame mode before take_picture: %s', camera_name, exc)
     else:
         target = camera._camera if hasattr(camera, '_camera') else camera
 
@@ -1258,7 +1258,7 @@ def __adapt_camera_settings(camera, camera_settings):
             ss2_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
             closest = _find_closest_shutter_choice(ss2_widget, camera_settings.shutter_speed)
             if closest is not None:
-                gp.gp_widget_set_value(ss_widget, closest)
+                gp.gp_widget_set_value(ss2_widget, closest)
                 logging.info('Using closest shutter speed choice: %s', closest)
             else:
                 logging.warning('No suitable shutter speed choice found for %s',
@@ -1881,7 +1881,7 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
                 logging.debug('%s: ensured capturemode="%s" before take_picture', camera_name, single_choice)
             else:
                 logging.warning('%s: no "single" choice found for capture mode, leaving as-is', camera_name)
-        except gphoto2.GPhoto2Error:
+        except gphoto2.GPhoto2Error as exc:
             if vendor == "Nikon":
                 try:
                     capture_mode_widget = gp.check_result(
@@ -1895,7 +1895,7 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
                         '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
             else:
                 logging.warning(
-                    '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
+                    '%s: could not ensure single-frame mode before take_picture: %s', camera_name, exc)
     else:
         target = camera._camera if hasattr(camera, '_camera') else camera
 

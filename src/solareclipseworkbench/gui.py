@@ -41,8 +41,9 @@ from skyfield.api import load, wgs84
 import threading
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
-get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, get_sony_save_destination, \
-get_sony_image_quality, _is_sony_camera_instance
+    get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
+    get_sony_save_destination, get_sony_image_quality
+from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -970,6 +971,13 @@ class SolarEclipseController(Observer):
         self.time_display_timer.setInterval(1000)
         self.time_display_timer.start()
 
+        # Camera problems are raised on worker threads, which cannot open a
+        # dialog, so they are queued and collected here on the UI thread.
+        self._problem_timer = QTimer()
+        self._problem_timer.timeout.connect(self._show_camera_problems)
+        self._problem_timer.setInterval(2000)
+        self._problem_timer.start()
+
         # Update the eclipse visualization less frequently to save CPU/battery.
         # The main time display remains at 1 Hz; the plot updates every 5 seconds.
         self.visualization_timer = QTimer()
@@ -982,6 +990,47 @@ class SolarEclipseController(Observer):
         self._live_view_window: Union[LiveViewWindow, None] = None
 
         self.load_settings()
+
+    def _run_in_progress(self) -> bool:
+        """True while a schedule is loaded and running."""
+        try:
+            return bool(self.scheduler and self.scheduler.get_jobs())
+        except Exception:
+            return False
+
+    def _show_camera_problems(self):
+        """Show queued camera problems, without ever interrupting a run.
+
+        Before the run a dialog is right: that is when a camera that failed to
+        respond can still be replugged or swapped.  Once the schedule is
+        running a modal dialog is worse than the problem it reports, because it
+        blocks the UI thread while frames are being taken, so the count goes in
+        the window title instead and the detail stays in the log.
+        """
+        try:
+            if hardware_problems.count() == 0:
+                return
+
+            if self._run_in_progress():
+                pending = hardware_problems.peek()
+                worst = "error" if any(p.severity == "error" for p in pending) else "warning"
+                marker = "\u26d4" if worst == "error" else "\u26a0"
+                self.view.setWindowTitle(
+                    f"{marker} {len(pending)} camera problem(s) - Solar Eclipse Workbench"
+                )
+                return
+
+            problems = hardware_problems.drain()
+            summary = hardware_problems.summarise(problems)
+            has_error = any(p.severity == "error" for p in problems)
+            box = QMessageBox.critical if has_error else QMessageBox.warning
+            box(
+                self.view,
+                "Camera problem" if len(problems) == 1 else "Camera problems",
+                summary + "\n\nDetails are in the log file.",
+            )
+        except Exception:
+            LOGGER.exception("Could not display camera problems")
 
     def update_time(self):
         """ Update the displayed current time and countdown clocks."""
@@ -1153,7 +1202,15 @@ class SolarEclipseController(Observer):
 
                 camera: Camera
                 for camera in cameras:
-                    camera.exit()
+                    # Close every camera even if one refuses.  Without this, the
+                    # first camera to raise aborts the loop and leaves the rest
+                    # open, still holding their USB devices, so the next run
+                    # cannot claim them and fails with a device-busy error.
+                    try:
+                        camera.exit()
+                    except Exception:
+                        LOGGER.exception("Could not close camera %s",
+                                         getattr(camera, "name", camera))
 
             return
 
@@ -2804,13 +2861,16 @@ class CameraOverviewTableModel(QAbstractTableModel):
 
                 if force_refresh or not existing_map or not all(v is not None for v in existing_map.values()):
                     if force_refresh:
-                        logging.info(f"CameraOverview: forcing fresh detection (attempt {attempt+1})")
+                        logging.info('CameraOverview: forcing fresh detection (attempt %d)', attempt + 1)
                         seen = set()
-                        for camera_name, camera in camera_dict.items():
-                            if id(camera) in seen:
+                        for camera_name, camera in (existing_map or {}).items():
+                            if camera is None or id(camera) in seen:
                                 continue
                             seen.add(id(camera))
-                            camera.disconnect()
+                            try:
+                                camera.disconnect()
+                            except Exception:
+                                logging.debug('Worker: disconnect of %s raised (non-fatal)', camera_name)
                         self._force_camera_refresh = False
 
                     alias_map = ConfigManager().get_camera_aliases() or None
@@ -2845,13 +2905,27 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             free_space_gb_str = str(free_space_gb)
                             free_space_pct_str = str(int(free_space_gb / total_space * 100))
                         data.append([camera_name, str(battery_level), free_space_gb_str, free_space_pct_str])
-                    except Exception as e:
-                        error_str = str(e).lower()
+                    except Exception as exc:
+                        error_str = str(exc).lower()
                         if any(x in error_str for x in ['-52', '-2', 'could not find the requested device', 'bad parameters']):
-                            logging.warning(f"Stale camera connection detected on {camera_name} ({e})")
+                            logging.warning('Stale camera connection detected on %s (%s)', camera_name, exc)
+                            hardware_problems.report(
+                                str(camera_name),
+                                'Lost the USB connection to this camera',
+                                detail=str(exc),
+                            )
                             needs_refresh = True
                             self._force_camera_refresh = True
                             break
+                        logging.exception('Worker: exception while processing camera %s', camera_name)
+                        # The row survives with N/A values, which on its own looks
+                        # like the camera is simply idle.  Say why.
+                        hardware_problems.report(
+                            str(camera_name),
+                            'Could not read battery and free space from this camera',
+                            detail=str(exc),
+                            severity='warning',
+                        )
                         # Preserve the camera row with N/A values when probing fails so
                         # the camera does not disappear from the UI.
                         try:
@@ -2868,10 +2942,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     continue
 
                 # schedule UI update on main thread
-                try:
-                    LOGGER.info("Worker: gathered camera overview data: " + data)
-                except Exception:
-                    pass
+                LOGGER.debug('Worker: gathered camera overview data: %s', data)
                 # write pending data and the camera objects for the main thread poll to pick up
                 try:
                     self._pending_data = data
@@ -2880,10 +2951,15 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 except Exception:
                     logging.exception('Worker: could not set pending data')
                 break
-            except Exception:
+            except Exception as exc:
                 logging.exception('Worker: failed to gather camera info')
                 attempt += 1
                 if attempt >= max_retries:
+                    hardware_problems.report(
+                        'Cameras',
+                        'Could not read the connected cameras',
+                        detail=str(exc),
+                    )
                     break
 
     def _on_data_ready(self, data):

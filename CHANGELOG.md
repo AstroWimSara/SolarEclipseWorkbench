@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - Simulation mode now shows the correct countdown.  Apply the simulation offset to countdowns and live-view pause #162 by @mrosseel
+- Show camera problems in the GUI instead of only in the log- #166 by @mrosseel
 - Sony camera support.  Working in Solar Eclipse Workbench with Sony cameras works now fluently by @fliker09
   - Sony: `take_bracket` is now supported, please consult README (Issue #146) by @fliker09
   - Sony: `--sony-cont-mode` command line option has been added, to override automatic selection of the Continuous capture mode, please consult README (Issue #145) by @fliker09
@@ -31,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - This means that on macOS, Solar Eclipse Workbench should not be started with *sudo* anymore.
 - Stop the previous scheduler when a new script is loaded- #163 by @mrosseel
   - Loading a second script left two schedulers running and every command fired twice.
+- Close every camera on exit, not just up to the first failure- #165 by @mrosseel
 
 ## [1.10.7] - 2026-07-23
 

@@ -1,8 +1,9 @@
 from unittest.mock import patch
 
 import gphoto2
+import pytest
 
-from solareclipseworkbench.camera import get_free_space, get_space
+from solareclipseworkbench.camera import CameraError, get_free_space, get_space
 
 
 class _SonyNoStorageCamera:
@@ -33,13 +34,11 @@ def test_sony_storageinfo_minus_one_returns_unknown_without_reinit():
     get_camera_mock.assert_not_called()
 
 
-def test_non_sony_minus_one_still_tries_reinit():
+def test_non_sony_minus_one_raises_camera_error():
     camera = _CanonNoStorageCamera()
 
-    with patch("solareclipseworkbench.camera.get_camera", side_effect=Exception("boom")) as get_camera_mock:
-        try:
+    with patch("solareclipseworkbench.camera.get_camera") as get_camera_mock:
+        with pytest.raises(CameraError):
             get_free_space(camera)
-        except Exception:
-            pass
 
-    assert get_camera_mock.called
+    get_camera_mock.assert_not_called()
