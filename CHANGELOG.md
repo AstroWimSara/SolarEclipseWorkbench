@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [2.0.0rc1] - 2026-07-31
 
+### Added
+- Simulation mode now shows the correct countdown.  Apply the simulation offset to countdowns and live-view pause #162 by @mrosseel
 ### Fixed
 
 - Reclaim the USB device from macOS' PTP daemon (and fix the -53 advice)- #164 by @mrosseel
