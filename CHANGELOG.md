@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Reclaim the USB device from macOS' PTP daemon (and fix the -53 advice)- #164 by @mrosseel
   - This means that on macOS, Solar Eclipse Workbench should not be started with *sudo* anymore.
+- Stop the previous scheduler when a new script is loaded- #163 by @mrosseel
+  - Loading a second script left two schedulers running and every command fired twice.
 
 ## [1.10.7] - 2026-07-23
 
