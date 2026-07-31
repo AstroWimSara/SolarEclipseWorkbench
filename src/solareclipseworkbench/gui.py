@@ -24,8 +24,9 @@ import pandas as pd
 import pytz
 from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QSettings, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
-from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, QGridLayout, \
-    QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, QMessageBox, QDialog, QPlainTextEdit, QProgressBar
+from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
+QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -41,19 +42,21 @@ import threading
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
     get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
-    sony_save_destination_needs_downloader
+    get_sony_save_destination, get_sony_image_quality
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget
 from solareclipseworkbench.constants import SUN_RADIUS, MOON_RADIUS
+from solareclipseworkbench import configuration
 
 ICON_PATH = Path(__file__).parent.resolve() / "img"
 
 TIME_FORMATS = {
-    "24 hours": "%H:%M:%S",
-    "12 hours": "%I:%M:%S"}
+    "24 hours": "%H:%M:%S.%f",
+    "12 hours": "%I:%M:%S.%f"
+}
 
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
@@ -70,6 +73,52 @@ REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%a, %d %b %Y %H:%M:%S', filename="/tmp/solareclipseworkbench.log", filemode='w')
+
+
+class BannerNotification(QFrame):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+
+        # Scope style ONLY to this class to prevent internal widget inheritance bugs
+        self.setStyleSheet('''
+            BannerNotification {
+                background-color: #FFF3CD;
+                border-radius: 4px;
+            }
+            QLabel {
+                color: #856404;
+                background: transparent;
+                border: none;
+            }
+            QToolButton {
+                border: none;
+                background: transparent;
+                color: #856404;
+                font-weight: bold;
+            }
+            QToolButton:hover {
+                color: #000000;
+            }
+        ''')
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+
+        self.label = QLabel(text)
+        self.label.setWordWrap(True)
+
+        self.close_btn = QToolButton()
+        self.close_btn.setText("✕")
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Explicitly hide the root frame (self) when clicked
+        self.close_btn.clicked.connect(self.hide)
+
+        layout.addWidget(self.label, 1)
+        layout.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+
+    def setText(self, text: str):
+        self.label.setText(text)
 
 
 class SolarEclipseModel:
@@ -427,12 +476,9 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.jobs_table = QJobsTableView()
 
-        # One-line Sony reminder banner (hidden by default; shown when a Sony camera is present)
-        self.sony_reminder_label = QLabel()
-        self.sony_reminder_label.setText("Sony users: set 'PC Remote Settings → Save Destination' to 'PC+Camera' (or 'Camera Only') to keep images on the SD card and preserve tight shot timing")
-        self.sony_reminder_label.setWordWrap(True)
-        self.sony_reminder_label.setStyleSheet('background-color: #FFF3CD; color: #856404; padding: 6px; border-radius: 4px;')
-        self.sony_reminder_label.setVisible(False)
+        # One-line Sony banner (hidden by default; shown when a Sony camera is present)
+        self.sony_banner_label = BannerNotification()
+        self.sony_banner_label.setVisible(False)
 
         self.init_ui()
 
@@ -584,7 +630,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
-        global_layout.addWidget(self.sony_reminder_label)
+        global_layout.addWidget(self.sony_banner_label)
         global_layout.addLayout(input_hbox)
 
         global_layout.addLayout(output_hbox)
@@ -2236,7 +2282,7 @@ class EclipsePlotWidget(QtWidgets.QWidget):
         self._ensure_ephemerides_loaded()
 
         if not self.is_location_set:
-            print("Location not set. Please use set_location() first.")
+            LOGGER.info("Location not set. Please use set_location() first.")
             return
 
         # Interpret naive datetimes as UTC for robustness
@@ -2535,6 +2581,8 @@ class LiveViewWindow(QWidget):
             self._toggle_btn.setText("Disable Live View")
         else:
             self._thread.pause()
+            # Actually exit live view on the camera (Nikon D610 etc.)
+            self._thread.exit_live_view()
             self._toggle_btn.setText("Enable Live View")
         self._update_status_label()
 
@@ -2696,19 +2744,19 @@ def format_countdown(countdown: datetime.timedelta):
 
 
 def format_time(time: datetime.datetime, time_format: str) -> str:
-    """ Format the given time according to the given time format.
+    """Format the given time according to the given time format."""
 
-    Args:
-        - time: Time as datetime
+    # Format with standard strftime (includes 6 digits of microseconds)
+    formatted = time.strftime(TIME_FORMATS[time_format])
 
-    Returns: Formatted time, according to the given time format.
-    """
+    # Slice off the last 5 digits of %f, leaving 1 decimal place (.f)
+    formatted = formatted[:-5]
 
     suffix = ""
     if time_format == "12 hours":
         suffix = " am" if time.hour < 12 else " pm"
 
-    return f"{datetime.datetime.strftime(time, TIME_FORMATS[time_format])}{suffix}"
+    return f"{formatted}{suffix}"
 
 
 class CameraOverviewTableColumnNames(Enum):
@@ -2778,7 +2826,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
         """ Update the camera overview. """
         logging.debug('CameraOverviewTableModel.update_camera_overview(): start (scheduling worker)')
         try:
-            print('CameraOverview: scheduling worker to probe cameras', flush=True)
+            LOGGER.debug("CameraOverview: scheduling worker to probe cameras")
         except Exception:
             pass
 
@@ -2798,82 +2846,125 @@ class CameraOverviewTableModel(QAbstractTableModel):
         QTimer.singleShot(200, self._try_apply_pending)
 
     def _gather_camera_info(self):
-        try:
-            is_sim = getattr(self.view, 'is_simulator', False) and getattr(self.view, 'virtual_camera_enabled', False)
-            vc_fps = getattr(self.view, 'virtual_camera_fps', 1)
-            # Reuse existing camera objects if available to avoid opening a new USB
-            # connection while a previous connection (e.g. from take_picture) is still held.
-            existing_map = getattr(self, 'camera_overview_dict', None)
-            if existing_map and all(v is not None for v in existing_map.values()):
-                camera_dict = existing_map
-                logging.debug('CameraOverview: reusing %d existing camera object(s)', len(camera_dict))
-            else:
-                alias_map = ConfigManager().get_camera_aliases() or None
-                camera_dict = get_camera_dict(is_simulator=is_sim, alias_map=alias_map)
+        max_retries = 2
+        attempt = 0
 
-            data = []
-            seen_camera_ids: set = set()
-            for camera_name, camera in camera_dict.items():
-                # Skip bare-key aliases that point to the same physical camera object
-                # already added under its full gphoto2 name (e.g. "Sony Alpha-A7r II"
-                # is a duplicate of "Sony Alpha-A7r II (Control)").
-                cam_id = id(camera)
-                if cam_id in seen_camera_ids:
-                    logging.debug('Worker: skipping duplicate alias "%s" (same camera object)', camera_name)
-                    continue
-                seen_camera_ids.add(cam_id)
-                try:
-                    logging.debug('Worker: processing camera %s', camera_name)
-                    battery_level = get_battery_level(camera).rstrip('%')
-                    free_space_gb = get_free_space(camera)
-                    total_space = get_space(camera)
-                    if free_space_gb < 0 or total_space <= 0:
-                        free_space_gb_str = 'N/A'
-                        free_space_pct_str = 'N/A'
-                    else:
-                        free_space_gb_str = str(free_space_gb)
-                        free_space_pct_str = str(int(free_space_gb / total_space * 100))
-                    data.append([camera_name, str(battery_level), free_space_gb_str, free_space_pct_str])
-                except Exception as exc:
-                    logging.exception('Worker: exception while processing camera %s', camera_name)
-                    # The row survives with N/A values, which on its own looks
-                    # like the camera is simply idle.  Say why.
-                    hardware_problems.report(
-                        str(camera_name),
-                        'Could not read battery and free space from this camera',
-                        detail=str(exc),
-                        severity='warning',
-                    )
-                    # Preserve the camera row with N/A values when probing fails so
-                    # the camera does not disappear from the UI.
+        while attempt < max_retries:
+            try:
+                is_sim = getattr(self.view, 'is_simulator', False) and getattr(self.view, 'virtual_camera_enabled', False)
+                vc_fps = getattr(self.view, 'virtual_camera_fps', 1)
+
+                # Reuse existing camera objects if available to avoid opening a new USB
+                # connection while a previous connection (e.g. from take_picture) is still held.
+                existing_map = getattr(self, 'camera_overview_dict', None)
+                force_refresh = getattr(self, '_force_camera_refresh', False)
+
+                if force_refresh or not existing_map or not all(v is not None for v in existing_map.values()):
+                    if force_refresh:
+                        logging.info('CameraOverview: forcing fresh detection (attempt %d)', attempt + 1)
+                        seen = set()
+                        for camera_name, camera in (existing_map or {}).items():
+                            if camera is None or id(camera) in seen:
+                                continue
+                            seen.add(id(camera))
+                            try:
+                                camera.disconnect()
+                            except Exception:
+                                logging.debug('Worker: disconnect of %s raised (non-fatal)', camera_name)
+                        self._force_camera_refresh = False
+
+                    alias_map = ConfigManager().get_camera_aliases() or None
+                    camera_dict = get_camera_dict(is_simulator=is_sim, alias_map=alias_map)
+                    logging.debug('CameraOverview: fresh camera detection performed')
+                else:
+                    camera_dict = existing_map
+                    logging.debug('CameraOverview: reusing %d existing camera object(s)', len(camera_dict))
+
+                data = []
+                seen_camera_ids: set = set()
+                needs_refresh = False
+
+                for camera_name, camera in camera_dict.items():
+                    # Skip bare-key aliases that point to the same physical camera object
+                    # already added under its full gphoto2 name (e.g. "Sony Alpha-A7r II"
+                    # is a duplicate of "Sony Alpha-A7r II (Control)").
+                    cam_id = id(camera)
+                    if cam_id in seen_camera_ids:
+                        logging.debug('Worker: skipping duplicate alias "%s" (same camera object)', camera_name)
+                        continue
+                    seen_camera_ids.add(cam_id)
                     try:
-                        data.append([camera_name, 'N/A', 'N/A', 'N/A'])
-                    except Exception:
-                        pass
+                        logging.debug('Worker: processing camera %s', camera_name)
+                        battery_level = get_battery_level(camera).rstrip('%')
+                        free_space_gb = get_free_space(camera)
+                        total_space = get_space(camera)
+                        if free_space_gb < 0 or total_space <= 0:
+                            free_space_gb_str = 'N/A'
+                            free_space_pct_str = 'N/A'
+                        else:
+                            free_space_gb_str = str(free_space_gb)
+                            free_space_pct_str = str(int(free_space_gb / total_space * 100))
+                        data.append([camera_name, str(battery_level), free_space_gb_str, free_space_pct_str])
+                    except Exception as exc:
+                        error_str = str(exc).lower()
+                        if any(x in error_str for x in ['-52', '-2', 'could not find the requested device', 'bad parameters']):
+                            logging.warning('Stale camera connection detected on %s (%s)', camera_name, exc)
+                            hardware_problems.report(
+                                str(camera_name),
+                                'Lost the USB connection to this camera',
+                                detail=str(exc),
+                            )
+                            needs_refresh = True
+                            self._force_camera_refresh = True
+                            break
+                        logging.exception('Worker: exception while processing camera %s', camera_name)
+                        # The row survives with N/A values, which on its own looks
+                        # like the camera is simply idle.  Say why.
+                        hardware_problems.report(
+                            str(camera_name),
+                            'Could not read battery and free space from this camera',
+                            detail=str(exc),
+                            severity='warning',
+                        )
+                        # Preserve the camera row with N/A values when probing fails so
+                        # the camera does not disappear from the UI.
+                        try:
+                            data.append([camera_name, 'N/A', 'N/A', 'N/A'])
+                        except Exception:
+                            pass
+                        continue
+
+                # If we hit critical errors, retry once with fresh objects
+                if needs_refresh and attempt == 0:
+                    logging.info("Critical USB errors detected - resetting camera_overview_dict and retrying...")
+                    self.camera_overview_dict = None
+                    attempt += 1
                     continue
-            # schedule UI update on main thread
-            try:
-                print('Worker: gathered camera overview data:', data, flush=True)
-            except Exception:
-                pass
-            # write pending data and the camera objects for the main thread poll to pick up
-            try:
-                self._pending_data = data
-                # keep the mapping of camera name -> camera object for later actions
-                self._pending_camera_map = camera_dict
-            except Exception:
-                logging.exception('Worker: could not set pending data')
-        except Exception as exc:
-            logging.exception('Worker: failed to gather camera info')
-            hardware_problems.report(
-                'Cameras',
-                'Could not read the connected cameras',
-                detail=str(exc),
-            )
+
+                # schedule UI update on main thread
+                LOGGER.debug('Worker: gathered camera overview data: %s', data)
+                # write pending data and the camera objects for the main thread poll to pick up
+                try:
+                    self._pending_data = data
+                    # keep the mapping of camera name -> camera object for later actions
+                    self._pending_camera_map = camera_dict
+                except Exception:
+                    logging.exception('Worker: could not set pending data')
+                break
+            except Exception as exc:
+                logging.exception('Worker: failed to gather camera info')
+                attempt += 1
+                if attempt >= max_retries:
+                    hardware_problems.report(
+                        'Cameras',
+                        'Could not read the connected cameras',
+                        detail=str(exc),
+                    )
+                    break
 
     def _on_data_ready(self, data):
         try:
-            print('CameraOverview: on_data_ready called with', data, flush=True)
+            LOGGER.debug("CameraOverview: on_data_ready called with " + data)
         except Exception:
             pass
         # Update internal dict for other parts of the app (store camera objects if available)
@@ -2957,9 +3048,111 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 except Exception:
                     pass
                 self.view.camera_overview.repaint()
-                print('CameraOverview: view updated', flush=True)
+                LOGGER.debug("CameraOverview: view updated")
         except Exception:
             logging.exception('Could not update camera overview view after data ready')
+
+        # If we have actual camera objects, start the Sony background downloader
+        # automatically only when the camera reports PC-Only save destination.
+        # Also, show an informational banner about the relevant settings.
+        try:
+            pm = getattr(self, 'camera_overview_dict', None)
+
+            if pm:
+                seen = set()
+                banner_lines = []
+                sony_banner_label_visibility = False
+
+                for cam in pm.values():
+                    camera_vendor = getattr(cam, 'vendor', None)
+
+                    if camera_vendor == "Sony":
+                        try:
+                            if cam is None:
+                                continue
+                            if id(cam) in seen:
+                                continue
+                            seen.add(id(cam))
+
+                            dest = get_sony_save_destination(cam)
+                            image_quality = get_sony_image_quality(cam)
+                            camera_model = getattr(cam, 'name', 'Unknown Sony')
+
+                            # Decide action + message for this camera
+                            if dest == "sdram":
+                                text = (f"{camera_model}: currently saving photos to PC. "
+                                        f"We recommend testing if 'PC+Camera' mode is faster.")
+                                if image_quality != "RAW":
+                                    text += f" Also, 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                try:
+                                    cam.start_background_downloader()
+                                except Exception:
+                                    logging.warning('%s: failed to start Background Downloader', camera_model)
+
+                                banner_lines.append(text)
+                                sony_banner_label_visibility = True
+
+                            elif dest == "card+sdram":
+                                text = (f"{camera_model}: currently in 'PC+Camera' mode. "
+                                        f"We recommend testing if 'PC' mode is faster.")
+                                if not image_quality.startswith("RAW+JPEG"):
+                                    text += (" Also, 'File Format' is set to '{}'."
+                                            " Please set it to 'RAW+JPEG' and choose 'JPEG Only' "
+                                            "for 'RAW+J PC Save Img'.").format(image_quality)
+                                try:
+                                    cam.stop_background_downloader()
+                                except Exception:
+                                    pass
+
+                                banner_lines.append(text)
+                                sony_banner_label_visibility = True
+
+                            elif dest == "card":
+                                if image_quality != "RAW":
+                                    text = f"{camera_model}: 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                    banner_lines.append(text)
+                                    sony_banner_label_visibility = True
+                                else:
+                                    # No banner needed for good RAW + Card-only config
+                                    try:
+                                        cam.stop_background_downloader()
+                                    except Exception:
+                                        pass
+                            else:
+                                # Unknown / unavailable destination
+                                if image_quality != "RAW":
+                                    text = f"{camera_model}: 'Quality' is set to '{image_quality}'. Please set it to 'RAW'!"
+                                    banner_lines.append(text)
+                                    sony_banner_label_visibility = True
+                                else:
+                                    try:
+                                        cam.start_background_downloader()
+                                    except Exception:
+                                        logging.warning(
+                                            '%s: failed to start Background Downlaoder', camera_model)
+
+                        except Exception:
+                            logging.debug('Error while checking Sony save destination for a camera', exc_info=True)
+
+                # === Build final banner text ===
+                if banner_lines:
+                    full_text = "\n".join(banner_lines)
+                    full_text += "\nIf this info is wrong or you changed settings - press 'Camera(s)' again!"
+
+                    if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                        self.view.sony_banner_label.setText(full_text)
+                        self.view.sony_banner_label.setVisible(sony_banner_label_visibility)
+                        logging.info("Sony banner updated to:\n%s", full_text)
+                else:
+                    # Hide banner if no messages
+                    if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                        self.view.sony_banner_label.setVisible(False)
+            else:
+                # Hide banner if no Sony cameras connected
+                if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
+                    self.view.sony_banner_label.setVisible(False)
+        except Exception:
+            logging.exception("Error updating Sony banner / background downloaders")
 
         # Notify controller that cameras are ready (fires sync_camera_time + check_camera_state)
         cb = getattr(self, 'on_ready_callback', None)
@@ -2970,70 +3163,6 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 logging.exception('on_ready_callback raised an exception')
             finally:
                 self.on_ready_callback = None
-
-        # Show/hide Sony reminder banner in the main view depending on whether
-        # a Sony camera is present. Use vendor attribute when available, else
-        # fall back to camera name containing 'sony'.
-        try:
-            sony_present = False
-            pm = getattr(self, 'camera_overview_dict', None)
-            if pm:
-                for cam in pm.values():
-                    if cam is None:
-                        # fallback to names in data rows
-                        break
-                    if getattr(cam, 'vendor', None) == 'Sony':
-                        sony_present = True
-                        break
-            if not sony_present:
-                # fallback: check camera names from the table rows
-                for row in data:
-                    name = str(row[0]).lower()
-                    if 'sony' in name:
-                        sony_present = True
-                        break
-            if hasattr(self, 'view') and getattr(self.view, 'sony_reminder_label', None) is not None:
-                self.view.sony_reminder_label.setVisible(bool(sony_present))
-        except Exception:
-            logging.debug('Could not update Sony reminder visibility', exc_info=True)
-
-        # If we have actual camera objects, start the Sony background downloader
-        # automatically only when the camera reports PC-Only save destination.
-        try:
-            from solareclipseworkbench.camera import get_sony_save_destination
-            if pm:
-                for cam in pm.values():
-                    try:
-                        if cam is None:
-                            continue
-                        if getattr(cam, 'vendor', None) != 'Sony':
-                            # ensure any previously running downloader is stopped
-                            try:
-                                cam.stop_background_downloader()
-                            except Exception:
-                                pass
-                            continue
-                        dest = get_sony_save_destination(cam)
-                        # Start downloader only when destination clearly says
-                        # PC-only. If destination is unavailable (common with
-                        # localized camera menus), avoid downloading to protect
-                        # shot timing.
-                        if sony_save_destination_needs_downloader(dest):
-                            try:
-                                cam.start_background_downloader()
-                            except Exception:
-                                logging.exception('Failed to start downloader for Sony camera')
-                        else:
-                            try:
-                                cam.stop_background_downloader()
-                            except Exception:
-                                pass
-                    except Exception:
-                        logging.debug('Error while checking Sony save destination', exc_info=True)
-        except Exception:
-            logging.debug('Could not auto-start Sony downloader', exc_info=True)
-        except Exception:
-            logging.debug('Could not update Sony reminder visibility', exc_info=True)
 
     def _try_apply_pending(self):
         """Poll for pending data written by the background worker and apply it on the GUI thread."""
@@ -3150,8 +3279,8 @@ class JobsTableModel(QAbstractTableModel, Observable):
                 self.execution_times_local_as_datetime.append(execution_time_local)
                 formatted_execution_time_local = format_time(execution_time_local, self.time_format)
 
-                data.append([countdown, formatted_execution_time_local, formatted_execution_time_utc, job_string,
-                             description])
+                data.append([countdown, formatted_execution_time_local, formatted_execution_time_utc,
+                             job_string, description])
 
         self._data = pd.DataFrame(data, columns=[JobsTableColumnNames.COUNTDOWN.value,
                                                  JobsTableColumnNames.EXEC_TIME_LOCAL.value,
@@ -3259,8 +3388,6 @@ def main():
     console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logging.getLogger().addHandler(console_handler)
     LOGGER.info("Starting up Solar Eclipse Workbench")
-    # Reminder for Sony users: prefer PC+Camera (writes to SD card + RAM)
-    LOGGER.info("Sony users: set 'PC Remote Settings → Save Destination' to 'PC+Camera' (or 'Camera Only') to keep images on the SD card and preserve tight shot timing")
 
     parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")
     parser.add_argument(
@@ -3271,6 +3398,7 @@ def main():
         action='store_true'
     )
     parser.add_argument(
+        "-vc",
         "--virtual-camera",
         help="Enable virtual camera (when starting GUI in simulator mode)",
         action='store_true',
@@ -3315,8 +3443,14 @@ def main():
         default=False,
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "-scm",
+        "--sony-cont-mode",
+        help="Specify continuous mode name for Sony cameras"
+    )
 
+    args = parser.parse_args()
+    configuration.SONY_CONTINUOUS_MODE = args.sony_cont_mode
     # args[1:1] = ["-stylesheet", str(styles_location)]
     app = QApplication(list(sys.argv))
     apply_system_color_scheme(app)

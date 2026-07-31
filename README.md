@@ -15,8 +15,7 @@
     - [Installation on Windows 11](#installation-on-windows-11)
     - [Make cameras accessible in wsl](#make-cameras-accessible-in-wsl)
       - [Replace the Windows USB driver with WinUSB (required for gphoto2)](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2)
-    - [Sony PC Remote settings (recommended)](#sony-pc-remote-settings-recommended)
-  - [Important note for Sony bodies in `PC Only` or when the Save Destination option is not available](#important-note-for-sony-bodies-in-pc-only-or-when-the-save-destination-option-is-not-available)
+    - [Sony PC Remote settings discussion](#sony-pc-remote-settings-discussion)
   - [Upgrading Solar Eclipse Workbench](#upgrading-solar-eclipse-workbench)
   - [Running Solar Eclipse Workbench](#running-solar-eclipse-workbench)
     - [Command line parameters](#command-line-parameters)
@@ -328,42 +327,22 @@ usbipd attach --wsl --busid <busid>
 
 You only need to do this once; the WinUSB driver persists across reboots for that USB device.
 
-> **Sony Alpha cameras** additionally require **PC Remote** mode to be active on the camera itself before gphoto2 can communicate with it:
-> Camera Menu → Network → PC Remote Settings → PC Remote → **On**
-> The camera will show `(PC Control)` in its model name when correctly connected.
 
-### Sony PC Remote settings (recommended)
+## Sony PC Remote settings discussion
 
-Sony bodies expose a *Save Destination* that controls where still images are written when `PC Remote` is enabled. Set this once on the camera menu to avoid timing and reliability problems when running rapid sequences from SEW.
+To enable `PC Remote` mode on your Sony camera, please go to `MENU`, then go to `Tools` section and look for `USB Connection` setting (most probably, you will find it on the 4th screen). Press on it and choose `PC Remote` option. Note - this path applies for pre-2020 cameras; for post-2020 cameras the location of this setting might be different.
 
-- Menu path: `MENU → Network → PC Remote Settings → Save Destination`
-- Recommended value: **PC+Camera**
-  - Writes each image to the SD card *and* keeps a copy in camera RAM so `FILE_ADDED` events still fire.
-  - This gives SEW a guaranteed backup (SD card) while still allowing SEW to observe `FILE_ADDED` if desired.
-- Alternative: **Camera Only** — images go to the SD card only (safe, fast).
-- Avoid: **PC Only** — images are kept in camera RAM and must be downloaded over USB.
-  - Downloading large RAW files (e.g. ARW) synchronously between shots can take several seconds and will break short-interval shot timing.
+On the same screen, also search for `PC Remote Settings`. If you can't find it, it means your camera does not support saving photos to your SD card when it's being controlled from PC through USB connection. If you do find it, then you have the ability to choose between saving to `PC` or `PC+Camera` (post-2020 cameras also support `Camera` option).
 
-Important note for Sony bodies in `PC Only` or when the Save Destination option is not available
----------------------------------------------------------------------------------------------
+For cameras which lack `PC Remote Settings`, using USB connection will come with the penalty of slow transfer of the photos, as these cameras usually have only micro USB port, which supports only USB2.0 speeds. For a 12MP camera, this might be acceptable (a 5 frame bracketing takes between 8 to 12 seconds to complete, depending on the camera's initial configuration), but for 24MP and moreso for 42MP cameras, this might be unacceptable. We would suggest you try using Wi-Fi connection through scripts and `command` commands, as it should be much faster (but requires you are tech savvy enough to write such scripts; if you want a reference, you can take a look [here](https://github.com/fliker09/sec2025-scripts) - search for scripts which contain `http` keyword in their name). Another option would be to install an app right on your camera, which will work in a similar way to SEW - you can find it [here](https://github.com/pyzahl/SoFiMagic) (this also requires you are a bit tech savvy, but at least no scripting is involved).
 
-- If the camera is in **PC Only** mode (or the camera does not expose a Save Destination widget
-  to gphoto2), every captured image is stored in the camera's RAM and must be transferred
-  to the computer over USB. Large RAW files can take several seconds to transfer. Expect a
-  practical capture rate of no more than one picture every 10 seconds in this mode.
-- Images captured in **PC Only** mode are NOT written to the camera's SD card — SEW saves
-  downloaded files to `~/Pictures/SolarEclipseWorkbench` by default. Check that folder for
-  your images after a test capture.
+For cameras which do have `PC Remote Settings` available, the situation is much better. These cameras usually have an USB-C port, which provides USB3.0 speeds (they are much higher than USB2.0 ones!). There is also an option of saving RAW files to SD card (`PC+Camera` option), but this option should be compared against the `PC` one, as your card's write speed might be, in fact, slower than the USB3.0 transfer speed. Test both options and see which one is faster for you! On a Sony A7R IIIA, both `PC` and `PC+Camera` options take around 8 to 12 seconds for a 5 frame bracketing sequence to complete.
 
-If possible, set the camera to **PC+Camera** or **Camera Only** (recommended) so images are
-written to the SD card while SEW observes `FILE_ADDED` events; this preserves timing and
-guarantees a local backup on the card.
+A note on multiple Sony cameras connected - if they all fire in parallel or at least close enough in timing to clash in their data transfers periods, it's preferable that no more than one of the cameras save to PC, with the other(s) having `PC+Camera` option chosen instead.
 
-If the camera is configured to write to the SD card (PC+Camera or Camera Only), SEW will no longer attempt blocking RAW downloads during the trigger loop. Instead SEW drains PTP events quickly so triggers remain on schedule and does not block on large USB transfers.
+Warning: if you intend to use `PC` option with a camera which has an USB-C port, please ensure that the cable is USB3.0 rated and that the port on the PC to which this cable connects is, in fact, a proper USB3.0 one.
 
-Short guidance
-- If you want reliable, on-time sequences (1–2 s intervals): set **PC+Camera** or **Camera Only** on the camera. SEW will trigger on schedule and your images will be safe on the SD card.
-- If your camera is left in **PC Only** mode, expect slower operation and possible missed/dropped triggers while large RAW files are downloaded.
+Final note on the `PC+Camera` option - SEW will not actually save JPEG files to PC, they will be ignored and the PTP events on camera flushed, with RAW files being consistently written to SD card (please don't forget to set `RAW+J PC Save Img` setting with `JPEG only` option!).
 
 
 ## Upgrading Solar Eclipse Workbench
@@ -383,6 +362,8 @@ pip show solareclipseworkbench
 ```
 
 ## Running Solar Eclipse Workbench
+
+- Please ensure that none of the connected cameras use 0.5EV step, as `gphoto2` supports only 0.3EV exposure step.
 
 - Ensure that you are connected to the Internet the first time you run and use Solar Eclipse Workbench, as it will require to download several files required for calculations.
 
@@ -410,15 +391,17 @@ sew
 The following command line parameters can be used to start up gui.py.
 
 
-| Short parameter  | Long parameter        | Description                                                                |
-|------------------|-----------------------|----------------------------------------------------------------------------|
-| -h               | --help                | Show the help message and exit                                             |
-| -d DATE          | --date DATE           | Date of the solar eclipse (in YYYY-MM-DD format)                           |
-| -lon LONGITUDE   | --longitude LONGITUDE | Longitude of the location where to watch the solar eclipse (W is negative) |
-| -lat LATITUDE    | --latitude LATITUDE   | Latitude of the location where to watch the solar eclipse (N is positive)  |
-| -alt ALTITUDE    | --altitude ALTITUDE   | Altitude of the location where to watch the solar eclipse (in meters)      |
-| -s               | --sim                 | Start the application in simulation mode                                   |
-| --virtual-camera | --virtual-camera      | Use a virtual camera.  Only for simulation mode!                           |
+| Short parameter  | Long parameter        | Description                                                                   |
+|------------------|-----------------------|-------------------------------------------------------------------------------|
+| -h               | --help                | Show the help message and exit                                                |
+| -d DATE          | --date DATE           | Date of the solar eclipse (in YYYY-MM-DD format)                              |
+| -lon LONGITUDE   | --longitude LONGITUDE | Longitude of the location where to watch the solar eclipse (W is negative)    |
+| -lat LATITUDE    | --latitude LATITUDE   | Latitude of the location where to watch the solar eclipse (N is positive)     |
+| -alt ALTITUDE    | --altitude ALTITUDE   | Altitude of the location where to watch the solar eclipse (in meters)         |
+| -s               | --sim                 | Start the application in simulation mode                                      |
+| -vc              | --virtual-camera      | Use a virtual camera. Only for simulation mode!                               |
+| -lc              | --low-cpu             | Disable auto update for eclipse visualization (essential for single core CPU) |
+| -scm             | --sony-cont-mode      | Specify continuous mode search keyword name for Sony cameras                  |
 
 ### UI functionality
 
@@ -693,7 +676,9 @@ The following cameras are tested:
 - Nikon DSC D3400
 - Nikon Z8
 - Nikon Z6iii
+- Sony ILCE-7S (α7S)
 - Sony ILCE-7M3 (α7 III)
+- Sony ILCE-7RM3A (α7R IIIA)
 - Sony ILCE-7R II (α7R II): Very slow, because it does not support the `PC+Camera` Save Destination mode, so every picture is downloaded over USB before the next one can be taken.  Expect a practical capture rate of no more than one picture every 10 seconds with this camera.
 
 It is possible to take pictures in burst mode.  The speed is limited by the speed of the camera (and card).
@@ -720,15 +705,15 @@ Solar Eclipse Workbench can use the following commands:
 
 This command will take a picture 1 minutes and 2 seconds before first contact (C1) with the Canon EOS 80D.  The ISO will be set to 200, aperture to 8.0 and shutter speed to 1/1250s.
 
-- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon; Nikon and Sony will take 3 pictures in burst mode).
+- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon and Sony; Nikon will take 3 pictures in burst mode instead). Note - for Sony cameras the automatically chosen Continuous mode might be either High Speed or Low Speed (completely depends on the cameras's model). If you want to be define a specific mode - check out the `--sony-cont-mode` command line option.
 
 ```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
 
-- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps.  This method only works in Canon cameras.  Make sure to have 5 steps enabled for bracketing.  Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3
+- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps. Make sure to have 5 steps enabled for bracketing. Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3. This method only works in Canon. It kind of works with Nikon as well, but not in a true burst mode, it just tries to replicate it (there is a rewrite in progress for a proper burst support). Sony doesn't support this syntax, so instead you have to provide the desired mode name (e.g. `"Bracketing C 3.0 Steps 5 Pictures"`). You can check for available modes using this command: `gphoto2  --get-config=/main/capturesettings/capturemode`.
 
 ```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "+/- 1 2/3", "Bracket test"```
 
-- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card.  The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports.  Works on Canon EOS, Nikon, and Sony Alpha cameras.  Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint).
+- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card.  The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports.  Works on Canon and Nikon cameras (Sony support is in development).  Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint).
 
   The sequence for `stops=4` starting at `1/2000` would be: `1/2000 → 1/1000 → 1/500 → 1/250 → 1/125 → 1/250 → 1/500 → 1/1000 → 1/2000` (9 shots).
 
@@ -796,7 +781,8 @@ endfor
 ## Shortcomings
 
 - In normal mode, only one picture per two seconds can be made.
-- The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS and Linux using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/). 
+- The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS and Linux using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/).
+- Sony cameras after cold boot might return wrong configuration values. Please press `Camera(s)` button to retrieve them one more time.
 
 ## Converting scripts from Solar Eclipse Maestro
 
@@ -804,11 +790,18 @@ Scripts from Solar Eclipse Maestro are converted automatically to scripts that c
 
 ## Error handling
 
-If something goes wrong, an error message will be logged in the log file `/tmp/solareclipseworkbench.log`.
+If something goes wrong, an error message will be shown in the terminal and logged in the log file `/tmp/solareclipseworkbench.log`.
+
+## Handling camera(s) disconnect(s)
+
+In case your camera was turned off or disconnected from USB, you don't have to restart the app to reconnect back to your camera. Once your camera is back online, press `Stop`, agree to remove the scheduled jobs, press `Camera(s)` and see if the camera is properly detected. After that, load your script again (thankfully, the file dialog will remember your last directory) and the execution will resume (do note that the events missed while you were restoring the connection will not be re-attempted).
+
+Note - this should work fine even if multiple cameras are connected and only one of them is affected. In case it doesn't work for some reason, turn off / disconnect from USB all of the cameras and try again.
 
 ## Development Guide
 
 When you want to help with the development of Solar Eclipse Workbench, some extra installation is needed.
+
 ### Installation on macOS
 
 - For modern Apple Mac computers (using Apple Silicon processors), install [homebrew](https://brew.sh/). Add your homebrew/bin directory to your PATH. Then install gphoto2 and GDAL (required by geopandas) using homebrew:

@@ -169,3 +169,6 @@ de440s.bsp
 
 # uv lock file should be excluded, it's tied to a specific installation
 uv.lock
+
+# Kate editor temp files
+*.kate-swp
