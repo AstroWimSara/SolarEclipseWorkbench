@@ -1664,14 +1664,25 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
 
     if vendor == 'Canon':
         try:
-            # Set aeb
+            # Prepare to check shutter speed during bracketing run
+            # so we can catch when camera already finished it.
+            ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+            choices = _get_shutter_speed_choices(config)
+            base_speed = camera_settings.shutter_speed.strip()
+            if base_speed not in choices:
+                base_speed = _find_closest_shutter_choice(ss_widget, base_speed)
+            # Turn on aeb
             aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
             gp.gp_widget_set_value(aeb, steps)
-            # set config
             _set_gp_config(camera, config, context)
 
-            for _ in range(5):
+            for br_shot in range(5):
                 try:
+                    if br_shot == 3:
+                        current_speed = gp.check_result(gp.gp_widget_get_value(ss_widget))
+                        if current_speed == base_speed:
+                            logging.warning("%s: 5 frames AEB not supported, stopping at 3", camera_name)
+                            break
                     camera.capture(gp.GP_CAPTURE_IMAGE, context)
                 except Exception:
                     logging.exception('Bracket capture high-level failed, trying low-level gp capture')
@@ -1683,10 +1694,9 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                         logging.exception('Bracket low-level capture failed')
                         raise
 
-            # Set aeb
+            # Turn off aeb
             aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
             gp.gp_widget_set_value(aeb, "off")
-            # set config
             _set_gp_config(camera, config, context)
         except gphoto2.GPhoto2Error:
             logging.warning("%s: 'aeb' is not supported, will fallback to simulated bracketing", camera_name)

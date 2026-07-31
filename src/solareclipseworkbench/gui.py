@@ -3051,7 +3051,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                                 else:
                                     try:
                                         cam.start_background_downloader()
-                                    except Exception:     to
+                                    except Exception:
                                         logging.warning(
                                             '%s: failed to start Background Downlaoder', camera_model)
 
