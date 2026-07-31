@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0rc1] - 2026-07-31
+
+### Fixed
+
+- Reclaim the USB device from macOS' PTP daemon (and fix the -53 advice)- #164 by @mrosseel
+  - This means that on macOS, Solar Eclipse Workbench should not be started with *sudo* anymore.
+
 ## [1.10.7] - 2026-07-23
 
 ### Fixed
