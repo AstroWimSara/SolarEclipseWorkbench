@@ -12,6 +12,9 @@ from datetime import datetime
 import os
 
 from gphoto2 import Camera
+from abc import ABC, abstractmethod
+from typing import Any, Tuple, Optional
+from solareclipseworkbench import configuration
 
 
 class CameraError(Exception):
@@ -81,10 +84,6 @@ class CameraSettings:
         self.shutter_speed = shutter_speed
         self.aperture = _normalise_aperture(str(aperture))
         self.iso = iso
-
-
-from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional
 
 
 class BaseCamera(ABC):
@@ -291,7 +290,7 @@ class GPhotoCameraAdapter(BaseCamera):
         # The fix resets the PTP session (exit + init) once, before the first capture,
         # when capture_preview has already been called.  See _reset_canon_eos_ptp_session().
         self._capture_preview_was_called: bool = False  # set by LiveViewThread
-        self._first_capture_done: bool = False           # set by take_picture / take_hdr
+        self._first_capture_done: bool = False          # set by take_picture / take_hdr
 
     def __getattr__(self, item):
         # Delegate attribute access to the underlying gphoto Camera
@@ -344,31 +343,28 @@ class SonyCamera(GPhotoCameraAdapter):
 
     'PC+Camera' is recommended: every shot is written to the SD card
     (guaranteed backup) AND a FILE_ADDED event fires over USB so SEW
-    can confirm the shot was taken.  No image download is attempted.
+    can confirm the shot was taken. No image download is attempted.
     """
 
     def __init__(self, gp_camera, name: str):
         super().__init__(gp_camera, name)
         self.vendor = 'Sony'
-        # Background downloader thread (started lazily)
         self._bg_downloader = None
 
     def disconnect(self) -> None:
         """Disconnect; drain any queued camera events first."""
+        # 1. MUST stop background activity FIRST to release the USB interface
+        self.stop_background_downloader()
+
+        # 2. Now safely drain remaining events without thread contention
         try:
             context = gp.gp_context_new()
             target = self._camera
-            _sony_drain_events(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except Exception:
-            logging.debug('SonyCamera.disconnect: event drain raised (non-fatal)')
-        # Stop background downloader if running
-        try:
-            if getattr(self, '_bg_downloader', None) is not None:
-                self._bg_downloader.stop()
-                self._bg_downloader.join(timeout=2.0)
-                self._bg_downloader = None
-        except Exception:
-            logging.debug('SonyCamera.disconnect: background downloader stop raised (non-fatal)')
+            logging.debug('%s: SonyCamera.disconnect() event drain raised (non-fatal)')
+
+        # 3. Close the camera connection
         try:
             self._camera.exit()
         except Exception:
@@ -376,34 +372,47 @@ class SonyCamera(GPhotoCameraAdapter):
         self._connected = False
 
     def start_background_downloader(self) -> None:
-        """Start a background downloader thread that fetches FILE_ADDED paths.
-
-        The downloader attempts to download FILE_ADDED targets as they appear.
-        It will only perform downloads when it can acquire the per-camera USB
-        lock quickly — this avoids delaying scheduled shots.  Downloads are
-        written to `~/Pictures/SolarEclipseWorkbench`.
-        """
-        if self._bg_downloader is not None:
+        # If a thread exists AND is actively running, don't start another one
+        if self._bg_downloader is not None and self._bg_downloader.is_alive():
             return
+
+        # If an old dead thread reference is laying around, clear it first
+        self._bg_downloader = None
+
         try:
             ctx = gp.gp_context_new()
             self._bg_downloader = _SonyBackgroundDownloader(self, ctx)
             self._bg_downloader.daemon = True
             self._bg_downloader.start()
-            logging.info('Sony background downloader started')
+            logging.info('%s: Background Downloader started', self.name)
         except Exception:
-            logging.exception('Failed to start Sony background downloader')
+            logging.exception('%s: failed to start Background Downloader', self.name)
 
     def stop_background_downloader(self) -> None:
         if self._bg_downloader is None:
             return
+
+        downloader = self._bg_downloader
         try:
-            self._bg_downloader.stop()
-            self._bg_downloader.join(timeout=2.0)
-        except Exception:
-            logging.debug('Error stopping Sony background downloader')
+            downloader.stop()
+            downloader.join(timeout=2.0)
 
+            # Check if the thread actually exited
+            if downloader.is_alive():
+                logging.warning('%s: Background Downloader failed to terminate within timeout.', self.name)
 
+                # Force-release the USB lock if the thread is stuck and holding it
+                if hasattr(self, '_usb_lock') and self._usb_lock.locked():
+                    try:
+                        self._usb_lock.release()
+                        logging.warning('%s: forced release of _usb_lock after downloader thread timeout.')
+                    except RuntimeError:
+                        # Raised if release() is called on an unacquired or cross-thread locked RLock/Lock
+                        pass
+        except Exception as e:
+            logging.debug('%s: error stopping Background Downloader (%s)', self.name, e)
+        finally:
+            self._bg_downloader = None
 
 
 # macOS starts ptpcamerad (the daemon behind Image Capture and Photos) as soon as a PTP
@@ -536,23 +545,6 @@ def _raise_camera_init_error(camera_name: str, error: Exception) -> None:
     ) from error
 
 
-def _drain_camera_events(target, context, timeout_ms: int = 200, max_events: int = 50) -> None:
-    """Drain pending camera events after a trigger_capture sequence.
-
-    Canon cameras push CaptureComplete and ObjectAdded events onto the USB queue for
-    every triggered shot. Leaving them unconsumed can stall subsequent gphoto2
-    operations. This function consumes events until a GP_EVENT_TIMEOUT is received
-    or max_events is exhausted.
-    """
-    for _ in range(max_events):
-        try:
-            event_type, _ = gp.check_result(gp.gp_camera_wait_for_event(target, timeout_ms, context))
-            if event_type == gp.GP_EVENT_TIMEOUT:
-                break
-        except gphoto2.GPhoto2Error:
-            break
-
-
 def _find_memory_card_choice(capture_target_widget) -> str:
     """Return the choice string that represents the camera's memory card.
 
@@ -620,24 +612,39 @@ def _find_closest_shutter_choice(widget, target_speed: str) -> Optional[str]:
     return best_choice
 
 
-def _find_capturemode_choice(widget, want_continuous: bool = False) -> Optional[str]:
+def _find_capturemode_choice(
+    widget,
+    want_continuous: bool = False,
+    custom_keyword: Optional[str] = None,
+) -> Optional[str]:
     """Return the choice string for single or continuous capture mode.
 
     Scans all available choices of the ``capturemode`` widget and returns the
-    first one whose label contains 'single' (or 'continuous' when
-    *want_continuous* is True).  Returns None when no matching choice is found,
-    so the caller can skip setting the widget rather than sending an invalid
-    value that would cause the entire set_config transaction to fail.
+    first one whose label contains *custom_keyword* (if provided), falling back
+    to 'single' (or 'continuous' when *want_continuous* is True) if no match is
+    found. Returns None when no matching choice is found.
     """
-    keyword = 'continuous' if want_continuous else 'single'
+    keyword = (
+        custom_keyword
+        if custom_keyword is not None
+        else ("continuous" if want_continuous else "single")
+    )
+
     try:
         n = gp.check_result(gp.gp_widget_count_choices(widget))
         for i in range(n):
             choice = gp.check_result(gp.gp_widget_get_choice(widget, i))
-            if keyword in choice.lower():
+            if keyword.lower() in choice.lower():
                 return choice
     except gphoto2.GPhoto2Error:
         pass
+
+    # If a custom keyword was provided and yielded no match, re-run with default logic
+    if custom_keyword is not None:
+        return _find_capturemode_choice(
+            widget, want_continuous=want_continuous, custom_keyword=None
+        )
+
     return None
 
 
@@ -701,105 +708,203 @@ def _wait_for_capture_complete(target, context, timeout_ms: int = 3000, max_even
     """
     for _ in range(max_events):
         try:
-            event_type, _ = gp.check_result(
-                gp.gp_camera_wait_for_event(target, timeout_ms, context)
-            )
+            event_type, _ = gp.check_result(gp.gp_camera_wait_for_event(target, timeout_ms, context))
             if event_type in (gp.GP_EVENT_CAPTURE_COMPLETE, gp.GP_EVENT_TIMEOUT):
                 break
         except gphoto2.GPhoto2Error:
             break
-    # Flush any ObjectAdded / leftover events with a short timeout.
-    _drain_camera_events(target, context, timeout_ms=200, max_events=10)
 
 
-def _sony_drain_events(target, context) -> None:
-    """Drain queued FILE_ADDED and property-change events from a Sony camera.
+def _drain_camera_events(target, context, timeout_ms: int = 200, max_events: int = 50) -> None:
+    """Drain pending camera events after a trigger_capture sequence.
 
-    Sony cameras buffer FILE_ADDED events in the gphoto2 queue for several
-    seconds after trigger_capture.  This must be cleared before the next shot
-    or the queue grows unboundedly and gphoto2 may start dropping events.
-
-    Uses a 10 ms per-poll timeout so it returns in under 10 ms when the queue
-    is empty.  Images are NOT downloaded — they are already saved to the SD
-    card (PC Remote → Save Destination = PC+Camera or Camera Only).
+    Canon cameras push CaptureComplete and ObjectAdded events onto the USB queue for
+    every triggered shot. Leaving them unconsumed can stall subsequent gphoto2
+    operations. This function consumes events until a GP_EVENT_TIMEOUT is received
+    or max_events is exhausted.
     """
-    for _ in range(60):
+    for _ in range(max_events):
         try:
-            event_type, _ = gp.check_result(
-                gp.gp_camera_wait_for_event(target, 10, context))
+            event_type, _ = gp.check_result(gp.gp_camera_wait_for_event(target, timeout_ms, context))
+            if event_type == gp.GP_EVENT_TIMEOUT:
+                break
         except gphoto2.GPhoto2Error:
-            break
-        if event_type == gp.GP_EVENT_TIMEOUT:
             break
 
 
 class _SonyBackgroundDownloader(threading.Thread):
-    """Background thread that watches for FILE_ADDED and tries to download images.
+    """Background thread that consumes Sony file-added events and downloads them.
 
-    Downloads are attempted only when the per-camera USB lock can be acquired
-    quickly; this reduces interference with scheduled trigger jobs.
+    This is event-driven first, with a light fallback scan to recover from missed
+    events. It keeps a small retry queue so files that are visible before they
+    are actually readable do not get hammered in a tight loop.
     """
 
     def __init__(self, adapter: GPhotoCameraAdapter, context):
-        super().__init__()
+        super().__init__(daemon=True)
         self.adapter = adapter
         self.context = context
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self.save_dir = os.path.expanduser('~/Pictures/SolarEclipseWorkbench')
         os.makedirs(self.save_dir, exist_ok=True)
 
+        # Files already present on disk should never be downloaded again.
+        self._seen_on_disk = set(os.listdir(self.save_dir))
+
+        # (folder, name) -> state dict
+        self._pending = {}
+
+        # For proper logging
+        self.camera_name = getattr(adapter, 'name', 'Sony')
+
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
     def join(self, timeout=None):
         self.stop()
         super().join(timeout)
 
+    def _queue_path(self, folder, name, now: float) -> None:
+        if not name:
+            return
+        folder = folder or "/"
+        key = (folder, name)
+        if name in self._seen_on_disk or key in self._pending:
+            return
+        self._pending[key] = {
+            "first_seen": now,
+            "next_try": now,
+            "attempts": 0,
+        }
+        logging.info("%s: queued %s", self.camera_name, name)
+
+    def _download_one(self, target, ctx, folder: str, name: str) -> None:
+        cam_file = gp.CameraFile()
+        gp.check_result(
+            gp.gp_camera_file_get(
+                target,
+                folder,
+                name,
+                gp.GP_FILE_TYPE_NORMAL,
+                cam_file,
+                ctx,
+            )
+        )
+        save_path = os.path.join(self.save_dir, name)
+        gp.check_result(gp.gp_file_save(cam_file, save_path))
+        size = os.path.getsize(save_path)
+        logging.info("%s: saved %s (%d bytes)", self.camera_name, save_path, size)
+        self._seen_on_disk.add(name)
+
     def run(self):
-        target = self.adapter._camera if hasattr(self.adapter, '_camera') else self.adapter
+        target = self.adapter._camera if hasattr(self.adapter, "_camera") else self.adapter
         ctx = self.context
-        # Maintain a set of filenames already present in save_dir to avoid redownloading
-        seen_on_disk = set(os.listdir(self.save_dir))
-        poll_interval_s = 0.6
-        while not self._stop.is_set():
-            # Sleep a short interval to avoid tight looping
-            time.sleep(poll_interval_s)
-            # Try to acquire USB lock very briefly; if busy, skip this cycle
+
+        event_timeout_ms = 100
+        fallback_scan_every_s = 2.5
+        retry_base_s = 0.25
+        retry_max_s = 2.0
+        cycle_sleep = 0.25
+
+        last_fallback_scan = 0.0
+
+        while not self._stop_event.is_set():
             acquired = False
             try:
+                # Use a non-blocking or low-timeout attempt to acquire lock
                 acquired = self.adapter._usb_lock.acquire(timeout=0.05)
                 if not acquired:
+                    # Interruptible sleep check
+                    self._stop_event.wait(cycle_sleep)
                     continue
-                # List top-level files (walk one level) and try to download unseen files.
+
+                # Check if stop requested right after obtaining lock
+                if self._stop_event.is_set():
+                    break
+
+                now = time.monotonic()
+
+                # 1) Primary path: consume one camera event per cycle.
                 try:
-                    files = gp.check_result(gp.gp_camera_folder_list_files(target, "/", ctx))
-                    n = files.count()
-                    for i in range(n):
-                        name = files.get_name(i)
-                        if name in seen_on_disk:
-                            continue
-                        # Attempt download
-                        try:
-                            cam_file = gp.CameraFile()
-                            gp.check_result(
-                                gp.gp_camera_file_get(target, "/", name,
-                                                      gp.GP_FILE_TYPE_NORMAL, cam_file, ctx))
-                            save_path = os.path.join(self.save_dir, name)
-                            gp.check_result(gp.gp_file_save(cam_file, save_path))
-                            size = os.path.getsize(save_path)
-                            logging.info('Sony downloader saved %s (%d bytes)', save_path, size)
-                            seen_on_disk.add(name)
-                        except Exception as exc:
-                            logging.debug('Background downloader: download failed for %s: %s', name, exc)
-                except Exception:
-                    # listing may fail when camera hides filesystem; ignore and continue
-                    continue
+                    event_type, event_data = gp.check_result(
+                        gp.gp_camera_wait_for_event(target, event_timeout_ms, ctx)
+                    )
+                except gphoto2.GPhoto2Error as e:
+                    logging.debug("%s Background Downloader: wait_for_event failed: %s", self.camera_name, e)
+                    event_type, event_data = gp.GP_EVENT_TIMEOUT, None
+                    error_str = str(e).lower()
+                    if any(x in error_str for x in ['-52', 'could not find the requested device']):
+                        logging.info(
+                            "%s Background Downloader: camera got disconnected, shutting down", self.camera_name)
+                        self.stop()
+                    if any(x in error_str for x in ['-110', 'i/o in progress']):
+                        logging.warning(
+                            "%s Background Downloader: camera is busy, safe to ignore", self.camera_name)
+
+                if event_type in (gp.GP_EVENT_FILE_ADDED, gp.GP_EVENT_FOLDER_ADDED) and event_data is not None:
+                    folder = getattr(event_data, "folder", "/")
+                    name = getattr(event_data, "name", None)
+                    self._queue_path(folder, name, now)
+
+                # 2) Safety net: occasionally scan the root folder in case an event was missed.
+                if now - last_fallback_scan >= fallback_scan_every_s:
+                    try:
+                        files = gp.check_result(gp.gp_camera_folder_list_files(target, "/", ctx))
+                        for i in range(files.count()):
+                            name = files.get_name(i)
+                            self._queue_path("/", name, now)
+                    except Exception as exc:
+                        logging.debug(
+                            "%s Background Downloader: fallback list failed: %s", self.camera_name,  exc)
+                    last_fallback_scan = now
+
+                # 3) Try any queued downloads whose retry delay has expired.
+                for key, state in list(self._pending.items()):
+                    if now < state["next_try"]:
+                        continue
+
+                    folder, name = key
+                    try:
+                        self._download_one(target, ctx, folder, name)
+                        del self._pending[key]
+                    except gphoto2.GPhoto2Error as exc:
+                        state["attempts"] += 1
+                        delay = min(
+                            retry_max_s,
+                            retry_base_s * (2 ** min(state["attempts"], 3)),
+                        )
+                        state["next_try"] = now + delay
+                        logging.debug(
+                            "%s Background Downloader: download not ready for %s: %s (retry in %.1fs)",
+                            self.camera_name,
+                            name,
+                            exc,
+                            delay,
+                        )
+                    except Exception as exc:
+                        state["attempts"] += 1
+                        delay = min(
+                            retry_max_s,
+                            retry_base_s * (2 ** min(state["attempts"], 3)),
+                        )
+                        state["next_try"] = now + delay
+                        logging.info(
+                            "%s Background Downloader: download failed for %s: %s (retry in %.1fs)",
+                            self.camera_name,
+                            name,
+                            exc,
+                            delay,
+                        )
+
             finally:
                 if acquired:
                     try:
                         self.adapter._usb_lock.release()
                     except Exception:
                         pass
+
+            # Responsive wait instead of un-interruptible time.sleep
+            self._stop_event.wait(cycle_sleep)
 
 
 class LiveViewThread(threading.Thread):
@@ -845,6 +950,24 @@ class LiveViewThread(threading.Thread):
     def resume(self):
         """Resume suspended preview capture."""
         self._paused.clear()
+
+    def exit_live_view(self):
+        """Force the camera out of live-view mode (important for Nikon DSLRs)."""
+        if not hasattr(self, '_camera') or not hasattr(self._camera, '_camera'):
+            return
+        try:
+            target = self._camera._camera if hasattr(self._camera, '_camera') else self._camera
+            context = gp.gp_context_new()
+
+            # Nikon DSLRs (like D610) often need this to drop the mirror
+            gp.check_result(gp.gp_camera_exit(target, context))
+            logging.info(f"LiveViewThread: requested exit live view for {getattr(self._camera, 'name', 'camera')}")
+
+            # Optional: small delay + re-init can help some bodies
+            time.sleep(0.3)
+            # gp.gp_camera_init(target, context)  # uncomment if needed
+        except Exception as e:
+            logging.debug("LiveViewThread: could not exit live view: %s", e)
 
     @property
     def is_paused(self) -> bool:
@@ -964,6 +1087,8 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
         - camera_name: Camera object
         - camera_settings: Settings of the camera (exposure, f, iso)
     """
+    vendor = getattr(camera, 'vendor', None)
+    camera_name = getattr(camera, 'name', None)
 
     # Canon EOS R live-view / trigger_capture mode conflict:
     # If capture_preview (live view) was called before the first trigger_capture
@@ -971,10 +1096,10 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # to 1, preventing trigger_capture from initialising it to 15.  Reset the PTP
     # session once to clear the stale remote mode.  Only applies before the first
     # successful capture; subsequent shots are unaffected.
-    if (getattr(camera, 'vendor', None) == 'Canon'
-            and hasattr(camera, '_camera')
-            and not getattr(camera, '_first_capture_done', True)
-            and getattr(camera, '_capture_preview_was_called', False)):
+    if (vendor == 'Canon'
+        and hasattr(camera, '_camera')
+        and not getattr(camera, '_first_capture_done', True)
+        and getattr(camera, '_capture_preview_was_called', False)):
         _reset_canon_eos_ptp_session(camera)
 
     context, config = __adapt_camera_settings(camera, camera_settings)
@@ -992,26 +1117,10 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # For Nikon cameras, defensively ensure single-frame mode is active before
     # taking a single picture, in case a previous take_burst left the camera in
     # continuous/burst mode.
-    if getattr(camera, 'vendor', None) == 'Nikon':
-        target = camera._camera if hasattr(camera, '_camera') else camera
-        try:
-            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
-            gp.gp_widget_set_value(capture_mode_widget, 'Single')
-            _set_gp_config(camera, config, context)
-            logging.debug('Ensured Nikon capturemode is Single before take_picture')
-        except gphoto2.GPhoto2Error:
-            try:
-                capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
-                gp.gp_widget_set_value(capture_mode_widget, 0)  # 0 = Single Frame
-                _set_gp_config(camera, config, context)
-                logging.debug('Ensured Nikon stillcapturemode is Single Frame (0) before take_picture')
-            except gphoto2.GPhoto2Error as e:
-                logging.warning('Could not ensure Nikon single-frame mode before take_picture: %s', e)
-
     # For Sony cameras, ensure single-frame capture mode is active before taking
     # a single picture (separate set_config call so a bad capturemode value can
     # never poison the ISO/shutter batch).
-    if getattr(camera, 'vendor', None) == 'Sony':
+    if vendor in ('Nikon', 'Sony'):
         target = camera._camera if hasattr(camera, '_camera') else camera
         try:
             cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
@@ -1020,43 +1129,26 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
             if single_choice is not None:
                 gp.gp_widget_set_value(capture_mode_widget, single_choice)
                 _set_gp_config(camera, cfg2, context)
-                logging.debug('Ensured Sony capturemode="%s" before take_picture', single_choice)
+                logging.debug('%s: ensured capturemode="%s" before take_picture', camera_name, single_choice)
             else:
-                logging.debug('Sony capturemode: no "single" choice found, leaving as-is')
-        except gphoto2.GPhoto2Error as e:
-            logging.warning('Could not ensure Sony single-frame mode before take_picture: %s', e)
-
-    target = camera._camera if hasattr(camera, '_camera') else camera
-
-    # For Sony Alpha cameras, use trigger_capture as the primary path.
-    # gp_camera_capture(GP_CAPTURE_IMAGE) blocks until the file is fully written
-    # to the memory card (1-4 s for RAW), holding the USB lock the entire time
-    # and causing subsequent scheduled shots to drop.  trigger_capture sends the
-    # PTP InitiateCapture command and returns immediately; _wait_for_capture_complete
-    # then waits only for the CAPTURE_COMPLETE event (~100-500 ms, well before the
-    # card write finishes), so the lock is released much sooner.
-    # capturetarget was already set to "Memory card" by __adapt_camera_settings,
-    # so the camera saves to card regardless of which capture method is used.
-    if getattr(camera, 'vendor', None) == 'Sony':
-        # --- Pre-shot: drain stale events from previous shots ---
-        # Sony cameras buffer FILE_ADDED and property-change events in the
-        # gphoto2 queue for ~3 s after trigger_capture.  Draining at the start
-        # of each new shot keeps the queue from growing and takes <10 ms when
-        # empty.  Images are saved to the SD card (PC Remote → Save Destination
-        # = PC+Camera); no download is needed.
-        _sony_drain_events(target, context)
-
-        # Sony Alpha cameras never emit GP_EVENT_CAPTURE_COMPLETE; they use
-        # proprietary PTP event 0xc201.  Do NOT fall back to GP_CAPTURE_IMAGE:
-        # on Sony it always fails with -7 I/O problem AND breaks the USB
-        # connection, causing all subsequent shots in the sequence to get -52.
-        gp.check_result(gp.gp_camera_trigger_capture(target, context))
-        logging.debug('take_picture: Sony trigger_capture fired')
-        # Drain the initial property-change burst (~300 ms); first TIMEOUT fires
-        # at ~400 ms.  FILE_ADDED (~3 s) stays queued; picked up at the start
-        # of the next shot by _sony_drain_events above.
-        _drain_camera_events(target, context, timeout_ms=100, max_events=60)
-        return
+                logging.warning('%s: no "single" choice found for capture mode, leaving as-is', camera_name)
+        except gphoto2.GPhoto2Error as exc:
+            if vendor == "Nikon":
+                try:
+                    capture_mode_widget = gp.check_result(
+                        gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
+                    gp.gp_widget_set_value(capture_mode_widget, 0)  # 0 = Single Frame
+                    _set_gp_config(camera, config, context)
+                    logging.debug(
+                        '%s: ensured stillcapturemode is Single Frame (0) before take_picture', camera_name)
+                except gphoto2.GPhoto2Error as e:
+                    logging.warning(
+                        '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
+            else:
+                logging.warning(
+                    '%s: could not ensure single-frame mode before take_picture: %s', camera_name, exc)
+    else:
+        target = camera._camera if hasattr(camera, '_camera') else camera
 
     # Fire the shutter via trigger_capture (PTP InitiateCapture).  This is the
     # only path that guarantees the camera uses the USB-programmed ISO, shutter
@@ -1069,18 +1161,24 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # misfire_grace_time in the APScheduler so queued shots are not dropped.
     try:
         gp.check_result(gp.gp_camera_trigger_capture(target, context))
-        logging.debug('take_picture: trigger_capture fired')
-        _wait_for_capture_complete(target, context)
+        logging.debug('%s: take_picture fired trigger_capture', camera_name)
+        # For all cameras except Sony set in PC only mode - wait for
+        # the image capture and flush the PTP events.
+        if not (hasattr(camera, '_bg_downloader')
+                and camera._bg_downloader is not None
+                and camera._bg_downloader.is_alive()):
+            _wait_for_capture_complete(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         # First successful trigger_capture: eos_remotemode is now 15 (EOS R) or
         # unchanged (DSLR).  Mark as done so no further PTP session reset is needed.
-        if getattr(camera, 'vendor', None) == 'Canon':
+        if vendor == 'Canon':
             camera._first_capture_done = True
     except gphoto2.GPhoto2Error as e:
-        logging.warning('trigger_capture failed (%s), falling back to GP_CAPTURE_IMAGE', e)
+        logging.warning('%s: trigger_capture failed (%s), falling back to GP_CAPTURE_IMAGE', camera_name, e)
         try:
             camera.capture(gp.GP_CAPTURE_IMAGE, context)
         except Exception:
-            logging.exception('GP_CAPTURE_IMAGE fallback also failed')
+            logging.debug('%s: GP_CAPTURE_IMAGE fallback also failed', camera_name)
             raise
 
 
@@ -1112,7 +1210,7 @@ def __adapt_camera_settings(camera, camera_settings):
             gp.gp_widget_set_value(ae_mode, "Manual")
             logging.debug('Queued Canon autoexposuremodedial=Manual for next set_config')
         except gphoto2.GPhoto2Error as e:
-            logging.warning('Could not queue Canon autoexposuremodedial: %s', e)
+            logging.debug('Could not queue Canon autoexposuremodedial: %s', e)
         # Force single-frame drive mode so that eosremoterelease='Immediate' fires
         # exactly one shot even if the camera was left in continuous/burst mode.
         try:
@@ -1143,17 +1241,6 @@ def __adapt_camera_settings(camera, camera_settings):
                 gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "Off")
         except gphoto2.GPhoto2Error as e:
             logging.debug('Could not disable auto ISO: %s', e)
-    elif vendor == 'Sony':
-        # Disable Auto ISO on Sony cameras so the manually programmed ISO is used.
-        try:
-            gp.gp_widget_set_value(
-                gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "0")
-        except gphoto2.GPhoto2Error:
-            try:
-                gp.gp_widget_set_value(
-                    gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "Off")
-            except gphoto2.GPhoto2Error as e:
-                logging.debug('Could not disable Sony auto ISO: %s', e)
 
     try:
         gp.gp_widget_set_value(
@@ -1162,31 +1249,33 @@ def __adapt_camera_settings(camera, camera_settings):
         logging.warning('Could not set ISO to %s: %s', camera_settings.iso, e)
 
     try:
-        gp.gp_widget_set_value(
-            gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed')),
-            str(camera_settings.shutter_speed))
-    except gphoto2.GPhoto2Error as e:
-        logging.warning('Could not set shutterspeed to %s: %s — trying closest available choice',
-                        camera_settings.shutter_speed, e)
-        try:
-            ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
-            closest = _find_closest_shutter_choice(ss_widget, camera_settings.shutter_speed)
+        ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+        closest = _find_closest_shutter_choice(ss_widget, camera_settings.shutter_speed)
+        if closest is not None:
+            gp.gp_widget_set_value(ss_widget, closest)
+            logging.info('Using closest shutter speed choice: %s', closest)
+        else:
+            ss2_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
+            closest = _find_closest_shutter_choice(ss2_widget, camera_settings.shutter_speed)
             if closest is not None:
-                gp.gp_widget_set_value(ss_widget, closest)
-                logging.warning('Using closest shutter speed choice: %s', closest)
+                gp.gp_widget_set_value(ss2_widget, closest)
+                logging.info('Using closest shutter speed choice: %s', closest)
             else:
-                logging.warning('No suitable shutter speed choice found for %s', camera_settings.shutter_speed)
-        except gphoto2.GPhoto2Error as e2:
-            logging.warning('Could not set closest shutter speed: %s', e2)
+                logging.warning('No suitable shutter speed choice found for %s',
+                            camera_settings.shutter_speed)
+    except gphoto2.GPhoto2Error as e:
+        logging.warning('Could not set closest shutter speed: %s', e)
 
     # Always save to the camera's memory card, never to the computer.
-    # This must be re-asserted on every shot because some cameras (notably Sony Alpha
-    # via PTP) reset capturetarget to 'Internal RAM' when the USB session is re-used.
+    # This must be re-asserted on every shot because some cameras reset
+    # capturetarget to 'Internal RAM' when the USB session is re-used.
+    # Skip Sony cameras, as this option is set in stone once USB is connected
     try:
-        capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-        card_value = _find_memory_card_choice(capture_target_w)
-        gp.gp_widget_set_value(capture_target_w, card_value)
-        logging.debug('Asserted capturetarget="%s" before capture', card_value)
+        if not _is_sony_camera_instance(camera):
+            capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            card_value = _find_memory_card_choice(capture_target_w)
+            gp.gp_widget_set_value(capture_target_w, card_value)
+            logging.debug('Asserted capturetarget="%s" before capture', card_value)
     except gphoto2.GPhoto2Error:
         pass  # Widget absent on some cameras — the init-time setting is sufficient
 
@@ -1197,28 +1286,32 @@ def __adapt_camera_settings(camera, camera_settings):
     # Kept separate so that a failure here (e.g. telescope / fixed-aperture lens)
     # never silently rolls back the ISO and shutter speed that were just applied.
     try:
+        ap_key = str(camera_settings.aperture)
+        cam_key = camera_settings.camera_name
+
         if vendor == 'Canon':
-            gp.gp_widget_set_value(
-                gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture')),
-                str(camera_settings.aperture))
+            ap_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture'))
+            gp.gp_widget_set_value(ap_widget, ap_key)
+            _set_gp_config(camera, config, context)
         elif vendor in ('Nikon', 'Sony'):
             try:
                 f_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number'))
-                # Inspect choices to detect whether widget expects values like 'f/5.6'
-                try:
-                    n_choices = gp.check_result(gp.gp_widget_count_choices(f_widget))
-                    sample = gp.check_result(gp.gp_widget_get_choice(f_widget, 0)) if n_choices > 0 else ''
-                except Exception:
-                    sample = ''
-                ap_val = str(camera_settings.aperture)
-                if isinstance(sample, str) and sample.startswith('f/') and not ap_val.startswith('f/'):
-                    ap_val = f'f/{ap_val}'
-                gp.gp_widget_set_value(f_widget, ap_val)
+                f_actual = str(gp.check_result(gp.gp_widget_get_value(f_widget)))
+                if f_actual != "f/0":
+                    # Inspect choices to detect whether widget expects values like 'f/5.6'
+                    try:
+                        n_choices = gp.check_result(gp.gp_widget_count_choices(f_widget))
+                        sample = gp.check_result(gp.gp_widget_get_choice(f_widget, 0)) if n_choices > 0 else ''
+                    except Exception:
+                        sample = ''
+                    if isinstance(sample, str) and sample.startswith('f/') and not ap_key.startswith('f/'):
+                        ap_key = f'f/{ap_key}'
+                    gp.gp_widget_set_value(f_widget, ap_key)
+                    _set_gp_config(target, config, context)
+                    logging.debug('Set aperture to %s', camera_settings.aperture)
             except gphoto2.GPhoto2Error:
                 # f-number widget absent or not settable — ignore
                 raise
-        _set_gp_config(target, config, context)
-        logging.debug('Set aperture to %s', camera_settings.aperture)
 
         # Read-back check: verify the camera actually applied the requested aperture.
         # Some Sony Alpha bodies (and other cameras) silently accept set_config via PTP
@@ -1227,24 +1320,22 @@ def __adapt_camera_settings(camera, camera_settings):
         #
         # The check is skipped once a particular (camera, aperture) pair has already been
         # verified to avoid an extra USB round-trip on every shot in a tight sequence.
-        cam_key = camera_settings.camera_name
-        ap_key = str(camera_settings.aperture)
         if ap_key not in _aperture_verified.get(cam_key, set()):
             try:
                 config_rb = gp.check_result(gp.gp_camera_get_config(target, context))
                 widget_name = 'aperture' if vendor == 'Canon' else 'f-number'
                 rb_widget = gp.check_result(gp.gp_widget_get_child_by_name(config_rb, widget_name))
-                actual = str(gp.check_result(gp.gp_widget_get_value(rb_widget)))
+                rb_actual = str(gp.check_result(gp.gp_widget_get_value(rb_widget)))
 
                 def _strip_f(v: str) -> str:
                     return v[2:] if v.startswith('f/') else v
 
-                if _strip_f(actual) != _strip_f(ap_key):
+                if _strip_f(rb_actual) != _strip_f(ap_key):
                     logging.warning(
-                        'Aperture read-back mismatch on %s: requested f/%s but camera reports %s. '
+                        '%s: aperture read-back mismatch, requested f/%s but camera reports %s. '
                         'The camera may not support remote aperture control via USB — '
                         'set the aperture manually on the lens/camera body.',
-                        cam_key, _strip_f(ap_key), actual)
+                        cam_key, _strip_f(ap_key), rb_actual)
                 # Mark as checked regardless — mismatch or not, no point repeating the warning.
                 _aperture_verified.setdefault(cam_key, set()).add(ap_key)
             except gphoto2.GPhoto2Error:
@@ -1266,10 +1357,13 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         - camera_settings: Settings of the camera (exposure, f, iso)
         - duration: Duration of the burst in seconds (Canon) or number of pictures (Nikon)
     """
+    vendor = getattr(camera, 'vendor', None)
+    camera_name = getattr(camera, 'name', None)
+
     # Canon EOS R live-view / trigger_capture mode conflict: if live view was
     # used before the first capture, the PTP session may need resetting so
     # remote-release based bursts work correctly (same check as in take_picture).
-    if (getattr(camera, 'vendor', None) == 'Canon'
+    if (vendor == 'Canon'
             and hasattr(camera, '_camera')
             and not getattr(camera, '_first_capture_done', True)
             and getattr(camera, '_capture_preview_was_called', False)):
@@ -1291,7 +1385,7 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             raise
 
     # Take picture for real cameras
-    if getattr(camera, 'vendor', None) == 'Canon':
+    if vendor == 'Canon':
         # For bursts, ensure the camera is in a continuous drive mode so
         # holding the remote release fires repeated frames rather than one.
         try:
@@ -1302,17 +1396,31 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         except gphoto2.GPhoto2Error:
             logging.debug('Could not set Canon drivemode to Continuous; proceeding with remote release')
 
-        # Push the button (press & hold for the requested duration)
-        remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
-        gp.gp_widget_set_value(remote_release, "Press Full")
-        _set_gp_config(camera, config, context)
-        time.sleep(duration)
+        try:
+            # Push the button (press & hold for the requested duration)
+            remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+            gp.gp_widget_set_value(remote_release, "Press Full")
+            _set_gp_config(camera, config, context)
+            time.sleep(duration)
 
-        # Release the button
-        remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
-        gp.gp_widget_set_value(remote_release, "Release Full")
-        _set_gp_config(camera, config, context)
-    elif getattr(camera, 'vendor', None) == 'Nikon':
+            # Release the button
+            remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+            gp.gp_widget_set_value(remote_release, "Release Full")
+            _set_gp_config(camera, config, context)
+
+            # Ensure that the camera truly finished, so it won't affect next commands
+            target = camera._camera if hasattr(camera, '_camera') else camera
+            _wait_for_capture_complete(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
+        except gphoto2.GPhoto2Error:
+            # If 'eosremoterelease' is not supported (e.g. Canon 1000D), then
+            # fallback to just take as number of shots equal to `burst_number`
+            logging.warning("%s: 'eosremoterelease' is not supported, will take %s shots instead",
+                            camera_name,
+                            str(duration))
+            for fallback_shot in range(int(duration)):
+                take_picture(camera, camera_settings)
+    elif vendor == 'Nikon':
         # Set capture mode to burst/continuous
         # Try different widget names (differs between DSLR and mirrorless models)
         try:
@@ -1352,23 +1460,9 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
                 logging.exception('Nikon low-level capture failed')
                 raise
 
-        # Reset camera back to single-frame mode so subsequent take_picture calls
-        # are not affected by the burst settings left on the camera.
+        # Reset burst number back to 1, to avoid interference with further shooting
         target = camera._camera if hasattr(camera, '_camera') else camera
         config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
-        try:
-            capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'capturemode'))
-            gp.gp_widget_set_value(capture_mode_reset, 'Single')
-            _set_gp_config(camera, config_reset, context)
-            logging.debug('Reset Nikon capturemode to Single after burst')
-        except gphoto2.GPhoto2Error:
-            try:
-                capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'stillcapturemode'))
-                gp.gp_widget_set_value(capture_mode_reset, 0)  # 0 = Single Frame
-                _set_gp_config(camera, config_reset, context)
-                logging.debug('Reset Nikon stillcapturemode to Single Frame (0) after burst')
-            except gphoto2.GPhoto2Error as e:
-                logging.warning('Could not reset Nikon capture mode to single after burst: %s', e)
         try:
             burst_number_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'burstnumber'))
             gp.gp_widget_set_value(burst_number_reset, 1)
@@ -1376,60 +1470,42 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             logging.debug('Reset Nikon burstnumber to 1 after burst')
         except gphoto2.GPhoto2Error as e:
             logging.warning('Could not reset Nikon burstnumber to 1 after burst: %s', e)
-    elif getattr(camera, 'vendor', None) == 'Sony':
-        # Sony burst: enable continuous capture mode, fire N trigger_capture
-        # calls (duration = number of frames), then reset to single-shot mode.
-        # Sony Alpha bodies do not emit GP_EVENT_CAPTURE_COMPLETE, so reusing
-        # _wait_for_capture_complete here adds an unnecessary ~3 s timeout after
-        # every frame.  That stretches a 30-frame C2 burst into ~90 s, causing
-        # nearby scheduled jobs to be dropped by the USB-lock timing guard.
-        # Keep burst handling aligned with the Sony take_picture path instead:
-        # drain stale queued events before each trigger, then drain the short
-        # initial property-change burst without waiting for card-write events.
-        n_frames = max(1, int(round(duration)))
+    elif vendor == 'Sony':
+        # Sony burst: enable continuous capture mode, turn on the bulb,
+        # sleep for the chosen amount of time, turn off the bulb and
+        # lastly drain camera's events
         target = camera._camera if hasattr(camera, '_camera') else camera
 
         # Switch to continuous capture mode — look up the actual choice string so
         # we never send an invalid value that would cause set_config to fail.
         try:
             capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
-            continuous_choice = _find_capturemode_choice(capture_mode, want_continuous=True)
+            continuous_choice = _find_capturemode_choice(capture_mode, want_continuous=True, custom_keyword=configuration.SONY_CONTINUOUS_MODE)
             if continuous_choice is not None:
                 gp.gp_widget_set_value(capture_mode, continuous_choice)
                 _set_gp_config(camera, config, context)
-                logging.debug('Set Sony capturemode to "%s" for burst', continuous_choice)
+                logging.info('%s: set capturemode to "%s" for burst', camera_name, continuous_choice)
             else:
                 logging.debug('Sony capturemode: no "continuous" choice found, firing without mode change')
         except gphoto2.GPhoto2Error as e:
             logging.warning('Could not set Sony capturemode to Continuous: %s', e)
 
-        # Fire N individually-triggered captures
-        for i in range(n_frames):
-            try:
-                _sony_drain_events(target, context)
-                gp.check_result(gp.gp_camera_trigger_capture(target, context))
-                logging.debug('Sony burst: triggered capture %d/%d', i + 1, n_frames)
-                _drain_camera_events(target, context, timeout_ms=100, max_events=60)
-            except gphoto2.GPhoto2Error as e:
-                logging.warning('Sony burst: capture %d/%d failed: %s', i + 1, n_frames, e)
-                try:
-                    camera.capture(gp.GP_CAPTURE_IMAGE, context)
-                except Exception:
-                    logging.exception('Sony burst: GP_CAPTURE_IMAGE fallback also failed at frame %d', i + 1)
-
-        # Reset to single-frame mode
-        config_reset = gp.check_result(gp.gp_camera_get_config(target, context))
         try:
-            capture_mode_reset = gp.check_result(gp.gp_widget_get_child_by_name(config_reset, 'capturemode'))
-            single_choice = _find_capturemode_choice(capture_mode_reset, want_continuous=False)
-            if single_choice is not None:
-                gp.gp_widget_set_value(capture_mode_reset, single_choice)
-                _set_gp_config(camera, config_reset, context)
-                logging.debug('Reset Sony capturemode to "%s" after burst', single_choice)
-            else:
-                logging.debug('Sony capturemode: no "single" choice found for reset after burst')
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
+            bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
+            gp.gp_widget_set_value(bulb_mode, 1)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 1')
+            time.sleep(duration)
+            gp.gp_widget_set_value(bulb_mode, 0)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 0')
+            if not (hasattr(camera, '_bg_downloader')
+                    and camera._bg_downloader is not None
+                    and camera._bg_downloader.is_alive()):
+                _drain_camera_events(target, context, timeout_ms=100, max_events=60)
         except gphoto2.GPhoto2Error as e:
-            logging.warning('Could not reset Sony capturemode to Single after burst: %s', e)
+            logging.warning('Sony burst capture failed: %s', e)
 
 
 def _parse_bracket_steps(steps: str) -> int:
@@ -1473,6 +1549,44 @@ def _parse_bracket_steps(steps: str) -> int:
         raise ValueError(f"Could not parse bracket steps '{steps}' to a positive stop count")
     return thirds
 
+
+def calculate_bracket_exposures(bracket_str: str, base_shutter_speed: str | float) -> float:
+    """Parses a camera bracketing string and base shutter speed to calculate
+
+    all shot durations and the total execution time.
+    """
+    # 1. Extract EV step size and number of pictures
+    import re as _re
+    match = _re.search(r"(\d+\.\d+).+?(\d+)", bracket_str)
+    if not match:
+        raise ValueError(f"Invalid bracketing string format: '{bracket_str}'")
+
+    ev_step = float(match.group(1))
+    num_pictures = int(match.group(2))
+
+    # 2. Parse the base shutter speed into seconds (handles floats or "1/125" fractions)
+    if isinstance(base_shutter_speed, str):
+        base_shutter_speed = base_shutter_speed.strip()
+        if "/" in base_shutter_speed:
+            num, denom = base_shutter_speed.split("/")
+            base_seconds = float(num) / float(denom)
+        else:
+            base_seconds = float(base_shutter_speed)
+    else:
+        base_seconds = float(base_shutter_speed)
+
+    # 3. Calculate EV offsets symmetrically around 0 EV
+    # e.g., 5 steps with 0.5 EV step -> [-1.0, -0.5, 0.0, 0.5, 1.0]
+    half_count = num_pictures // 2
+    ev_offsets = [i * ev_step for i in range(-half_count, half_count + 1)]
+
+    # 4. Calculate exact duration for each exposure (t = base * 2^EV)
+    exposures_sec = [base_seconds * (2**ev) for ev in ev_offsets]
+    total_duration_sec = sum(exposures_sec)
+
+    return total_duration_sec
+
+
 @_serialised_on_camera
 def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) -> None:
     """ Take a bracketing of images with the selected camera.
@@ -1489,61 +1603,25 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                  base-2*1⅔, base-1⅔, base, base+1⅔, base+2*1⅔ stops.
                  Supported: '+/- 1/3' through '+/- 3'.
     """
+    vendor = getattr(camera, 'vendor', None)
+    camera_name = getattr(camera, 'name', None)
     context, config = __adapt_camera_settings(camera, camera_settings)
 
-    # Virtual camera: perform a few captures to simulate bracketing
-    if context is None:
-        try:
-            for _ in range(3):
-                camera.capture()
-            return
-        except Exception:
-            logging.exception('Virtual bracket capture failed')
-            raise
-
-    if getattr(camera, 'vendor', None) == 'Canon':
-        # Set aeb
-        aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
-        gp.gp_widget_set_value(aeb, steps)
-        # set config
-        _set_gp_config(camera, config, context)
-
-        for _ in range(5):
-            try:
-                camera.capture(gp.GP_CAPTURE_IMAGE, context)
-            except Exception:
-                logging.exception('Bracket capture high-level failed, trying low-level gp capture')
-                try:
-                    target = camera._camera if hasattr(camera, '_camera') else camera
-                    ctx = gp.gp_context_new()
-                    gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
-                except Exception:
-                    logging.exception('Bracket low-level capture failed')
-                    raise
-
-        # Set aeb
-        aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
-        gp.gp_widget_set_value(aeb, "off")
-        # set config
-        _set_gp_config(camera, config, context)
-
-    elif getattr(camera, 'vendor', None) == 'Nikon':
-        # Nikon does not expose an AEB widget via gphoto2.  Software bracketing:
-        # fire 5 shots at base-2*step, base-step, base, base+step, base+2*step,
-        # matching the Canon 5-frame bracket count.
+    # Software bracketing:
+    # fire 5 shots at base-2*step, base-step, base, base+step, base+2*step,
+    # matching the Canon 5-frame bracket count.
+    def simulated_bracketing():
         step_count = _parse_bracket_steps(steps)
+
+        try:
+            ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
+        except gphoto2.GPhoto2Error:
+            ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
 
         choices = _get_shutter_speed_choices(config)
         base_speed = camera_settings.shutter_speed.strip()
         if base_speed not in choices:
-            choices_lower = [c.lower() for c in choices]
-            if base_speed.lower() in choices_lower:
-                base_speed = choices[choices_lower.index(base_speed.lower())]
-            else:
-                raise CameraError(
-                    f"Shutter speed '{base_speed}' is not supported by this camera. "
-                    f"Supported speeds: {choices}"
-                )
+            base_speed = _find_closest_shutter_choice(ss_widget, base_speed)
 
         base_idx = choices.index(base_speed)
         # choices is sorted fastest→slowest; smaller index = less exposure (under)
@@ -1555,30 +1633,124 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             min(len(choices) - 1, base_idx + 2 * step_count),
         ]
 
-        logging.info(
-            'take_bracket (Nikon): 5-shot sequence: %s',
-            [choices[i] for i in indices],
+        logging.debug(
+            '%s: take_bracket 5-shot sequence: %s', camera_name, [choices[i] for i in indices],
         )
 
         target = camera._camera if hasattr(camera, '_camera') else camera
-        speed_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
 
         for idx in indices:
             speed = choices[idx]
             try:
-                gp.gp_widget_set_value(speed_widget, speed)
+                gp.gp_widget_set_value(ss_widget, speed)
                 gp.gp_camera_set_config(target, config, context)
                 gp.check_result(gp.gp_camera_trigger_capture(target, context))
-                logging.debug('take_bracket (Nikon): triggered capture at %s', speed)
+                logging.info('%s: take_bracket triggered capture at %s', camera_name, speed)
             except gphoto2.GPhoto2Error as e:
-                logging.error('take_bracket (Nikon): capture failed at speed %s: %s', speed, e)
+                logging.warning('%s: take_bracket capture failed at speed %s: %s', camera_name, speed, e)
                 raise
             _wait_for_capture_complete(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
 
         # Restore base shutter speed
-        gp.gp_widget_set_value(speed_widget, choices[base_idx])
+        gp.gp_widget_set_value(ss_widget, choices[base_idx])
         _set_gp_config(camera, config, context)
-        logging.info('take_bracket (Nikon): bracket complete')
+        logging.debug('%s: take_bracket complete', camera_name)
+
+    # Virtual camera: perform a few captures to simulate bracketing
+    if context is None:
+        try:
+            for _ in range(3):
+                camera.capture()
+            return
+        except Exception:
+            logging.exception('Virtual bracket capture failed')
+            raise
+
+    if vendor == 'Canon':
+        try:
+            # Prepare to check shutter speed during bracketing run
+            # so we can catch when camera already finished it.
+            ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+            choices = _get_shutter_speed_choices(config)
+            base_speed = camera_settings.shutter_speed.strip()
+            if base_speed not in choices:
+                base_speed = _find_closest_shutter_choice(ss_widget, base_speed)
+            # Turn on aeb
+            aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
+            gp.gp_widget_set_value(aeb, steps)
+            _set_gp_config(camera, config, context)
+
+            for br_shot in range(5):
+                try:
+                    if br_shot == 3:
+                        current_speed = gp.check_result(gp.gp_widget_get_value(ss_widget))
+                        if current_speed == base_speed:
+                            logging.warning("%s: 5 frames AEB not supported, stopping at 3", camera_name)
+                            break
+                    camera.capture(gp.GP_CAPTURE_IMAGE, context)
+                except Exception:
+                    logging.exception('Bracket capture high-level failed, trying low-level gp capture')
+                    try:
+                        target = camera._camera if hasattr(camera, '_camera') else camera
+                        ctx = gp.gp_context_new()
+                        gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
+                    except Exception:
+                        logging.exception('Bracket low-level capture failed')
+                        raise
+
+            # Turn off aeb
+            aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
+            gp.gp_widget_set_value(aeb, "off")
+            _set_gp_config(camera, config, context)
+        except gphoto2.GPhoto2Error:
+            logging.warning("%s: 'aeb' is not supported, will fallback to simulated bracketing", camera_name)
+            simulated_bracketing()
+    elif vendor == 'Nikon':
+        # Nikon does not expose an AEB widget via gphoto2.
+        # TODO: replace it, as bracketing is actually supported
+        simulated_bracketing()
+    elif vendor == 'Sony':
+        # Sony bracketing: enable continuous bracketing mode, turn on the bulb,
+        # sleep for the chosen amount of time, turn off the bulb and
+        # lastly drain camera's events
+        target = camera._camera if hasattr(camera, '_camera') else camera
+        base_speed = camera_settings.shutter_speed.strip()
+        bracket_duration = calculate_bracket_exposures(steps, base_speed)
+
+        # Switch to continuous bracketing mode
+        try:
+            capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+            if steps is not None:
+                gp.gp_widget_set_value(capture_mode, steps)
+                _set_gp_config(camera, config, context)
+                logging.info('%s: set capturemode to "%s" for bracketing', camera_name, steps)
+            else:
+                logging.warning(
+                    '%s: capturemode "%s" choice not found, firing without mode change', camera_name, steps)
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('Could not set Sony capturemode to "%s": %s', steps, e)
+
+        try:
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
+            bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
+            gp.gp_widget_set_value(bulb_mode, 1)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 1')
+            time.sleep(bracket_duration)
+            gp.gp_widget_set_value(bulb_mode, 0)
+            _set_gp_config(camera, config, context)
+            logging.debug('Set Sony bulb mode to 0')
+            if not (hasattr(camera, '_bg_downloader')
+                    and camera._bg_downloader is not None
+                    and camera._bg_downloader.is_alive()):
+                # The timeout is longer here because of the Sony A7R IIIA.
+                # If it's shorter than 700ms, the last frame won't be written to SD
+                # and camera will get stuck.
+                _drain_camera_events(target, context, timeout_ms=700, max_events=60)
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('Sony burst capture failed: %s', e)
+
 
 def _parse_shutter_speed_seconds(speed_str: str) -> float:
     """Parse a gphoto2 shutter speed string to seconds as a float.
@@ -1621,7 +1793,12 @@ def _get_shutter_speed_choices(config) -> list:
         "20", "25", "30",
     ]
     try:
-        speed_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+        # Nikon is a weirdo - 'shutterspeed' returns all values in float seconds!
+        # 'shutterspeed2' contains the expected values instead -_-
+        try:
+            speed_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
+        except gphoto2.GPhoto2Error:
+            speed_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
         n = gp.check_result(gp.gp_widget_count_choices(speed_widget))
         raw = [gp.check_result(gp.gp_widget_get_choice(speed_widget, i)) for i in range(n)]
         parseable = [(s, _parse_shutter_speed_seconds(s)) for s in raw if _parse_shutter_speed_seconds(s) > 0]
@@ -1663,6 +1840,9 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
     Raises:
         CameraError: If the requested starting shutter speed is not supported by the camera.
     """
+    vendor = getattr(camera, 'vendor', None)
+    camera_name = getattr(camera, 'name', None)
+
     # Canon EOS R live-view / trigger_capture mode conflict (same as take_picture).
     if (getattr(camera, 'vendor', None) == 'Canon'
             and hasattr(camera, '_camera')
@@ -1683,26 +1863,66 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             logging.exception('Virtual camera HDR capture failed')
             raise
 
-    target = camera._camera if hasattr(camera, '_camera') else camera
+    # For Nikon cameras, defensively ensure single-frame mode is active before
+    # taking a single picture, in case a previous take_burst left the camera in
+    # continuous/burst mode.
+    # For Sony cameras, ensure single-frame capture mode is active before taking
+    # a single picture (separate set_config call so a bad capturemode value can
+    # never poison the ISO/shutter batch).
+    if vendor in ('Nikon', 'Sony'):
+        target = camera._camera if hasattr(camera, '_camera') else camera
+        try:
+            cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
+            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(cfg2, 'capturemode'))
+            single_choice = _find_capturemode_choice(capture_mode_widget, want_continuous=False)
+            if single_choice is not None:
+                gp.gp_widget_set_value(capture_mode_widget, single_choice)
+                _set_gp_config(camera, cfg2, context)
+                logging.debug('%s: ensured capturemode="%s" before take_picture', camera_name, single_choice)
+            else:
+                logging.warning('%s: no "single" choice found for capture mode, leaving as-is', camera_name)
+        except gphoto2.GPhoto2Error as exc:
+            if vendor == "Nikon":
+                try:
+                    capture_mode_widget = gp.check_result(
+                        gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
+                    gp.gp_widget_set_value(capture_mode_widget, 0)  # 0 = Single Frame
+                    _set_gp_config(camera, config, context)
+                    logging.debug(
+                        '%s: ensured stillcapturemode is Single Frame (0) before take_picture', camera_name)
+                except gphoto2.GPhoto2Error as e:
+                    logging.warning(
+                        '%s: could not ensure single-frame mode before take_picture: %s', camera_name, e)
+            else:
+                logging.warning(
+                    '%s: could not ensure single-frame mode before take_picture: %s', camera_name, exc)
+    else:
+        target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # Ensure that no lingering events are left before proceeding with the HDR sequence
+    _drain_camera_events(target, context, timeout_ms=100, max_events=60)
 
     # Build the ordered shutter-speed list from this camera's actual capabilities
     choices = _get_shutter_speed_choices(config)
     logging.debug('take_hdr: shutter speed choices from camera: %s', choices)
 
+    # Fetch the shutterspeed widget once to reuse across all shots
+    try:
+        ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
+    except gphoto2.GPhoto2Error:
+        ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+
     # Locate the starting speed in the choices list
     start_speed = camera_settings.shutter_speed.strip()
     if start_speed not in choices:
-        choices_lower = [c.lower() for c in choices]
-        if start_speed.lower() in choices_lower:
-            start_speed = choices[choices_lower.index(start_speed.lower())]
-        else:
-            raise CameraError(
-                f"Shutter speed '{start_speed}' is not supported by this camera. "
-                f"Supported speeds: {choices}"
-            )
+        start_speed = _find_closest_shutter_choice(ss_widget, start_speed)
 
     start_idx = choices.index(start_speed)
-    end_idx = min(start_idx + stops, len(choices) - 1)
+    # Defining here a multipler, so we can make full stops.
+    # We assume that exposure step is already set to 0.3EV on the camera!
+    full_stop_multiplier=3
+    end_idx = min(start_idx + stops * full_stop_multiplier, len(choices) - 1)
+    end_idx = start_idx + ((end_idx - start_idx) // full_stop_multiplier) * full_stop_multiplier
     actual_stops = end_idx - start_idx
     if actual_stops < stops:
         logging.warning(
@@ -1712,24 +1932,18 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
         )
 
     # Symmetric sequence: ramp down (faster→slower) then back up (duplicate peak excluded)
-    down = list(range(start_idx, end_idx + 1))
-    up = list(range(end_idx - 1, start_idx - 1, -1))
+    down = list(range(start_idx, end_idx + 1, full_stop_multiplier))
+    up = list(range(end_idx - full_stop_multiplier, start_idx - 1, -full_stop_multiplier))
     indices = down + up
     logging.info(
         'take_hdr: %d shots, speeds: %s',
         len(indices), [choices[i] for i in indices]
     )
 
-    # Fetch the shutterspeed widget once to reuse across all shots
-    try:
-        speed_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
-    except gphoto2.GPhoto2Error as e:
-        raise CameraError(f"Could not access shutterspeed widget: {e}") from e
-
     for idx in indices:
         speed = choices[idx]
         try:
-            gp.gp_widget_set_value(speed_widget, speed)
+            gp.gp_widget_set_value(ss_widget, speed)
             gp.gp_camera_set_config(target, config, context)
             gp.check_result(gp.gp_camera_trigger_capture(target, context))
             logging.debug('take_hdr: triggered capture at %s', speed)
@@ -1739,10 +1953,14 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
         except gphoto2.GPhoto2Error as e:
             logging.error('take_hdr: capture failed at speed %s: %s', speed, e)
             raise
-        # Wait for the shutter to close before changing the shutter speed for the
-        # next shot.  Without this, gp_camera_set_config on the next iteration
-        # races with the camera's USB processing and raises -110 I/O in progress.
-        _wait_for_capture_complete(target, context)
+        # For all cameras except Sony set in PC only mode - wait for
+        # the image capture and flush the PTP events.
+        # Note: Sony won't throw -110 error when jumping to the next shot.
+        if not (hasattr(camera, '_bg_downloader')
+                and camera._bg_downloader is not None
+                and camera._bg_downloader.is_alive()):
+            _wait_for_capture_complete(target, context)
+            _drain_camera_events(target, context, timeout_ms=100, max_events=60)
 
     logging.info('take_hdr: HDR sequence complete (%d shots)', len(indices))
 
@@ -1860,27 +2078,29 @@ def get_camera(camera_name: str):
 
     # Post-init configuration (capture target, drive mode)
     try:
-        # find the capture target config item (to save to the memory card)
         config = gp.check_result(gp.gp_camera_get_config(camera, context))
-        capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-        # set value — search for the memory-card entry by name, not by blind index
-        value = _find_memory_card_choice(capture_target)
-        gp.gp_widget_set_value(capture_target, value)
-        logging.debug('Set capturetarget to "%s" for %s', value, camera_name)
-        # set config
-        gp.gp_camera_set_config(camera, config, context)
-
-        # Try to set the drivemode to Continuous high speed (for cameras that support it)
-        # Note: Not all cameras have this widget (e.g., Nikon Z-series mirrorless cameras)
-        try:
-            drive_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
-            gp.gp_widget_set_value(drive_mode, "Continuous high speed")
+        # Skip Sony cameras, as this option is set in stone once USB is connected
+        if not _is_sony_camera_instance(camera):
+            # find the capture target config item (to save to the memory card)
+            capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            # set value — search for the memory-card entry by name, not by blind index
+            value = _find_memory_card_choice(capture_target)
+            gp.gp_widget_set_value(capture_target, value)
+            logging.debug('Set capturetarget to "%s" for %s', value, camera_name)
             # set config
             gp.gp_camera_set_config(camera, config, context)
-            logging.debug('Set drivemode to Continuous high speed for %s', camera_name)
-        except gphoto2.GPhoto2Error as e:
-            # drivemode widget doesn't exist or value not supported - this is OK for many cameras
-            logging.debug('Could not set drivemode for %s (this is normal for some camera models): %s', camera_name, e)
+
+            # Try to set the drivemode to Continuous high speed (for cameras that support it)
+            # Note: Not all cameras have this widget (e.g., Nikon Z-series mirrorless cameras)
+            try:
+                drive_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
+                gp.gp_widget_set_value(drive_mode, "Continuous high speed")
+                # set config
+                gp.gp_camera_set_config(camera, config, context)
+                logging.debug('Set drivemode to Continuous high speed for %s', camera_name)
+            except gphoto2.GPhoto2Error as e:
+                # drivemode widget doesn't exist or value not supported - this is OK for many cameras
+                logging.debug('Could not set drivemode for %s (this is normal for some camera models): %s', camera_name, e)
     except gphoto2.GPhoto2Error as e:
         logging.warning('Post-init config failed for %s (continuing): %s', camera_name, e)
 
@@ -1943,20 +2163,22 @@ def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) 
     # Post-init configuration (capture target, drive mode)
     try:
         config = gp.check_result(gp.gp_camera_get_config(camera, context))
-        capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
-        # search for the memory-card entry by name, not by blind index
-        value = _find_memory_card_choice(capture_target)
-        gp.gp_widget_set_value(capture_target, value)
-        logging.debug('Set capturetarget to "%s" for %s', value, display_name)
-        gp.gp_camera_set_config(camera, config, context)
-
-        try:
-            drive_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
-            gp.gp_widget_set_value(drive_mode, "Continuous high speed")
+        # Skip Sony cameras, as this option is set in stone once USB is connected
+        if not _is_sony_model(model_name):
+            capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            # search for the memory-card entry by name, not by blind index
+            value = _find_memory_card_choice(capture_target)
+            gp.gp_widget_set_value(capture_target, value)
+            logging.debug('Set capturetarget to "%s" for %s', value, display_name)
             gp.gp_camera_set_config(camera, config, context)
-            logging.debug('Set drivemode to Continuous high speed for %s', display_name)
-        except gphoto2.GPhoto2Error as e:
-            logging.debug('Could not set drivemode for %s: %s', display_name, e)
+
+            try:
+                drive_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
+                gp.gp_widget_set_value(drive_mode, "Continuous high speed")
+                gp.gp_camera_set_config(camera, config, context)
+                logging.debug('Set drivemode to Continuous high speed for %s', display_name)
+            except gphoto2.GPhoto2Error as e:
+                logging.debug('Could not set drivemode for %s: %s', display_name, e)
     except gphoto2.GPhoto2Error as e:
         logging.warning('Post-init config failed for %s (continuing): %s', display_name, e)
 
@@ -2028,59 +2250,7 @@ def get_free_space(camera: Camera) -> float:
                 'Camera %s does not expose storage info via PTP (Sony -1); returning -1.0',
                 getattr(camera, 'name', str(camera)))
             return -1.0
-        # Error -53 means the OS has reclaimed the USB device (common on macOS when
-        # ptpcamerad / Image Capture grabs the camera after gphoto2 releases it).
-        if getattr(e, 'code', None) == -53:
-            cached = getattr(camera, '_cached_free_space', None)
-            if cached is not None:
-                # Camera was working before; return the last known value.
-                logging.debug(
-                    'Camera %s USB reclaimed by OS (-53), returning cached free space %.1f GB',
-                    getattr(camera, 'name', str(camera)), cached)
-                return cached
-            # No cached value: this is the very first poll.  Attempt one reinitialisation —
-            # on Sony in PC Remote mode gphoto2 can reclaim the device from ptpcamerad
-            # because the camera keeps its side of the PTP session open.
-            logging.warning(
-                'Camera %s: free-space query hit -53 with no prior cache; attempting reinit',
-                getattr(camera, 'name', str(camera)))
-            try:
-                if hasattr(camera, 'name'):
-                    new_cam = get_camera(camera.name)
-                    result = round(new_cam.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
-                    try:
-                        camera._cached_free_space = result
-                    except Exception:
-                        pass
-                    return result
-            except Exception:
-                logging.warning('Reinit also failed for free-space query on %s; returning -1.0',
-                                getattr(camera, 'name', str(camera)))
-            return -1.0
-        # For other errors, try to reinitialise the camera once and retry
-        try:
-            if hasattr(camera, 'name'):
-                logging.info('Reinitialising camera %s to retry storage query', camera.name)
-                new_cam = get_camera(camera.name)
-                try:
-                    return round(new_cam.get_storageinfo()[0].freekbytes / 1024 / 1024, 1)
-                except gphoto2.GPhoto2Error:
-                    # Try lower level gp call with explicit context
-                    try:
-                        ctx = gp.gp_context_new()
-                        stor = gp.check_result(gp.gp_camera_get_storageinfo(new_cam._camera if hasattr(new_cam, '_camera') else new_cam, ctx))
-                        return round(stor[0].freekbytes / 1024 / 1024, 1)
-                    except Exception:
-                        raise
-        except Exception:
-            logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-        # If recovery failed, propagate the original error so caller can handle it
-        try:
-            ctx = gp.gp_context_new()
-            stor = gp.check_result(gp.gp_camera_get_storageinfo(camera._camera if hasattr(camera, '_camera') else camera, ctx))
-            return round(stor[0].freekbytes / 1024 / 1024, 1)
-        except Exception:
-            raise CameraError(f"Could not read storage info for {getattr(camera, 'name', camera)}: {e}") from e
+        raise CameraError(f"Could not read storage info for {getattr(camera, 'name', camera)}: {e}") from None
     except IndexError:
         # get_storageinfo() returned an empty list — common on Sony via PTP during
         # the initial handshake or when ptpcamerad briefly relinquishes the device.
@@ -2091,7 +2261,7 @@ def get_free_space(camera: Camera) -> float:
                 'Camera %s: get_storageinfo() returned empty list; returning cached %.1f GB',
                 getattr(camera, 'name', str(camera)), cached)
             return cached
-        logging.warning(
+        logging.debug(
             'Camera %s: get_storageinfo() returned empty list with no cache; returning -1.0',
             getattr(camera, 'name', str(camera)))
         return -1.0
@@ -2129,38 +2299,7 @@ def get_space(camera: Camera) -> float:
                 'Camera %s does not expose storage capacity via PTP (Sony -1); returning -1.0',
                 getattr(camera, 'name', str(camera)))
             return -1.0
-        # Error -53: OS reclaimed the USB device (macOS ptpcamerad / Image Capture).
-        # Return previously cached value if available.
-        if getattr(e, 'code', None) == -53:
-            cached = getattr(camera, '_cached_total_space', -1.0)
-            logging.debug(
-                'Camera %s USB reclaimed by OS (-53), returning cached total space %.1f GB',
-                getattr(camera, 'name', str(camera)), cached)
-            return cached
-        logging.warning('gphoto2 error reading capacity for %s: %s', getattr(camera, 'name', str(camera)), e)
-        # Try to reinitialise the camera once and retry
-        try:
-            if hasattr(camera, 'name'):
-                logging.info('Reinitialising camera %s to retry capacity query', camera.name)
-                new_cam = get_camera(camera.name)
-                try:
-                    return round(new_cam.get_storageinfo()[0].capacitykbytes / 1024 / 1024, 1)
-                except gphoto2.GPhoto2Error:
-                    try:
-                        ctx = gp.gp_context_new()
-                        stor = gp.check_result(gp.gp_camera_get_storageinfo(new_cam._camera if hasattr(new_cam, '_camera') else new_cam, ctx))
-                        return round(stor[0].capacitykbytes / 1024 / 1024, 1)
-                    except Exception:
-                        raise
-        except Exception:
-            logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-        # If recovery failed, propagate the original error so caller can handle it
-        try:
-            ctx = gp.gp_context_new()
-            stor = gp.check_result(gp.gp_camera_get_storageinfo(camera._camera if hasattr(camera, '_camera') else camera, ctx))
-            return round(stor[0].capacitykbytes / 1024 / 1024, 1)
-        except Exception:
-            raise CameraError(f"Could not read storage capacity for {getattr(camera, 'name', camera)}: {e}") from e
+        raise CameraError(f"Could not read storage capacity for {getattr(camera, 'name', camera)}: {e}") from None
     except IndexError:
         # get_storageinfo() returned an empty list — camera not yet ready to report storage.
         cached = getattr(camera, '_cached_total_space', None)
@@ -2169,7 +2308,7 @@ def get_space(camera: Camera) -> float:
                 'Camera %s: get_storageinfo() returned empty list; returning cached total %.1f GB',
                 getattr(camera, 'name', str(camera)), cached)
             return cached
-        logging.warning(
+        logging.debug(
             'Camera %s: get_storageinfo() returned empty list with no cache; returning -1.0',
             getattr(camera, 'name', str(camera)))
         return -1.0
@@ -2256,32 +2395,28 @@ def get_battery_level(camera: Camera) -> str:
     Returns: Current battery level of the camera [%]
     """
 
+    if camera is None:
+        return None
+
+    camera_name = getattr(camera, 'name', str(camera))
+
     try:
         value = camera.get_config().get_child_by_name('batterylevel').get_value()
         # gphoto2 reports 253 (0xFD) for Sony cameras (and some others) when the
         # camera is powered via an AC adapter rather than a battery.
         if str(value).rstrip('%') == '253':
+            logging.info("%s: connected to AC. If wrong - press 'Camera(s)' button again", camera_name)
             return 'AC'
+        logging.info('%s: battery level is %s', camera_name, str(value))
         return str(value)
     except gphoto2.GPhoto2Error as e:
-        if getattr(e, 'code', None) == -53:
-            # -53: another process (e.g. ptpcamerad on macOS) has reclaimed the USB device.
-            # Attempt one reinitialisation — on Sony in PC Remote mode gphoto2 can win the
-            # device back because the camera keeps its side of the PTP session open.
-            logging.debug('Camera %s busy (USB claimed, -53); attempting reinit for battery read',
-                          getattr(camera, 'name', str(camera)))
-            try:
-                if hasattr(camera, 'name'):
-                    new_cam = get_camera(camera.name)
-                    return new_cam.get_config().get_child_by_name('batterylevel').get_value()
-            except Exception:
-                logging.debug('Reinit also failed for battery read on %s; returning Unknown',
-                              getattr(camera, 'name', str(camera)))
-        else:
-            logging.warning('gphoto2 error reading battery level for %s: %s',
-                            getattr(camera, 'name', str(camera)), e)
-        # Return unknown battery level to avoid crashing the UI
-        return "Unknown"
+        logging.debug('gphoto2 error reading batterylevel for %s: %s', camera_name, e)
+        error_str = str(e).lower()
+        if any(x in error_str for x in ['-110', 'i/o in progress']):
+            logging.debug("%s: busy, will try to read battery level again", camera_name)
+            time.sleep(0.1)
+            return get_battery_level(camera)
+        raise CameraError(f"Could not read battery level for {camera_name}: {e}") from None
     except Exception:
         # VirtualCamera and other non-gphoto cameras don't expose battery info
         if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
@@ -2307,16 +2442,22 @@ def get_time(camera: Camera) -> str:
         config = camera.get_config()
     except gphoto2.GPhoto2Error as e:
         logging.warning('gphoto2 error reading camera time for %s: %s', getattr(camera, 'name', str(camera)), e)
-        # Attempt reinitialisation and retry once
-        try:
-            if hasattr(camera, 'name'):
-                logging.info('Reinitialising camera %s to retry time query', camera.name)
-                new_cam = get_camera(camera.name)
-                config = new_cam.get_config()
-        except Exception:
-            logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-            # If retry failed, propagate the original error so the caller can handle it
-            raise
+        error_str = str(e).lower()
+        if any(x in error_str for x in ['-110', 'i/o in progress']):
+            logging.warning(f"Seems like camera is busy, unable to get the time, trying again")
+            time.sleep(0.1)
+            return get_time(camera)
+        else:
+            # Attempt reinitialisation and retry once
+            try:
+                if hasattr(camera, 'name'):
+                    logging.info('Reinitialising camera %s to retry time query', camera.name)
+                    new_cam = get_camera(camera.name)
+                    config = new_cam.get_config()
+            except Exception:
+                logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
+                # If retry failed, propagate the original error so the caller can handle it
+                raise
     except Exception:
         # If any other error, fall back to host time
         return datetime.now().isoformat(' ')
@@ -2364,17 +2505,23 @@ def set_time(camera: Camera) -> None:
     try:
         config = camera.get_config()
     except gphoto2.GPhoto2Error as e:
-        logging.warning('gphoto2 error getting config for %s: %s', getattr(camera, 'name', str(camera)), e)
-        # Attempt reinitialisation and retry once
-        try:
-            if hasattr(camera, 'name'):
-                logging.info('Reinitialising camera %s to retry set_time', camera.name)
-                camera = get_camera(camera.name)
-                config = camera.get_config()
-        except Exception:
-            logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-            # propagate error to caller
-            raise
+        logging.debug('gphoto2 error getting time from %s: %s', getattr(camera, 'name', str(camera)), e)
+        error_str = str(e).lower()
+        if any(x in error_str for x in ['-110', 'i/o in progress']):
+            logging.warning(f"Seems like camera is busy, unable to set the time, trying again")
+            time.sleep(0.1)
+            return set_time(camera)
+        else:
+            # Attempt reinitialisation and retry once
+            try:
+                if hasattr(camera, 'name'):
+                    logging.info('Reinitialising camera %s to retry set_time', camera.name)
+                    new_cam = get_camera(camera.name)
+                    config = new_cam.get_config()
+            except Exception:
+                logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
+                # If retry failed, propagate the original error so the caller can handle it
+                raise
     except Exception:
         # VirtualCamera or other adapters may not expose get_config(); skip
         return
@@ -2386,7 +2533,7 @@ def set_time(camera: Camera) -> None:
         except Exception:
             logging.error('Could not apply date & time to camera')
     else:
-        logging.error('Could not set date & time')
+        logging.warning('Could not set date & time (unsupported operation?)')
 
 
 def __set_datetime(config) -> bool:
@@ -2473,7 +2620,7 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
 
     detected = get_cameras()  # [(model_name, port), ...]
     try:
-        print("Found cameras:", detected, flush=True)
+        logging.info('Found cameras: %s', detected)
     except Exception:
         logging.debug('Could not print found cameras to terminal')
 
@@ -2716,74 +2863,54 @@ def get_sony_save_destination(camera) -> str | None:
     """
     if camera is None:
         return None
+
+    sony_camera_name = getattr(camera, 'name', str(camera))
+
     try:
-        ctx = gp.gp_context_new()
-        cfg = gp.check_result(gp.gp_camera_get_config(camera._camera if hasattr(camera, '_camera') else camera, ctx))
-    except Exception:
-        return None
-
-    KEYWORDS = ["save", "dest", "storage", "pc remote", "pcsave", "pc_save", "still img", "savemedia"]
-
-    def _walk(widget):
-        try:
-            wtype = gp.check_result(gp.gp_widget_get_type(widget))
-            name = gp.check_result(gp.gp_widget_get_name(widget))
-            label = gp.check_result(gp.gp_widget_get_label(widget))
-        except Exception:
-            return None
-        combined = (str(name) + " " + str(label)).lower()
-        # container types
-        if wtype in (gp.GP_WIDGET_WINDOW, gp.GP_WIDGET_SECTION, gp.GP_WIDGET_CONTAINER):
-            try:
-                n = gp.check_result(gp.gp_widget_count_children(widget))
-                for i in range(n):
-                    child = gp.check_result(gp.gp_widget_get_child(widget, i))
-                    v = _walk(child)
-                    if v is not None:
-                        return v
-            except Exception:
-                return None
+        sony_capture_target = camera.get_config().get_child_by_name('capturetarget').get_value()
+        logging.info("%s: capture target is %s", sony_camera_name, sony_capture_target)
+        return sony_capture_target
+    except gphoto2.GPhoto2Error as e:
+        logging.debug('gphoto2 error reading capturetarget for %s: %s', sony_camera_name, e)
+        error_str = str(e).lower()
+        if any(x in error_str for x in ['-110', 'i/o in progress']):
+            logging.warning("%s: busy, unable to get capture target, trying again", sony_camera_name)
+            time.sleep(0.1)
+            return get_sony_save_destination(camera)
         else:
-            if any(kw in combined for kw in KEYWORDS):
-                try:
-                    val = gp.check_result(gp.gp_widget_get_value(widget))
-                    return str(val)
-                except Exception:
-                    return None
-        return None
-
-    try:
-        return _walk(cfg)
+            logging.warning("%s: lacks capture target setting", sony_camera_name)
+            return None
     except Exception:
         return None
 
 
-def sony_save_destination_needs_downloader(destination: Optional[str]) -> bool:
-    """Return True only when destination string clearly indicates PC-only save.
+def get_sony_image_quality(camera: Camera) -> str:
+    """ Return the image quality of the selected Sony camera.
 
-    Destination values differ across camera firmwares and locales.  This helper
-    intentionally errs on the side of *not* downloading when unclear, to avoid
-    stealing USB bandwidth from scheduled captures.
+    Args:
+        - camera: Camera object
+
+    Returns: Image quality setting of the camera
     """
-    if destination is None:
-        return False
+    if camera is None:
+        return None
 
-    value = str(destination).strip().lower()
-    if not value:
-        return False
+    sony_camera_name = getattr(camera, 'name', str(camera))
 
-    has_pc = ('pc' in value) or ('computer' in value)
-    has_camera_or_card = any(
-        token in value
-        for token in ('camera', 'camara', 'kamera', 'card', 'sd')
-    )
-
-    # Explicit mixed destinations like "PC+Camera" or "PC/Camera".
-    if has_pc and has_camera_or_card:
-        return False
-
-    # Any destination mentioning only PC/computer should enable downloading.
-    return has_pc and not has_camera_or_card
+    try:
+        sony_image_quality = camera.get_config().get_child_by_name('imagequality').get_value()
+        logging.info("%s: file format / quality is %s", sony_camera_name, sony_image_quality)
+        return sony_image_quality
+    except gphoto2.GPhoto2Error as e:
+        logging.debug('gphoto2 error reading imagequality for %s: %s', getattr(camera, 'name', str(camera)), e)
+        error_str = str(e).lower()
+        if any(x in error_str for x in ['-110', 'i/o in progress']):
+            logging.warning(
+                "%s: busy, unable to get image quality, trying again", sony_camera_name)
+            time.sleep(0.1)
+            return get_sony_image_quality(camera)
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

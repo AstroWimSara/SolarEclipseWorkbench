@@ -3,9 +3,10 @@ import csv
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 import pytz
-from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, sync_cameras, scripts, execute_command
+from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, \
+    sync_cameras, scripts, execute_command
 from solareclipseworkbench.camera import CameraSettings
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
@@ -248,9 +249,7 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
         # by subtracting the offset ensures the action happens at the correct moment.
         execution_time = execution_time - gps_time_offset
 
-        trigger = CronTrigger(year=execution_time.year, month=execution_time.month, day=execution_time.day,
-                              hour=execution_time.hour, minute=execution_time.minute,
-                              second=execution_time.second, timezone=pytz.utc)
+        trigger = DateTrigger(run_date=execution_time, timezone=pytz.utc)
 
         scheduler.add_job(func, trigger=trigger, args=args, name=description)
     except KeyError:
