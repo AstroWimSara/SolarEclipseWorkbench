@@ -7,37 +7,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [2.0.0rc1] - 2026-07-31
 
 ### Added
-- Simulation mode now shows the correct countdown.  Apply the simulation offset to countdowns and live-view pause #162 by @mrosseel
-- Show camera problems in the GUI instead of only in the log- #166 by @mrosseel
+- Show camera problems in the GUI instead of only in the log - #166 by @mrosseel
 - Sony camera support.  Working in Solar Eclipse Workbench with Sony cameras works now fluently by @fliker09
-  - Sony: `take_bracket` is now supported, please consult README (Issue #146) by @fliker09
-  - Sony: `--sony-cont-mode` command line option has been added, to override automatic selection of the Continuous capture mode, please consult README (Issue #145) by @fliker09
-- It is now possible to re-connect cameras without restarting the app, please consult README (Issue #149) by @fliker09
-- Timings for reference moments now show milliseconds to first digit (Issue #137) by @fliker09
-- Scheduler has been replaced, it now supports precision down to microseconds (Issue #137) by @fliker09
+  - Sony: `take_bracket` is now supported, please consult README - #146 by @fliker09
+  - Sony: `--sony-cont-mode` command line option has been added, to override automatic selection of the Continuous capture mode, please consult README - #145 by @fliker09
+- It is now possible to re-connect cameras without restarting the app, please consult README - #149 by @fliker09
+- Timings for reference moments now show milliseconds to first digit - #137 by @fliker09
+- Scheduler has been replaced, it now supports precision down to microseconds - #137 by @fliker09
 - Sony: banner with warning(s) can now be closed by @fliker09
+- Canon: DIGIC III cameras are now properly supported (tested with a 1000D body) by @fliker09
+- HDR sequences are now supported by Nikon and Sony cameras as well - #159 by fliker09
 
 ### Fixed
-
-- Sony: `take_burst` is now properly supported, please consult README (Issue #145) by @fliker09
+- Sony: `take_burst` is now properly supported, please consult README - #145 by @fliker09
 - Sony: `PC` mode is now working correctly and downloads all files from camera(s) by @fliker09
 - Sony: no more 4 seconds delay before shooting if no lens is detected by @fliker09
-- Sony: many small vendor specific fixes and additions (Issues #147, #150 and #151) by @fliker09
+- Sony: many small vendor specific fixes and additions - #147, #150 and #151 by @fliker09
 - Live View: it can now be properly disabled by @fliker09
 - Improved log messaging (more to come) by @fliker09
 - Rewrote the Sony section in the README by @fliker09
 - Sony: banner with warning(s) is now more informative (updated the text) by @fliker09
-- Simulation mode now shows the correct countdown.  Apply the simulation offset to countdowns and live-view pause #162 by @mrosseel by @fliker09
-- Reclaim the USB device from macOS' PTP daemon (and fix the -53 advice)- #164 by @mrosseel
+- Simulation mode now shows the correct countdown. Apply the simulation offset to countdowns and live-view pause #162 by @mrosseel and @fliker09
+- Reclaim the USB device from macOS' PTP daemon (and fix the -53 advice) - #164 by @mrosseel
   - This means that on macOS, Solar Eclipse Workbench should not be started with *sudo* anymore.
-- Stop the previous scheduler when a new script is loaded- #163 by @mrosseel
+- Stop the previous scheduler when a new script is loaded - #163 by @mrosseel
   - Loading a second script left two schedulers running and every command fired twice.
-- Close every camera on exit, not just up to the first failure- #165 by @mrosseel
+- Close every camera on exit, not just up to the first failure - #165 by @mrosseel
+- Canon: if a camera doesn't support 5 frame bracketing sequence, it will stop after the 3rd shot by fliker09
+- HDR sequences are now using 1EV steps for the ramping - #159 by @fliker09
+- Nikon: shutter speeds are now properly read from the camera by fliker09
+- Testing suite have been updated to support the update Sony code by @mrosseel
 
 ## [1.10.7] - 2026-07-23
 
 ### Fixed
-
 - Fixed 'Skipping line in script (not enough fields)' messages for empty lines in CSV file: #141
 - 'Reference moments' button freezes the app when pressing first time.  Now showing a progress indicator: #136
 - 'command' command in csv script does not longer block the scheduler.  The command is now started and the scheduler continues to the next command.  

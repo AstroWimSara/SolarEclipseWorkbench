@@ -334,9 +334,9 @@ To enable `PC Remote` mode on your Sony camera, please go to `MENU`, then go to 
 
 On the same screen, also search for `PC Remote Settings`. If you can't find it, it means your camera does not support saving photos to your SD card when it's being controlled from PC through USB connection. If you do find it, then you have the ability to choose between saving to `PC` or `PC+Camera` (post-2020 cameras also support `Camera` option).
 
-For cameras which lack `PC Remote Settings`, using USB connection will come with the penalty of slow transfer of the photos, as these cameras usually have only micro USB port, which supports only USB2.0 speeds. For a 12MP camera, this might be acceptable (a 5 frame bracketing takes between 8 to 12 seconds to complete, depending on the camera's initial configuration), but for 24MP and moreso for 42MP cameras, this might be unacceptable. We would suggest you try using Wi-Fi connection through scripts and `command` commands, as it should be much faster (but requires you are tech savvy enough to write such scripts; if you want a reference, you can take a look [here](https://github.com/fliker09/sec2025-scripts) - search for scripts which contain `http` keyword in their name). Another option would be to install an app right on your camera, which will work in a similar way to SEW - you can find it [here](https://github.com/pyzahl/SoFiMagic) (this also requires you are a bit tech savvy, but at least no scripting is involved).
+For cameras which lack `PC Remote Settings`, using USB connection will come with the penalty of slow transfer of the photos, as these cameras usually have only micro USB port, which supports only USB2.0 speeds. For a 12MP camera, this might be acceptable (a 5 frame 3EV bracketing sequence centered around 1/20 takes between 8 to 12 seconds to complete, depending on the initial state of camera), but for 24MP and moreso for 42MP cameras, this might be unacceptable. We would suggest you try using Wi-Fi connection through scripts and `command` commands, as it should be much faster (but requires you are tech savvy enough to write such scripts; if you want a reference, you can take a look [here](https://github.com/fliker09/sec2025-scripts) - search for scripts which contain `http` keyword in their name). Another option would be to install an app right on your camera, which will work in a similar way to SEW - you can find it [here](https://github.com/pyzahl/SoFiMagic) (this also requires you are a bit tech savvy, but at least no scripting is involved).
 
-For cameras which do have `PC Remote Settings` available, the situation is much better. These cameras usually have an USB-C port, which provides USB3.0 speeds (they are much higher than USB2.0 ones!). There is also an option of saving RAW files to SD card (`PC+Camera` option), but this option should be compared against the `PC` one, as your card's write speed might be, in fact, slower than the USB3.0 transfer speed. Test both options and see which one is faster for you! On a Sony A7R IIIA, both `PC` and `PC+Camera` options take around 8 to 12 seconds for a 5 frame bracketing sequence to complete.
+For cameras which do have `PC Remote Settings` available, the situation is much better. These cameras usually have an USB-C port, which provides USB3.0 speeds (they are much higher than USB2.0 ones!). There is also an option of saving RAW files to SD card (`PC+Camera` option), but this option should be compared against the `PC` one, as your card's write speed might be, in fact, slower than the USB3.0 transfer speed. Test both options and see which one is faster for you! On a Sony A7R IIIA, both `PC` and `PC+Camera` options take around 8 to 12 seconds for a 5 frame 3EV bracketing sequence centered around 1/20 takes between 8 to 12 seconds to complete, depending on the initial state of camera.
 
 A note on multiple Sony cameras connected - if they all fire in parallel or at least close enough in timing to clash in their data transfers periods, it's preferable that no more than one of the cameras save to PC, with the other(s) having `PC+Camera` option chosen instead.
 
@@ -363,9 +363,9 @@ pip show solareclipseworkbench
 
 ## Running Solar Eclipse Workbench
 
-- Please ensure that none of the connected cameras use 0.5EV step, as `gphoto2` supports only 0.3EV exposure step.
+- Please ensure that all of the connected cameras use 0.3EV exposure step (proper support for 0.5EV will arrive in a future version, for Canon and Nikon). Also, check that the camera's `Auto Power Off` setting isn't too short, as once it's asleep, camera can't be awakened by the app.
 
-- Ensure that you are connected to the Internet the first time you run and use Solar Eclipse Workbench, as it will require to download several files required for calculations.
+- Ensure that you are connected to the Internet the first time you run and use Solar Eclipse Workbench, as it will require to download several files required for calculations. Make sure to do this before eclipse day!
 
 - Start Solar Eclipse Workbench by executing the following commands:
 
@@ -383,8 +383,6 @@ source bin/activate
 sew -d 2024-04-08 -lon -104.63525 -lat 24.01491 -alt 1877.3
 sew
 ```
-
-- The first time you run Solar Eclipse Workbench, some files are downloaded from the internet.  Make sure to do this before eclipse day!
 
 ### Command line parameters
 
@@ -671,15 +669,17 @@ Test your script before using it during a total solar eclipse!  Some cameras can
 The following cameras are tested:
 
 - Canon EOS 1000D
+- Canon EOS 650D
 - Canon EOS 80D
 - Canon EOS R
 - Nikon DSC D3400
+- Nikon DSC D610
 - Nikon Z8
 - Nikon Z6iii
 - Sony ILCE-7S (α7S)
 - Sony ILCE-7M3 (α7 III)
 - Sony ILCE-7RM3A (α7R IIIA)
-- Sony ILCE-7R II (α7R II): Very slow, because it does not support the `PC+Camera` Save Destination mode, so every picture is downloaded over USB before the next one can be taken.  Expect a practical capture rate of no more than one picture every 10 seconds with this camera.
+- Sony ILCE-7R II (α7R II): Very slow, because it does not support the `PC+Camera` Save Destination mode, so every picture is downloaded over USB before the next one can be taken. Expect a practical capture rate of no more than one picture every 10 seconds with this camera.
 
 It is possible to take pictures in burst mode.  The speed is limited by the speed of the camera (and card).
 
@@ -705,15 +705,15 @@ Solar Eclipse Workbench can use the following commands:
 
 This command will take a picture 1 minutes and 2 seconds before first contact (C1) with the Canon EOS 80D.  The ISO will be set to 200, aperture to 8.0 and shutter speed to 1/1250s.
 
-- **take_burst**  - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Canon and Sony; Nikon will take 3 pictures in burst mode instead). Note - for Sony cameras the automatically chosen Continuous mode might be either High Speed or Low Speed (completely depends on the cameras's model). If you want to be define a specific mode - check out the `--sony-cont-mode` command line option.
+- **take_burst** - Set the aperture, shutter speed and ISO of the camera and take a burst of pictures during 3 seconds (for Sony and modern Canon cameras; Nikon and older Canon cameras will take 3 pictures in burst mode instead). Note - for Sony cameras the automatically chosen Continuous mode might be either High Speed or Low Speed (completely depends on the cameras's model). If you want to define a specific mode - check out the `--sony-cont-mode` command line option.
 
 ```take_burst, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, 3, "Burst test"```
 
-- **take_bracket**   -  Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps. Make sure to have 5 steps enabled for bracketing. Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3. This method only works in Canon. It kind of works with Nikon as well, but not in a true burst mode, it just tries to replicate it (there is a rewrite in progress for a proper burst support). Sony doesn't support this syntax, so instead you have to provide the desired mode name (e.g. `"Bracketing C 3.0 Steps 5 Pictures"`). You can check for available modes using this command: `gphoto2  --get-config=/main/capturesettings/capturemode`.
+- **take_bracket** - Set the aperture, shutter speed and ISO of the camera and take a bracket of 5 pictures with the given steps. Make sure to have 5 steps enabled for bracketing. Options for the steps are: +/- 1/3, +/- 2/3, +/- 1, +/- 1 1/3, +/- 1 2/3, +/- 2, +/- 2 1/3, +/- 2 2/3, +/- 3. This method only works in Canon. It kind of works with Nikon as well, but not in a true burst mode, it just tries to replicate it (there is a rewrite in progress for a proper burst support). Sony doesn't support this syntax, so instead you have to provide the desired mode name in this field instead (e.g. `"Bracketing C 3.0 Steps 5 Pictures"`). You can look up for the available modes using this command: `gphoto2  --get-config=/main/capturesettings/capturemode`.
 
 ```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "+/- 1 2/3", "Bracket test"```
 
-- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card.  The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports.  Works on Canon and Nikon cameras (Sony support is in development).  Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint).
+- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card. The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports. Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint).
 
   The sequence for `stops=4` starting at `1/2000` would be: `1/2000 → 1/1000 → 1/500 → 1/250 → 1/125 → 1/250 → 1/500 → 1/1000 → 1/2000` (9 shots).
 
@@ -783,6 +783,7 @@ endfor
 - In normal mode, only one picture per two seconds can be made.
 - The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS and Linux using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/).
 - Sony cameras after cold boot might return wrong configuration values. Please press `Camera(s)` button to retrieve them one more time.
+- Nikon cameras after fresh connection might take a long time to finish their first shot. A potential mitigation is ensuring that the SD card has no other shots on it already.
 
 ## Converting scripts from Solar Eclipse Maestro
 
