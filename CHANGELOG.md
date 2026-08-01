@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Scheduler has been replaced, it now supports precision down to microseconds - #137 by @fliker09
 - Sony: banner with warning(s) can now be closed by @fliker09
 - Canon: DIGIC III cameras are now properly supported (tested with a 1000D body) by @fliker09
-- HDR sequences are now supported by Nikon and Sony cameras as well - #159 by fliker09
+- HDR sequences are now supported by Nikon and Sony cameras as well - #159 by @fliker09
 
 ### Fixed
 - Sony: `take_burst` is now properly supported, please consult README - #145 by @fliker09
@@ -33,9 +33,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Stop the previous scheduler when a new script is loaded - #163 by @mrosseel
   - Loading a second script left two schedulers running and every command fired twice.
 - Close every camera on exit, not just up to the first failure - #165 by @mrosseel
-- Canon: if a camera doesn't support 5 frame bracketing sequence, it will stop after the 3rd shot by fliker09
+- Canon: if a camera doesn't support 5 frame bracketing sequence, it will stop after the 3rd shot by @fliker09
 - HDR sequences are now using 1EV steps for the ramping - #159 by @fliker09
-- Nikon: shutter speeds are now properly read from the camera by fliker09
+- Nikon: shutter speeds are now properly read from the camera by @fliker09
 - Testing suite have been updated to support the update Sony code by @mrosseel
 
 ## [1.10.7] - 2026-07-23
