@@ -166,6 +166,12 @@ cython_debug/
 # They will be auto-donwloaded
 de421.bsp
 de440s.bsp
+moon_080317.tf
+moon_pa_de421_1900-2050.bpc
+
+# The lunar limb band blob: 72 MB, built by tools/build_limb_blob.py or fetched
+# from a release, never checked in.
+lunar_limb_band_v1.bin
 
 # uv lock file should be excluded, it's tied to a specific installation
 uv.lock
