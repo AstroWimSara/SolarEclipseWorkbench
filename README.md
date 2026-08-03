@@ -954,3 +954,5 @@ See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes and updates to t
 - <a href="https://www.flaticon.com/free-icons/simulation" title="simulation icons">Simulation icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/save" title="save icons">Save icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/refresh" title="refresh icons">Refresh icons created by Magnific - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/live-video" title="live video icons">Live video icons created by bearicons - Flaticon</a>
+
