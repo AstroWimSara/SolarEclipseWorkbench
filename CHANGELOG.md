@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Wizard: `Bracket each corona exposure` on the phenomena page writes the corona series as `take_bracket` commands with the chosen EV step and number of frames, spaced by the time a bracket takes.  `Test Camera...` reads the brackets the camera takes itself (Canon AEB steps, Nikon steps and patterns, Sony continuous bracketing modes) and only those are offered; an untested camera gets standard values.  `Verify with Camera...` warns when a bracket will be taken in software, and reminds Canon users to set the number of bracketed shots in the camera menu (Issue #171)
 
 - `Save` now reports its outcome in a new status bar at the bottom of the main window and in the log: where the settings were saved, a warning when the location was left out because longitude, latitude or altitude is not set, and an error when the settings file cannot be written.  The status bar also shows the toolbar button descriptions on hover (Issue #181)
+- Lunar limb correction: C2 and C3 are computed against the Moon's true, mountainous limb instead of a mean disc, and the Baily's beads window around each internal contact is shown and can be scheduled against (`BEADS_C2`, `BEADS_C3`, `_START`, `_END`).  The mean-limb times remain available as `C2_MEAN` and `C3_MEAN`, and a checkbox under the reference moments switches the correction off.  Needs the 72 MB `lunar_limb_band_v1.bin` limb profile; without it the mean-limb contacts are used as before.  Please consult README - by @mrosseel
 
 ### Changed
 
