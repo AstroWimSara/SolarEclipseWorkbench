@@ -722,7 +722,7 @@ class SolarEclipseView(QMainWindow, Observable):
         # Live View
 
         self.live_view_action.setStatusTip("Open live view window (1 fps preview from camera)")
-        self.live_view_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
+        self.live_view_action.setIcon(QIcon(str(ICON_PATH / "live.png")))
         self.live_view_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.live_view_action)
 
