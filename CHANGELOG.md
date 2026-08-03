@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Sony: banner with warning(s) can now be closed by @fliker09
 - Canon: DIGIC III cameras are now properly supported (tested with a 1000D body) by @fliker09
 - HDR sequences are now supported by Nikon and Sony cameras as well - #159 by @fliker09
+- Nikon: in-camera bracketing is now supported - #158 by @fliker09
 
 ### Fixed
 - Sony: `take_burst` is now properly supported, please consult README - #145 by @fliker09
