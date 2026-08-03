@@ -26,7 +26,7 @@ from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QS
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QCheckBox
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -44,6 +44,8 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
     get_sony_save_destination, get_sony_image_quality
 from solareclipseworkbench import hardware_problems
+from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
+                                                   set_enabled as set_limb_correction_enabled)
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -387,6 +389,23 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.reference_moments_widget = QWidget()
 
+        # A contact burst is aimed at the bead window rather than at the contact,
+        # so the window is worth reading directly.
+        self.beads_c2_label = QLabel()
+        self.beads_c2_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.beads_c3_label = QLabel()
+        self.beads_c3_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.limb_correction_checkbox = QCheckBox(
+            "Apply the lunar limb correction to the contact times")
+        # The controller replaces this with whatever was remembered.
+        self.limb_correction_checkbox.setChecked(True)
+        self.limb_correction_checkbox.setToolTip(
+            "The Moon's limb is mountainous, so second and third contact do not "
+            "happen when a smooth disc says they do. With the lunar limb profile "
+            "installed, this shifts C2 and C3 to the moment the last or first bead "
+            "goes, and makes the bead windows available to a script.")
+
         self.c1_time_local_label = QLabel()
         self.c1_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.c2_time_local_label = QLabel()
@@ -611,6 +630,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(QLabel("Fourth contact (C4)"), 5, 0)
         reference_moments_grid_layout.addWidget(QLabel("Sunrise"), 6, 0)
         reference_moments_grid_layout.addWidget(QLabel("Sunset"), 7, 0)
+        reference_moments_grid_layout.addWidget(QLabel("Baily's beads (C2)"), 8, 0)
+        reference_moments_grid_layout.addWidget(self.beads_c2_label, 8, 1, 1, 2)
+        reference_moments_grid_layout.addWidget(QLabel("Baily's beads (C3)"), 9, 0)
+        reference_moments_grid_layout.addWidget(self.beads_c3_label, 9, 1, 1, 2)
+        # The switch sits with the times it changes: turning it off moves C2 and
+        # C3 by seconds, which is more than a bead burst is long.
+        reference_moments_grid_layout.addWidget(self.limb_correction_checkbox, 10, 0, 1, 6)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
         reference_moments_group_box.setFixedWidth(600)
 
@@ -899,6 +925,21 @@ class SolarEclipseView(QMainWindow, Observable):
             self.c4_azimuth_label.setText("")
             self.c4_altitude_label.setText("")
 
+        # Bead windows
+
+        for contact, label in (("C2", self.beads_c2_label), ("C3", self.beads_c3_label)):
+            start = reference_moments.get(f"BEADS_{contact}_START")
+            end = reference_moments.get(f"BEADS_{contact}_END")
+            if start is None or end is None:
+                # Name the reason: a blank cell reads like a solve that failed.
+                label.setText("correction off" if not limb_correction_is_enabled()
+                              else "no limb profile")
+                continue
+            seconds = (end.time_utc - start.time_utc).total_seconds()
+            label.setText("%s - %s  (%.2f s)" % (format_time(start.time_utc, self.time_format),
+                                                 format_time(end.time_utc, self.time_format),
+                                                 seconds))
+
         # Sunrise
 
         sunrise_info: ReferenceMomentInfo = reference_moments["sunrise"]
@@ -990,6 +1031,28 @@ class SolarEclipseController(Observer):
         self._live_view_window: Union[LiveViewWindow, None] = None
 
         self.load_settings()
+
+        # After load_settings: it creates view.settings, and it schedules the
+        # reference moments onto the event loop, which has not run yet — so the
+        # correction is in place before they are first computed.  Restored before
+        # the signal is connected, so start-up triggers no recalculation.
+        remembered = self.view.settings.value("limb_correction", True, type=bool)
+        self.view.limb_correction_checkbox.setChecked(remembered)
+        set_limb_correction_enabled(remembered)
+        self.view.limb_correction_checkbox.toggled.connect(self.on_limb_correction_toggled)
+
+    def on_limb_correction_toggled(self, enabled: bool):
+        """Apply or drop the lunar limb correction and redo the contact times.
+
+        The times on screen answer the question this checkbox asks, so they are
+        recomputed rather than left stale.
+        """
+        set_limb_correction_enabled(enabled)
+        self.view.settings.setValue("limb_correction", enabled)
+        logging.info('Lunar limb correction %s', 'on' if enabled else 'off')
+
+        if self.model.is_location_set and self.model.is_eclipse_date_set:
+            self.set_reference_moments()
 
     def _run_in_progress(self) -> bool:
         """True while a schedule is loaded and running."""
