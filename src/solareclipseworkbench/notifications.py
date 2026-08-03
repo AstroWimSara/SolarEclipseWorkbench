@@ -1,7 +1,9 @@
 import subprocess
 import sys
+from difflib import get_close_matches
 from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 if sys.platform != "darwin":
     from playsound3 import playsound
@@ -87,10 +89,41 @@ class Notifications(str, Enum):
     C4 = "c4.wav"
 
 
+def check_notification(notification: str) -> Optional[str]:
+    """ Check that the given notification can actually be played.
+
+    Voice prompts are only resolved when the job fires, so a typo in a script
+    would otherwise surface as a KeyError in the middle of the eclipse, with the
+    prompt silently missing.  Call this while the script is being loaded so the
+    problem is visible while there is still time to fix it.
+
+    Args:
+        - notification: Notification name, as written in the script
+
+    Returns: None if the notification resolves to an existing sound file,
+             otherwise a message explaining what is wrong.
+    """
+    name = notification.strip()
+    if not name:
+        return "voice prompt has no notification name"
+
+    try:
+        sound_file = SOUND_PATH / Notifications[name].value
+    except KeyError:
+        message = f'unknown voice prompt "{name}"'
+        close = get_close_matches(name, [item.name for item in Notifications], n=3)
+        if close:
+            message += " — did you mean " + ", ".join(close) + "?"
+        return message
+
+    if not sound_file.is_file():
+        return f'voice prompt "{name}" maps to {sound_file.name}, which is missing from {SOUND_PATH}'
+
+    return None
+
+
 def voice_prompt(notification: str) -> None:
     """ Voice prompt of the given notification.
-
-    In the current implementation, the default voice from your system settings will be used.
 
     Args:
         - notification: Notification

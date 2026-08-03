@@ -340,7 +340,8 @@ For cameras which do have `PC Remote Settings` available, the situation is much 
 
 A note on multiple Sony cameras connected - if they all fire in parallel or at least close enough in timing to clash in their data transfers periods, it's preferable that no more than one of the cameras save to PC, with the other(s) having `PC+Camera` option chosen instead.
 
-Warning: if you intend to use `PC` option with a camera which has an USB-C port, please ensure that the cable is USB3.0 rated and that the port on the PC to which this cable connects is, in fact, a proper USB3.0 one.
+Warnings: if you intend to use `PC` option with a camera which has an USB-C port, please ensure that the cable is USB3.0 rated and that the port on the PC to which this cable connects is, in fact, a proper USB3.0 one.
+Another thing to keep in mind - filename prefix. If you have multiple Sony cameras connected and more than one is in `PC` mode for some reason, you must ensure that each of them are using unique prefix! Please check out `Set File Name` setting in the `Tools` section (most probably on the 5th screen).
 
 Final note on the `PC+Camera` option - SEW will not actually save JPEG files to PC, they will be ignored and the PTP events on camera flushed, with RAW files being consistently written to SD card (please don't forget to set `RAW+J PC Save Img` setting with `JPEG only` option!).
 
@@ -953,3 +954,5 @@ See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes and updates to t
 - <a href="https://www.flaticon.com/free-icons/simulation" title="simulation icons">Simulation icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/save" title="save icons">Save icons created by Freepik - Flaticon</a>
 - <a href="https://www.flaticon.com/free-icons/refresh" title="refresh icons">Refresh icons created by Magnific - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/live-video" title="live video icons">Live video icons created by bearicons - Flaticon</a>
+
