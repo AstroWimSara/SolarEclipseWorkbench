@@ -5,9 +5,10 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
-from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, \
-    sync_cameras, scripts, execute_command
+from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, sync_cameras, scripts, execute_command
+from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import CameraSettings
+from solareclipseworkbench.notifications import check_notification
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
@@ -178,7 +179,17 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
     args = cmd_str_split[4:-1]
 
-    if func_name != "voice_prompt" and func_name != "command":
+    if func_name == "voice_prompt":
+        # Resolve the prompt now rather than when the job fires: a typo would
+        # otherwise raise mid-eclipse and the prompt would simply not be heard.
+        problem = check_notification(args[0] if args else "")
+        if problem is not None:
+            hardware_problems.report(
+                "Script", f"{problem}.  This prompt will not be played.",
+                detail=cmd_str.strip(),
+            )
+            return
+    elif func_name != "command":
         if cameras is not None:
             try:
                 if func_name == "take_picture":
@@ -212,6 +223,17 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                 )
                 return
         else:
+            # No camera dict at all: the script was loaded before any camera was
+            # detected.  Every camera command in the file is dropped here, so say
+            # so per command rather than leaving a script that looks loaded but
+            # only ever plays its voice prompts.
+            logging.warning(
+                'schedule_command: no cameras have been detected, so "%s" will be '
+                'skipped.  Detect the camera(s) first, then load the script: the '
+                'commands are bound to a camera when they are scheduled, not when '
+                'they run.',
+                func_name,
+            )
             return
 
     func = COMMANDS[func_name]
