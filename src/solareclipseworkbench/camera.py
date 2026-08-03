@@ -1762,10 +1762,11 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                     break
             if final_aeb_bp_choice is None:
                 final_aeb_bp_choice = aeb_bp_choices[-1]
-                logging.warning("%s: failed to set 'aebracketingpattern' at %s, chose %s instead",
+                logging.warning("%s: failed to set 'aebracketingpattern' at '%s' images, chose '%s' instead",
                                 camera_name,
+                                num_pictures,
                                 final_aeb_bp_choice)
-                num_pictures = final_aeb_bp_choice[0]
+                num_pictures = int(final_aeb_bp_choice[0])
             gp.gp_widget_set_value(aeb_bp_widget, final_aeb_bp_choice)
             _set_gp_config(camera, config, context)
         except gphoto2.GPhoto2Error as e:
