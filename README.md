@@ -452,6 +452,14 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - This information can only be populated when the location and the eclipse date have been indicated.  Note that the reference moments are not automatically updated in case either of them would be modified.
 - Together with the information about the reference moments, the eclipse type (partial / total / annular) will be displayed.  For total and annular eclipses, also the time between C2 and C3 will be shown (next to the eclipse type).
 
+##### Lunar limb correction and Baily's beads
+
+- The Moon's limb is mountainous, so second and third contact do not happen when a smooth disc says they do: a valley lets sunlight through for another second or two, a mountain cuts totality short.  Corrections of a few seconds are normal, and 30 s is possible near the edge of the path.
+- With the lunar limb profile installed, the C2 and C3 rows show the limb-corrected times, two extra rows show the Baily's beads window around each internal contact, and the checkbox below the table switches the correction off if you would rather see the mean-limb times.  The choice is remembered between sessions.
+- The corrected contacts are what a script schedules against: `C2` and `C3` are the corrected times, `C2_MEAN` and `C3_MEAN` the uncorrected ones, and `BEADS_C2` / `BEADS_C3` (with `_START` and `_END`) the bead windows — so a burst can be aimed at the diamond ring rather than at a nominal contact.
+- The limb profile itself is a 72 MB file, `lunar_limb_band_v1.bin`, which is not part of the checkout.  Put it next to the ephemeris (the directory Solar Eclipse Workbench is started from) to enable the correction; it is built by `tools/build_limb_blob.py` from the Kaguya marginal-zone data.  Without it everything still works, with the mean-limb contacts, and the bead rows say "no limb profile".
+- The two small lunar orientation kernels it needs (`moon_080317.tf` and `moon_pa_de421_1900-2050.bpc`) are downloaded from NAIF automatically, the same way the ephemeris is.
+
 #### Camera overview
 
 - When pressing the "Camera" icon, the camera overview in the top section of the UI will be updated.  This shows for each camera the following information:
