@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from solareclipseworkbench import besselian_element_generator  # noqa: E402
 from solareclipseworkbench.limb_correction import (  # noqa: E402
     K2, EARTH_RADIUS_KM, LunarLimb, bead_window, beads, contact_position_angle,
-    solve_limb_contact)
+    solve_limb_contact, solve_point_contact)
 from solareclipseworkbench.solar_eclipse import get_element_coeffs, get_elements  # noqa: E402
 
 
@@ -41,6 +41,10 @@ CASES = {
         "c3": 10 + 13 / 60 + 11.5 / 3600,
         "c2_correction": +0.4,
         "c3_correction": -2.8,
+        # Maestro prints the corrected contacts and the bead spread separately
+        # ("Baily's Beads: +/-3.0s"), so its correction is the contact-point one.
+        "convention": "point",
+        "tolerance": 0.5,
         "source": "Jubier, Solar Eclipse Maestro (LRO/Kaguya)",
     },
     # NASA/TP-1999-209484, worked example for Lusaka.  Watts-based, but the
@@ -56,6 +60,13 @@ CASES = {
         "c2_correction": +4.0,
         "c3_correction": -1.2,
         "position_angles": (118.0, 247.0),
+        # RP-1301: the contact is set by "a high mountain (annular) or a low
+        # valley (total) in the vicinity", which is the whole-arc convention.
+        "convention": "arc",
+        # Looser, because this is Watts data rather than LRO/Kaguya: a different
+        # profile with its own half-kilometre errors, and half a kilometre is
+        # half a second here.
+        "tolerance": 2.0,
         "source": "NASA/TP-1999-209484 table 15 and figure 8 (Watts)",
     },
 }
@@ -158,22 +169,15 @@ def main():
     print(f"contact position angles: C2 {contact_position_angle(o2):.2f} deg, "
           f"C3 {contact_position_angle(o3):.2f} deg")
 
-    # Single position angle, the way the first cut did it, for comparison.
-    def corrected_umbral_radius(o, _when):
-        angle = contact_position_angle(o)
-        height_km = float(np.interp(angle, angles, heights_km, period=360.0))
-        return o["L2p"] - height_km / EARTH_RADIUS_KM
-
-    point_c2 = solve_internal_contact(elements, c2, latitude, longitude, height,
-                                      +1, corrected_umbral_radius)
-    point_c3 = solve_internal_contact(elements, c3, latitude, longitude, height,
-                                      -1, corrected_umbral_radius)
-    print(f"\nsingle position angle: C2 {(point_c2 - c2) * 3600:+.2f}s  "
-          f"C3 {(point_c3 - c3) * 3600:+.2f}s")
-
-    # The whole arc: the contact is set by the lowest limb point anywhere.
     def evaluate(when):
         return get_elements(elements, when, latitude, longitude, height)
+
+    # At the contact point, as the shipped code does it.
+    def limb_height_at(angle):
+        return float(np.interp(angle % 360.0, angles, heights_km))
+
+    point_c2 = solve_point_contact(elements, evaluate, c2, True, limb_height_at)
+    point_c3 = solve_point_contact(elements, evaluate, c3, False, limb_height_at)
 
     c2_corrected = solve_limb_contact(elements, evaluate, c2, True, angles, heights_km)
     c3_corrected = solve_limb_contact(elements, evaluate, c3, False, angles, heights_km)
@@ -193,16 +197,33 @@ def main():
         print(f"bead window {label}: {(end - start) * 3600:5.1f}s long, "
               f"centre {(centre - when) * 3600:+.1f}s from the contact")
 
-    print(f"\ncorrection   C2 {c2_shift:+.2f}s  C3 {c3_shift:+.2f}s  "
+    # The reference sheets correct at the contact point and quote the bead
+    # spread separately, so that is the number to compare.  The whole-arc shift
+    # is the far edge of that spread and is expected to differ.
+    point_c2_shift = (point_c2 - c2) * 3600.0
+    point_c3_shift = (point_c3 - c3) * 3600.0
+
+    print(f"\nat the contact point  C2 {point_c2_shift:+.2f}s  C3 {point_c3_shift:+.2f}s  "
+          f"duration {(point_c3_shift - point_c2_shift):+.2f}s")
+    print(f"    last bead anywhere  C2 {c2_shift:+.2f}s  C3 {c3_shift:+.2f}s  "
           f"duration {(c3_shift - c2_shift):+.2f}s")
-    print(f"  reference C2 {reference['c2_correction']:+.2f}s  "
+    print(f"             reference  C2 {reference['c2_correction']:+.2f}s  "
           f"C3 {reference['c3_correction']:+.2f}s  duration "
           f"{reference['c3_correction'] - reference['c2_correction']:+.2f}s")
 
-    errors = (abs(c2_shift - reference["c2_correction"]), abs(c3_shift - reference["c3_correction"]))
+    # Compare against whichever convention this source uses.  They are not the
+    # same quantity: the contact-point correction sits inside the bead window,
+    # the whole-arc one is its far edge.
+    convention = case.get("convention", "point")
+    ours = ((point_c2_shift, point_c3_shift) if convention == "point"
+            else (c2_shift, c3_shift))
+    tolerance = case.get("tolerance", 0.5)
+    errors = (abs(ours[0] - reference["c2_correction"]),
+              abs(ours[1] - reference["c3_correction"]))
+    print(f"\ncompared on the {convention} convention, tolerance {tolerance:.1f}s")
     print(f"     residual C2 {errors[0]:.2f}s  C3 {errors[1]:.2f}s")
-    ok = max(errors) < 0.5
-    print("PASS" if ok else "FAIL: correction differs from the reference by more than 0.5 s")
+    ok = max(errors) < tolerance
+    print("PASS" if ok else f"FAIL: differs from the reference by more than {tolerance:.1f} s")
     return 0 if ok else 1
 
 
