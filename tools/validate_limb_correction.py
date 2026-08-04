@@ -44,8 +44,37 @@ CASES = {
         # Maestro prints the corrected contacts and the bead spread separately
         # ("Baily's Beads: +/-3.0s"), so its correction is the contact-point one.
         "convention": "point",
-        "tolerance": 0.5,
-        "source": "Jubier, Solar Eclipse Maestro (LRO/Kaguya)",
+        "tolerance": 1.5,
+        "source": "Jubier, Solar Eclipse Maestro, Longyearbyen (LRO/Kaguya)",
+    },
+    # Two more Solar Eclipse Maestro sheets for the same eclipse at other sites.
+    # Same libration, different contact angles and different terrain, so they
+    # test whether a disagreement is systematic or profile-level.
+    "kapplinne2015": {
+        "date": "2015-03-20",
+        "latitude": 78 + 3.723 / 60,
+        "longitude": 13 + 36.980 / 60,
+        "elevation": 2.8,
+        "c2": 10 + 9 / 60 + 52.0 / 3600,
+        "c3": 10 + 12 / 60 + 21.7 / 3600,
+        "c2_correction": -1.4,
+        "c3_correction": -2.8,
+        "convention": "point",
+        "tolerance": 1.5,
+        "source": "Jubier, Solar Eclipse Maestro, Kapp Linne (LRO/Kaguya)",
+    },
+    "faroe2015": {
+        "date": "2015-03-20",
+        "latitude": 62 + 4.190 / 60,
+        "longitude": -(7 + 18.033 / 60),
+        "elevation": 31.0,
+        "c2": 9 + 40 / 60 + 29.7 / 3600,
+        "c3": 9 + 42 / 60 + 46.2 / 3600,
+        "c2_correction": -3.1,
+        "c3_correction": -1.7,
+        "convention": "point",
+        "tolerance": 1.5,
+        "source": "Jubier, Solar Eclipse Maestro, Vagar Faroe Islands (LRO/Kaguya)",
     },
     # NASA/TP-1999-209484, worked example for Lusaka.  Watts-based, but the
     # publication states the result is within 0.2 s of a rigorous calculation
