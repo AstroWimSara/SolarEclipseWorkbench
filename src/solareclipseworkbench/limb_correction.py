@@ -17,6 +17,7 @@ the limb.
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -53,6 +54,29 @@ IAU_MEAN_RADIUS_KM = 1738.091
 # Radius used to place the tangent point.  An error of a few km here moves the
 # sampled point by under a metre, so the mean is plenty.
 NOMINAL_RADIUS_KM = 1737.4
+
+DEFAULT_BEAD_ARC_DEG = 20.0
+
+
+@dataclass(frozen=True)
+class BeadWindow:
+    """A photographic bead interval and whether both edges were solved.
+
+    ``max_arc_deg`` is an explicit capture criterion, not an astronomical
+    contact definition: outside this interval more than that total extent of
+    the lunar limb is still illuminated and the beads have merged into a
+    crescent for the purposes of this model.
+    """
+
+    start: float
+    end: float
+    solved: bool
+    max_arc_deg: float
+    search_limit_seconds: float
+
+    @property
+    def duration_seconds(self):
+        return (self.end - self.start) * 3600.0
 
 
 class LunarLimb:
@@ -122,16 +146,13 @@ class LunarLimb:
         return radius_km - K2 * EARTH_RADIUS_KM
 
 
-# Refraction is deliberately not applied to the contact geometry.  It maps
-# altitude h to h + R(h), which locally is an affine map -- a uniform vertical
-# scaling by 1 + dR/dh -- and affine maps preserve tangency.  Both discs and the
-# separation between their centres are squashed by the same factor, so the
-# instant at which the limbs touch is unchanged.  What survives is second order,
-# through the variation of dR/dh across the half-arcminute between the centres,
-# and is far below the accuracy of anything else here.
-#
-# Squashing the separation without also flattening the discs invents a shift of
-# a couple of tenths of a second that is not real; an earlier version did that.
+# Refraction is deliberately outside this timing contract: these are geometric,
+# top-of-atmosphere contacts.  A locally affine refraction map preserves
+# tangency, but a complete low-altitude treatment also has to model its
+# variation across both apparent discs.  At a roughly 7.5 degree solar altitude
+# the omitted correction has been estimated at about 0.30 s for C2 and 0.22 s
+# for C3, so callers needing that accuracy must apply a documented atmospheric
+# model rather than squashing only the centre separation.
 
 
 def contact_position_angle(elements):
@@ -240,10 +261,10 @@ def solve_limb_contact(elements, evaluate, start_hours, entering,
 def solve_point_contact(elements, evaluate, start_hours, entering, limb_height_at):
     """Find C2 or C3 corrected at the contact point alone.
 
-    This is the correction the published sheets print: the limb is read only
-    where the two discs touch, so the answer says when the Sun goes behind that
-    one mountain or valley.  It is not when the last bead goes -- that is
-    solve_limb_contact, and the two differ by up to the width of the bead
+    This is the correction the published Maestro sheets print: the limb is read
+    only where the two discs touch, so the answer says when the Sun goes behind
+    that one mountain or valley.  It is distinct from when the last bead goes --
+    that is solve_limb_contact, and the two differ by up to the width of the bead
     window.
 
     `limb_height_at` returns the limb height in km at a position angle.  The
@@ -266,8 +287,9 @@ def lit_arc_degrees(elements, position_angles, heights_km):
 
 
 def bead_window(evaluate, contact_hours, entering, position_angles, heights_km,
-                max_arc_deg=20.0, step_hours=0.05 / 3600.0, limit_hours=60.0 / 3600.0):
-    """When the Sun is reduced to beads around a contact, as (start, end) in hours.
+                max_arc_deg=DEFAULT_BEAD_ARC_DEG, step_hours=0.05 / 3600.0,
+                limit_hours=60.0 / 3600.0):
+    """Return the photographic bead interval around an internal contact.
 
     This is what a burst wants to be centred on.  Rather than guessing a fixed
     number of seconds either side of C2, walk out from the contact until the
@@ -277,22 +299,30 @@ def bead_window(evaluate, contact_hours, entering, position_angles, heights_km,
     `entering` selects C2, where the window ends at the contact, from C3, where
     it starts there.
     """
+    if not 0.0 <= max_arc_deg < 360.0:
+        raise ValueError("max_arc_deg must be at least 0 and less than 360")
+    if step_hours <= 0.0 or limit_hours <= 0.0:
+        raise ValueError("step_hours and limit_hours must be positive")
+
     direction = -1.0 if entering else 1.0
 
     edge = contact_hours
+    solved = False
     for _ in range(int(limit_hours / step_hours)):
         stepped = edge + direction * step_hours
         if lit_arc_degrees(evaluate(stepped), position_angles, heights_km) > max_arc_deg:
+            solved = True
             break
         edge = stepped
     else:
         # The beads never merged back into a crescent inside the search window.
-        # Returning the window edge would look like a measured answer, so say so.
         logging.warning("Bead window did not close within %.0f s of the contact; "
-                        "the reported edge is the search limit, not a solved one.",
+                        "no schedulable bead-window edge will be published.",
                         limit_hours * 3600.0)
 
-    return (edge, contact_hours) if entering else (contact_hours, edge)
+    start, end = ((edge, contact_hours) if entering
+                  else (contact_hours, edge))
+    return BeadWindow(start, end, solved, max_arc_deg, limit_hours * 3600.0)
 
 
 def beads(elements, position_angles, heights_km):
@@ -387,14 +417,13 @@ class LimbSolution:
         self.c3_limb = c3_limb
         self.c2_point = c2_point        # corrected at the contact point alone
         self.c3_point = c3_point
-        self.windows = windows          # {"C2": (start, end), "C3": (start, end)}
+        self.windows = windows          # {"C2": BeadWindow, "C3": BeadWindow}
 
     def correction_seconds(self, name, at_point=False):
         """Seconds the limb moves this contact.
 
-        With at_point, the correction the published sheets give: read at the
-        contact point only.  Otherwise the last-bead moment, which is the edge
-        of the bead window rather than its middle.
+        With at_point, return the correction read at the contact point alone.
+        Otherwise return the last/first-bead envelope correction.
         """
         if at_point:
             contact, corrected = ((self.c2, self.c2_point) if name == "C2"
@@ -405,8 +434,8 @@ class LimbSolution:
         return (corrected - contact) * 3600.0
 
     def window_seconds(self, name):
-        start, end = self.windows[name]
-        return (end - start) * 3600.0
+        window = self.windows[name]
+        return window.duration_seconds if window.solved else None
 
     def margin_at(self, hours):
         """Sunlight margin per position angle at a moment, for drawing."""
@@ -414,7 +443,7 @@ class LimbSolution:
 
 
 def solve_limb(eclipse_date, latitude, longitude, elevation_m,
-               limb=None, arc_degrees=20.0, profile_step_deg=0.01):
+               limb=None, arc_degrees=DEFAULT_BEAD_ARC_DEG, profile_step_deg=0.01):
     """Solve the limb-corrected contacts and bead windows, or None.
 
     Returns None when there is no totality here or the limb data is not
@@ -459,6 +488,9 @@ def solve_limb(eclipse_date, latitude, longitude, elevation_m,
                 - elements["T0"] + delta_t_hours)
 
     # One profile for the whole of totality, evaluated at maximum eclipse.
+    # Comparing this with contact-epoch profiles on two eclipses/four contacts
+    # moved the solved contacts by at most 0.014 s, below the profile-source
+    # uncertainty, so the cheaper single-profile convention is retained.
     timescale = load.timescale()
     moment = timescale.ut1(day.year, day.month, day.day, 0, 0,
                            (maximum + elements["T0"] - delta_t_hours) * 3600.0)
@@ -485,28 +517,29 @@ def solve_limb(eclipse_date, latitude, longitude, elevation_m,
 
 
 def bead_reference_moments(eclipse_date, latitude, longitude, elevation_m,
-                           limb=None, arc_degrees=20.0, profile_step_deg=0.01):
+                           limb=None, arc_degrees=DEFAULT_BEAD_ARC_DEG,
+                           profile_step_deg=0.01):
     """Limb-corrected contacts and bead windows, as UTC datetimes.
 
     Returns a dict keyed by reference-moment name, empty if there is no totality
     at this place, the limb data is not installed, or the correction has been
     switched off.  The keys are the ones a script can schedule against:
 
-        C2, C3                        the limb-corrected internal contacts,
-                                      replacing the mean-limb ones
-        C2_MEAN, C3_MEAN              the uncorrected times they replaced
+        C2, C3                        contact-point corrected internal contacts
         BEADS_C2, BEADS_C3            the middle of each bead window
         BEADS_C2_START / _END         its edges, and likewise for C3
 
-    C2 and C3 are corrected at the contact point, which is what the published
-    sheets give, so a time here can be checked against one of those.  The
-    moment the last bead actually goes is the far edge of the bead window --
-    BEADS_C2_END and BEADS_C3_START -- and that is what totality means to an
-    observer.  Reporting the first as the second is what makes our C2 look
-    wrong against a printed table.
+    ``calculate_reference_moments()`` preserves the uncorrected contacts as
+    ``C2_MEAN`` and ``C3_MEAN`` when it installs this result.
 
-    A script written against C2 therefore gets the best time available, rather
-    than having to know to ask for a differently named one.
+    The observable last/first-bead envelope remains the inner edge of each
+    solved bead window: BEADS_C2_END and BEADS_C3_START.  C2/C3 retain the
+    published-sheet contact-point convention expected by existing scripts.
+
+    A bead window is published only when its photographic arc criterion closes
+    inside the search interval.  ``BEADS_C2_STATUS`` and ``BEADS_C3_STATUS``
+    say ``solved`` or ``unresolved``; an unresolved window has no schedulable
+    start, end, or midpoint keys.
     """
     if not _enabled:
         return {}
@@ -519,8 +552,10 @@ def bead_reference_moments(eclipse_date, latitude, longitude, elevation_m,
     moments = {"C2": solution.to_utc(solution.c2_point),
                "C3": solution.to_utc(solution.c3_point)}
     for name in ("C2", "C3"):
-        start, end = solution.windows[name]
-        moments[f"BEADS_{name}_START"] = solution.to_utc(start)
-        moments[f"BEADS_{name}_END"] = solution.to_utc(end)
-        moments[f"BEADS_{name}"] = solution.to_utc(0.5 * (start + end))
+        window = solution.windows[name]
+        moments[f"BEADS_{name}_STATUS"] = "solved" if window.solved else "unresolved"
+        if window.solved:
+            moments[f"BEADS_{name}_START"] = solution.to_utc(window.start)
+            moments[f"BEADS_{name}_END"] = solution.to_utc(window.end)
+            moments[f"BEADS_{name}"] = solution.to_utc(0.5 * (window.start + window.end))
     return moments

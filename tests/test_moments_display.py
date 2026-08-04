@@ -10,6 +10,8 @@ bite on.
 """
 
 import os
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +21,9 @@ from astropy.time import Time
 from PyQt6.QtWidgets import QApplication
 
 from solareclipseworkbench import limb_correction
-from solareclipseworkbench.gui import SolarEclipseView
+from solareclipseworkbench.gui import (LIMB_CORRECTION_LOCKED_TOOLTIP,
+                                       LIMB_CORRECTION_TOOLTIP,
+                                       SolarEclipseController, SolarEclipseView)
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 
 # A site where the limb correction is known to be worth seconds.
@@ -80,3 +84,43 @@ def test_the_bead_rows_say_why_they_are_empty(view):
     # that is switched off.
     assert view.beads_c2_label.text() == "correction off"
     assert view.beads_c3_label.text() == "correction off"
+
+
+def test_an_unresolved_window_is_not_reported_as_a_missing_profile(view):
+    limb_correction.set_enabled(True)
+    now = datetime.now(timezone.utc)
+    horizon = SimpleNamespace(time_utc=now, time_local=now)
+    view.show_reference_moments(
+        {"duration": timedelta(), "sunrise": horizon, "sunset": horizon,
+         "BEADS_C2_STATUS": "unresolved",
+         "BEADS_C3_STATUS": "unresolved"},
+        1.0, "Total")
+
+    assert view.beads_c2_label.text() == "capture window unresolved"
+    assert view.beads_c3_label.text() == "capture window unresolved"
+
+
+def test_pending_jobs_lock_the_limb_correction_setting(view):
+    controller = object.__new__(SolarEclipseController)
+    controller.view = view
+
+    controller._set_limb_correction_locked(True)
+    assert not view.limb_correction_checkbox.isEnabled()
+    assert view.limb_correction_checkbox.toolTip() == LIMB_CORRECTION_LOCKED_TOOLTIP
+
+    controller._set_limb_correction_locked(False)
+    assert view.limb_correction_checkbox.isEnabled()
+    assert view.limb_correction_checkbox.toolTip() == LIMB_CORRECTION_TOOLTIP
+
+
+def test_pending_jobs_reject_a_programmatic_correction_change(view):
+    controller = object.__new__(SolarEclipseController)
+    controller.view = view
+    controller.scheduler = SimpleNamespace(get_jobs=lambda: [object()])
+    limb_correction.set_enabled(True)
+    view.limb_correction_checkbox.setChecked(False)
+
+    controller.on_limb_correction_toggled(False)
+
+    assert limb_correction.is_enabled()
+    assert view.limb_correction_checkbox.isChecked()

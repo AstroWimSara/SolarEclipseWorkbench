@@ -1,4 +1,4 @@
-"""Validate the limb correction against Jubier's published figures.
+"""Validate the limb correction against published profile figures.
 
 Reference case, from the Solar Eclipse Maestro limb profile for the total solar
 eclipse of 2015 Mar 20 at Longyearbyen (Svalbard):
@@ -44,6 +44,8 @@ CASES = {
         # Maestro prints the corrected contacts and the bead spread separately
         # ("Baily's Beads: +/-3.0s"), so its correction is the contact-point one.
         "convention": "point",
+        # The 1.5 s bound includes the measured LOLA versus Maestro's
+        # undocumented LRO/Kaguya profile difference; it is not solver noise.
         "tolerance": 1.5,
         "source": "Jubier, Solar Eclipse Maestro, Longyearbyen (LRO/Kaguya)",
     },
@@ -203,7 +205,7 @@ def main():
 
     # At the contact point, as the shipped code does it.
     def limb_height_at(angle):
-        return float(np.interp(angle % 360.0, angles, heights_km))
+        return float(np.interp(angle % 360.0, angles, heights_km, period=360.0))
 
     point_c2 = solve_point_contact(elements, evaluate, c2, True, limb_height_at)
     point_c3 = solve_point_contact(elements, evaluate, c3, False, limb_height_at)
@@ -221,10 +223,13 @@ def main():
             print(f"beads {offset:+.0f}s around {label}: {len(lit)} at {spans or 'none'} deg")
 
     for label, when, entering in (("C2", c2_corrected, True), ("C3", c3_corrected, False)):
-        start, end = bead_window(evaluate, when, entering, angles, heights_km)
-        centre = 0.5 * (start + end)
-        print(f"bead window {label}: {(end - start) * 3600:5.1f}s long, "
-              f"centre {(centre - when) * 3600:+.1f}s from the contact")
+        window = bead_window(evaluate, when, entering, angles, heights_km)
+        if window.solved:
+            centre = 0.5 * (window.start + window.end)
+            print(f"bead capture window {label}: {window.duration_seconds:5.1f}s long, "
+                  f"centre {(centre - when) * 3600:+.1f}s from the contact")
+        else:
+            print(f"bead capture window {label}: unresolved")
 
     # The reference sheets correct at the contact point and quote the bead
     # spread separately, so that is the number to compare.  The whole-arc shift
@@ -240,9 +245,8 @@ def main():
           f"C3 {reference['c3_correction']:+.2f}s  duration "
           f"{reference['c3_correction'] - reference['c2_correction']:+.2f}s")
 
-    # Compare against whichever convention this source uses.  They are not the
-    # same quantity: the contact-point correction sits inside the bead window,
-    # the whole-arc one is its far edge.
+    # The sources genuinely publish different quantities.  Compare each one
+    # against its stated convention rather than forcing unlike events to agree.
     convention = case.get("convention", "point")
     ours = ((point_c2_shift, point_c3_shift) if convention == "point"
             else (c2_shift, c3_shift))
