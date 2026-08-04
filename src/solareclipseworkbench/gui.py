@@ -58,6 +58,7 @@ from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget
+from solareclipseworkbench.tile_map import TileMap, MIN_ZOOM, MAX_ZOOM
 from solareclipseworkbench.constants import SUN_RADIUS, MOON_RADIUS
 from solareclipseworkbench import configuration
 
@@ -2100,8 +2101,29 @@ class LocationPopup(QWidget, Observable):
             )
         layout.addWidget(self.location_widget)
 
+        # Detailed map of the site, with the world map next to it for context.
+        self.tile_map = TileMap()
         self.location_plot = LocationPlot()
-        layout.addWidget(self.location_plot)
+        self.location_plot.setMaximumWidth(360)
+
+        maps_layout = QHBoxLayout()
+        maps_layout.addWidget(self.tile_map, stretch=3)
+        maps_layout.addWidget(self.location_plot, stretch=1)
+        layout.addLayout(maps_layout)
+
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(QLabel("Zoom"))
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(MIN_ZOOM, MAX_ZOOM)
+        self.zoom_slider.setValue(self.tile_map.zoom())
+        self.zoom_slider.valueChanged.connect(self.tile_map.set_zoom)
+        zoom_layout.addWidget(self.zoom_slider)
+        self.zoom_label = QLabel(f"{self.tile_map.zoom()}")
+        self.zoom_label.setFixedWidth(30)
+        self.zoom_slider.valueChanged.connect(lambda value: self.zoom_label.setText(f"{value}"))
+        self.tile_map.zoom_changed.connect(self.zoom_slider.setValue)
+        zoom_layout.addWidget(self.zoom_label)
+        layout.addLayout(zoom_layout)
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.accept_location)
@@ -2160,6 +2182,8 @@ class LocationPopup(QWidget, Observable):
         except ValueError:
             return
         self.location_plot.plot_location(longitude=lon, latitude=lat)
+        name = self.location_widget.location_combo.currentText()
+        self.tile_map.set_location(lon, lat, label="" if name == "Custom" else name)
 
     def accept_location(self):
         """ Notify the observer about the selection of a new location and close the pop-up window.
