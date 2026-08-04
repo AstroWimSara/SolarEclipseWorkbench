@@ -215,7 +215,10 @@ def solve_limb_contact(elements, evaluate, start_hours, entering,
             break
         inside += direction * -step_hours
     else:
-        raise ValueError("no totality found near the uncorrected contact")
+        raise ValueError(
+            f"no totality within {search_hours * 3600.0:.0f} s of the uncorrected "
+            f"contact: the limb correction here is larger than the search window, "
+            f"which happens close to the edge of the path")
 
     outside = inside
     for _ in range(int(search_hours / step_hours) + 1):
@@ -282,6 +285,12 @@ def bead_window(evaluate, contact_hours, entering, position_angles, heights_km,
         if lit_arc_degrees(evaluate(stepped), position_angles, heights_km) > max_arc_deg:
             break
         edge = stepped
+    else:
+        # The beads never merged back into a crescent inside the search window.
+        # Returning the window edge would look like a measured answer, so say so.
+        logging.warning("Bead window did not close within %.0f s of the contact; "
+                        "the reported edge is the search limit, not a solved one.",
+                        limit_hours * 3600.0)
 
     return (edge, contact_hours) if entering else (contact_hours, edge)
 
@@ -460,7 +469,9 @@ def solve_limb(eclipse_date, latitude, longitude, elevation_m,
     c3_limb = solve_limb_contact(elements, evaluate, c3, False, angles, heights_km)
 
     def limb_height_at(angle):
-        return float(np.interp(angle % 360.0, angles, heights_km))
+        # period, or the last hundredth of a degree before north interpolates
+        # against nothing and returns the value at 359.99 instead of wrapping.
+        return float(np.interp(angle % 360.0, angles, heights_km, period=360.0))
 
     c2_point = solve_point_contact(elements, evaluate, c2, True, limb_height_at)
     c3_point = solve_point_contact(elements, evaluate, c3, False, limb_height_at)
