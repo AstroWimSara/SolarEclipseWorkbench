@@ -234,6 +234,28 @@ def solve_limb_contact(elements, evaluate, start_hours, entering,
     return 0.5 * (inside + outside)
 
 
+def solve_point_contact(elements, evaluate, start_hours, entering, limb_height_at):
+    """Find C2 or C3 corrected at the contact point alone.
+
+    This is the correction the published sheets print: the limb is read only
+    where the two discs touch, so the answer says when the Sun goes behind that
+    one mountain or valley.  It is not when the last bead goes -- that is
+    solve_limb_contact, and the two differ by up to the width of the bead
+    window.
+
+    `limb_height_at` returns the limb height in km at a position angle.  The
+    angle is the one at the uncorrected contact, and it is deliberately not
+    re-read from the corrected one: a correction of a few seconds swings the
+    contact angle by about a degree, which on a mountainous limb is different
+    terrain entirely, and iterating on that oscillates rather than converging.
+    The published convention perturbs the nominal contact, so that is what this
+    does.
+    """
+    angle = contact_position_angle(evaluate(start_hours))
+    return solve_limb_contact(elements, evaluate, start_hours, entering,
+                              np.array([angle]), np.array([limb_height_at(angle)]))
+
+
 def lit_arc_degrees(elements, position_angles, heights_km):
     """Total extent of limb, in degrees, that still has sunlight past it."""
     lit = sunlight_margin(elements, position_angles, heights_km) > 0.0
@@ -343,7 +365,7 @@ class LimbSolution:
     """Everything a limb-corrected eclipse needs, for scheduling or for drawing."""
 
     def __init__(self, elements, evaluate, to_utc, from_utc, angles, heights_km,
-                 c2, c3, c2_limb, c3_limb, windows):
+                 c2, c3, c2_limb, c3_limb, windows, c2_point=None, c3_point=None):
         self.elements = elements
         self.evaluate = evaluate
         self.to_utc = to_utc
@@ -352,13 +374,25 @@ class LimbSolution:
         self.heights_km = heights_km
         self.c2 = c2
         self.c3 = c3
-        self.c2_limb = c2_limb
+        self.c2_limb = c2_limb          # last bead gone anywhere on the limb
         self.c3_limb = c3_limb
+        self.c2_point = c2_point        # corrected at the contact point alone
+        self.c3_point = c3_point
         self.windows = windows          # {"C2": (start, end), "C3": (start, end)}
 
-    def correction_seconds(self, name):
-        contact, corrected = ((self.c2, self.c2_limb) if name == "C2"
-                              else (self.c3, self.c3_limb))
+    def correction_seconds(self, name, at_point=False):
+        """Seconds the limb moves this contact.
+
+        With at_point, the correction the published sheets give: read at the
+        contact point only.  Otherwise the last-bead moment, which is the edge
+        of the bead window rather than its middle.
+        """
+        if at_point:
+            contact, corrected = ((self.c2, self.c2_point) if name == "C2"
+                                  else (self.c3, self.c3_point))
+        else:
+            contact, corrected = ((self.c2, self.c2_limb) if name == "C2"
+                                  else (self.c3, self.c3_limb))
         return (corrected - contact) * 3600.0
 
     def window_seconds(self, name):
@@ -425,12 +459,18 @@ def solve_limb(eclipse_date, latitude, longitude, elevation_m,
     c2_limb = solve_limb_contact(elements, evaluate, c2, True, angles, heights_km)
     c3_limb = solve_limb_contact(elements, evaluate, c3, False, angles, heights_km)
 
+    def limb_height_at(angle):
+        return float(np.interp(angle % 360.0, angles, heights_km))
+
+    c2_point = solve_point_contact(elements, evaluate, c2, True, limb_height_at)
+    c3_point = solve_point_contact(elements, evaluate, c3, False, limb_height_at)
+
     windows = {
         "C2": bead_window(evaluate, c2_limb, True, angles, heights_km, max_arc_deg=arc_degrees),
         "C3": bead_window(evaluate, c3_limb, False, angles, heights_km, max_arc_deg=arc_degrees),
     }
     return LimbSolution(elements, evaluate, to_utc, from_utc, angles, heights_km,
-                        c2, c3, c2_limb, c3_limb, windows)
+                        c2, c3, c2_limb, c3_limb, windows, c2_point, c3_point)
 
 
 def bead_reference_moments(eclipse_date, latitude, longitude, elevation_m,
@@ -447,6 +487,13 @@ def bead_reference_moments(eclipse_date, latitude, longitude, elevation_m,
         BEADS_C2, BEADS_C3            the middle of each bead window
         BEADS_C2_START / _END         its edges, and likewise for C3
 
+    C2 and C3 are corrected at the contact point, which is what the published
+    sheets give, so a time here can be checked against one of those.  The
+    moment the last bead actually goes is the far edge of the bead window --
+    BEADS_C2_END and BEADS_C3_START -- and that is what totality means to an
+    observer.  Reporting the first as the second is what makes our C2 look
+    wrong against a printed table.
+
     A script written against C2 therefore gets the best time available, rather
     than having to know to ask for a differently named one.
     """
@@ -458,8 +505,8 @@ def bead_reference_moments(eclipse_date, latitude, longitude, elevation_m,
     if solution is None:
         return {}
 
-    moments = {"C2": solution.to_utc(solution.c2_limb),
-               "C3": solution.to_utc(solution.c3_limb)}
+    moments = {"C2": solution.to_utc(solution.c2_point),
+               "C3": solution.to_utc(solution.c3_point)}
     for name in ("C2", "C3"):
         start, end = solution.windows[name]
         moments[f"BEADS_{name}_START"] = solution.to_utc(start)
