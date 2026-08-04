@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+- Lunar limb correction: C2 and C3 are computed against the Moon's true, mountainous limb instead of a mean disc, and the Baily's beads window around each internal contact is shown and can be scheduled against (`BEADS_C2`, `BEADS_C3`, `_START`, `_END`).  The mean-limb times remain available as `C2_MEAN` and `C3_MEAN`, and a checkbox under the reference moments switches the correction off.  Needs the 72 MB `lunar_limb_band_v1.bin` limb profile; without it the mean-limb contacts are used as before.  Please consult README - by @mrosseel
+
 ## [2.0.0rc1] - 2026-07-31
 
 ### Added
