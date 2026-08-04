@@ -22,7 +22,8 @@ import geopandas
 import numpy as np
 import pandas as pd
 import pytz
-from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QSettings, pyqtSignal
+from PyQt6.QtCore import (QTimer, QRect, Qt, QAbstractTableModel, QModelIndex,
+                         QSettings, QSignalBlocker, pyqtSignal)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
@@ -59,6 +60,16 @@ TIME_FORMATS = {
     "24 hours": "%H:%M:%S.%f",
     "12 hours": "%I:%M:%S.%f"
 }
+
+LIMB_CORRECTION_TOOLTIP = (
+    "Use the Moon's topography to apply the Maestro-style contact-point "
+    "correction to C2/C3. A separate whole-arc photographic capture window "
+    "is available when the configured illuminated-arc criterion can be solved."
+)
+LIMB_CORRECTION_LOCKED_TOOLTIP = (
+    "The lunar limb correction cannot be changed while a script has pending "
+    "jobs. Stop the scheduler first, then change the correction and reload the script."
+)
 
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
@@ -400,11 +411,7 @@ class SolarEclipseView(QMainWindow, Observable):
             "Apply the lunar limb correction to the contact times")
         # The controller replaces this with whatever was remembered.
         self.limb_correction_checkbox.setChecked(True)
-        self.limb_correction_checkbox.setToolTip(
-            "The Moon's limb is mountainous, so second and third contact do not "
-            "happen when a smooth disc says they do. With the lunar limb profile "
-            "installed, this shifts C2 and C3 to the moment the last or first bead "
-            "goes, and makes the bead windows available to a script.")
+        self.limb_correction_checkbox.setToolTip(LIMB_CORRECTION_TOOLTIP)
 
         self.c1_time_local_label = QLabel()
         self.c1_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -931,9 +938,13 @@ class SolarEclipseView(QMainWindow, Observable):
             start = reference_moments.get(f"BEADS_{contact}_START")
             end = reference_moments.get(f"BEADS_{contact}_END")
             if start is None or end is None:
-                # Name the reason: a blank cell reads like a solve that failed.
-                label.setText("correction off" if not limb_correction_is_enabled()
-                              else "no limb profile")
+                status = reference_moments.get(f"BEADS_{contact}_STATUS")
+                if status == "unresolved":
+                    label.setText("capture window unresolved")
+                else:
+                    # Name the reason: a blank cell reads like a solve that failed.
+                    label.setText("correction off" if not limb_correction_is_enabled()
+                                  else "no limb profile")
                 continue
             seconds = (end.time_utc - start.time_utc).total_seconds()
             label.setText("%s - %s  (%.2f s)" % (format_time(start.time_utc, self.time_format),
@@ -1047,12 +1058,28 @@ class SolarEclipseController(Observer):
         The times on screen answer the question this checkbox asks, so they are
         recomputed rather than left stale.
         """
+        if self._run_in_progress():
+            # Defensive even though the checkbox is disabled when jobs are
+            # loaded: programmatic changes must not make displayed contacts
+            # disagree with already-created absolute DateTriggers.
+            blocker = QSignalBlocker(self.view.limb_correction_checkbox)
+            self.view.limb_correction_checkbox.setChecked(limb_correction_is_enabled())
+            del blocker
+            logging.warning("Stop the scheduler before changing the lunar limb correction")
+            return
+
         set_limb_correction_enabled(enabled)
         self.view.settings.setValue("limb_correction", enabled)
         logging.info('Lunar limb correction %s', 'on' if enabled else 'off')
 
         if self.model.is_location_set and self.model.is_eclipse_date_set:
             self.set_reference_moments()
+
+    def _set_limb_correction_locked(self, locked: bool):
+        """Keep contact settings immutable while absolute jobs are pending."""
+        self.view.limb_correction_checkbox.setEnabled(not locked)
+        self.view.limb_correction_checkbox.setToolTip(
+            LIMB_CORRECTION_LOCKED_TOOLTIP if locked else LIMB_CORRECTION_TOOLTIP)
 
     def _run_in_progress(self) -> bool:
         """True while a schedule is loaded and running."""
@@ -1442,6 +1469,7 @@ class SolarEclipseController(Observer):
                 self.view.camera_action.setDisabled(True)
 
                 n_jobs = len(self.scheduler.get_jobs())
+                self._set_limb_correction_locked(n_jobs > 0)
                 if n_jobs == 0:
                     cam_keys = list(
                         (self.model.camera_overview.camera_overview_dict or {}).keys()
@@ -1777,13 +1805,16 @@ class SolarEclipseController(Observer):
         try:
             if self.scheduler:
                 self.scheduler.shutdown()
-                self.jobs_model.clear_jobs_overview()
+                if self.jobs_model:
+                    self.jobs_model.clear_jobs_overview()
                 self.view.camera_action.setEnabled(True)
                 LOGGER.info("Scheduler stopped by user")
         except SchedulerNotRunningError:
             pass  # already stopped
         except Exception:
             logging.exception("Error while shutting down scheduler")
+        finally:
+            self._set_limb_correction_locked(False)
 
 
 class LocationPopup(QWidget, Observable):

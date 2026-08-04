@@ -195,6 +195,9 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
                     timings[f"{contact}_MEAN"] = timings[contact]
 
             for name, moment in bead_moments.items():
+                if name.endswith("_STATUS"):
+                    timings[name] = moment
+                    continue
                 near_c2 = "C2" in name
                 azimuth = second_contact_az if near_c2 else third_contact_az
                 altitude = second_contact_alt if near_c2 else third_contact_alt

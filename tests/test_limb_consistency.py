@@ -11,12 +11,16 @@ a factor of a thousand.  Both are silent -- the answer stays plausible.  So one
 test pins the reduction (no relief, no correction) and one pins the scale (a
 kilometre of relief is about a second).
 """
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from solareclipseworkbench.limb_correction import solve_limb_contact
+from solareclipseworkbench.limb_correction import (
+    contact_position_angle, solve_limb_contact, solve_point_contact,
+)
 from solareclipseworkbench.solar_eclipse import get_element_coeffs, get_elements
 
 # Longyearbyen, TSE 2015 Mar 20 -- any total eclipse would do.
@@ -24,6 +28,7 @@ DATE = "2015-03-20"
 LATITUDE = 78 + 13.328 / 60
 LONGITUDE = -(15 + 39.028 / 60)      # the solver takes west longitude as positive
 ELEVATION = 6.1
+GOLDEN_PROFILE = Path(__file__).parent / "fixtures" / "longyearbyen_lola_profile.json"
 
 
 @pytest.fixture(scope="module")
@@ -89,3 +94,46 @@ def test_a_kilometre_of_relief_is_about_a_second(contacts, name, entering, sign)
     assert 0.5 < abs(shift) < 2.0, (
         f"{name} moved {shift:+.2f} s for 1 km of relief, expected about 1 s. "
         f"A factor of a thousand here means metres have been used as kilometres.")
+
+
+@pytest.fixture(scope="module")
+def golden_profile():
+    """A compact real LOLA profile slice; no 72 MB blob is needed in CI."""
+    with GOLDEN_PROFILE.open(encoding="utf-8") as fixture:
+        return json.load(fixture)
+
+
+@pytest.mark.parametrize("name", ["C2", "C3"])
+def test_real_lola_profile_pins_point_and_arc_conventions(golden_profile, name):
+    elements = golden_profile["elements"]
+    site = golden_profile["site"]
+    contact = golden_profile["contacts"][name]
+
+    def evaluate(when):
+        return get_elements(
+            elements, when, site["latitude_deg"], -site["longitude_deg"],
+            site["elevation_m"],
+        )
+
+    mean_contact = contact["mean_contact_tt_offset_hours"]
+    position_angle = contact_position_angle(evaluate(mean_contact))
+    assert position_angle == pytest.approx(contact["position_angle_deg"], abs=1e-9)
+
+    relative = (golden_profile["fixture_relative_start_deg"]
+                + np.arange(golden_profile["fixture_sample_count"])
+                * golden_profile["fixture_relative_step_deg"])
+    angles = (position_angle + relative) % 360.0
+    heights = np.asarray(contact["heights_km"], dtype=np.float64)
+
+    def height_at(angle):
+        return float(np.interp(angle % 360.0, angles, heights, period=360.0))
+
+    point = solve_point_contact(
+        elements, evaluate, mean_contact, contact["entering"], height_at)
+    arc = solve_limb_contact(
+        elements, evaluate, mean_contact, contact["entering"], angles, heights)
+
+    assert (point - mean_contact) * 3600.0 == pytest.approx(
+        contact["expected_point_shift_seconds"], abs=0.001)
+    assert (arc - mean_contact) * 3600.0 == pytest.approx(
+        contact["expected_fixture_arc_shift_seconds"], abs=0.001)
