@@ -1455,11 +1455,21 @@ class SolarEclipseController(Observer):
 
             try:
                 from solareclipseworkbench.utils import observe_solar_eclipse
-                self.scheduler: BackgroundScheduler \
+                self.scheduler: BackgroundScheduler
+                self.scheduler, unknown_moments \
                     = observe_solar_eclipse(self.model.reference_moments, filename,
                                             self.model.camera_overview.camera_overview_dict, self,
                                             self.sim_reference_moment, self.sim_offset_minutes,
                                             gps_time_offset=self.model.gps_time_offset)
+
+                # Loading is the last moment this can be fixed: afterwards the names are
+                # resolved and the missing lines are simply gone.  Limb-corrected moments
+                # (C2_LIMB, C3_LIMB, BEADS_*) exist only when the correction is on and the
+                # lunar limb profile is installed.
+                for name, count in unknown_moments.items():
+                    LOGGER.warning("Script schedules against %s, which does not exist: %d line(s) "
+                                   "were not scheduled.  Available: %s", name, count,
+                                   ", ".join(sorted(self.model.reference_moments)))
 
                 self.jobs_model = JobsTableModel(self.scheduler, self)
                 self.view.jobs_table.setModel(self.jobs_model)

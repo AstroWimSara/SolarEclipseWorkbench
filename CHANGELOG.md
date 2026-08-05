@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - Lunar limb correction: C2 and C3 are computed against the Moon's true, mountainous limb instead of a mean disc, and the Baily's beads window around each internal contact is shown and can be scheduled against (`BEADS_C2`, `BEADS_C3`, `_START`, `_END`).  The mean-limb times remain available as `C2_MEAN` and `C3_MEAN`, and a checkbox under the reference moments switches the correction off.  Needs the 72 MB `lunar_limb_band_v1.bin` limb profile; without it the mean-limb contacts are used as before.  Please consult README - by @mrosseel
 
+### Fixed
+- A script line scheduled against a reference moment that does not exist is now reported when the script is loaded, with the number of lines it cost, instead of disappearing silently.  `BEADS_C2` and the other limb-corrected moments only exist when the correction is on and the limb profile is installed, so the same script can schedule perfectly one day and lose its contact bursts the next - by @mrosseel
+- Loading a script written for a longer totality than the one at your location is now reported: a camera command running into the last seconds before third contact is still holding the shutter when the beads sequence needs it - by @mrosseel
+- An unrecognised command in a script is logged instead of being dropped without a word - by @mrosseel
+
 ## [2.0.0rc1] - 2026-07-31
 
 ### Added

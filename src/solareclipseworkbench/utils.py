@@ -62,7 +62,8 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
                            late; subtracting this offset from every scheduled time compensates for the drift.
                            Defaults to timedelta(0) (use computer clock as-is).
 
-    Returns: Scheduler that is used to schedule the commands.
+    Returns: (scheduler, unknown), the scheduler used to schedule the commands and the reference moments
+             the script asked for that do not exist, as {name: number of lines lost}.
     """
 
     scheduler = start_scheduler()
@@ -83,10 +84,10 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
         controller.view.eclipse_visualization.set_offset(offset)
 
     # Schedule commands
-    schedule_commands(commands_filename, scheduler, ref_moments, cameras, controller, reference_moment, simulated_start,
-                      gps_time_offset=gps_time_offset)
+    unknown = schedule_commands(commands_filename, scheduler, ref_moments, cameras, controller, reference_moment,
+                                simulated_start, gps_time_offset=gps_time_offset)
 
-    return scheduler
+    return scheduler, unknown
 
 
 def start_scheduler():
@@ -123,16 +124,99 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
                             None if no simulation is to be used.
         - gps_time_offset: GPS–computer time offset (see observe_solar_eclipse).  Defaults to timedelta(0).
 
-    Returns: Scheduler that is used to schedule the commands.
+    Returns: Reference moments the script asked for that do not exist, as {name: number of lines lost}.
+             Empty when every line found its moment.
     """
     script_file = scripts.convert_script(filename, reference_moments)
     script_file.seek(0)
 
+    unknown: dict = {}
+
     # Loop over all lines in script file
     for cmd_str in script_file:
-        schedule_command(
+        missing = schedule_command(
             scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start,
             gps_time_offset=gps_time_offset)
+        if missing is not None:
+            unknown[missing] = unknown.get(missing, 0) + 1
+
+    warn_if_script_outlasts_totality(scheduler, reference_moments)
+
+    return unknown
+
+
+#: Commands that leave the camera alone, so a job running one of them is not
+#: holding the shutter when the next contact needs it.
+CAMERA_FREE_COMMANDS = frozenset({'voice_prompt'})
+
+#: Which script command each scheduled job runs, by job id.  Filled in as the
+#: script is scheduled: the scheduler itself only knows times, not what a job
+#: will do, and most of the jobs around second contact are voice prompts.
+JOB_COMMANDS: dict = {}
+
+#: A totality command finishing this close to third contact is treated as
+#: overrunning it.  A corona ladder takes about six and a half seconds, so
+#: anything starting inside that window is still holding the camera when the
+#: beads sequence needs it.
+TOTALITY_OVERRUN_MARGIN_S = 8.0
+
+
+def job_touches_camera(job) -> bool:
+    """Whether this job will use the camera or fire the shutter.
+
+    Unknown jobs count as touching it: not knowing what a job does is not a
+    reason to assume the camera is free.
+    """
+    return JOB_COMMANDS.get(getattr(job, 'id', None), '') not in CAMERA_FREE_COMMANDS
+
+
+def warn_if_script_outlasts_totality(scheduler, reference_moments: dict) -> float:
+    """Say so when the script was written for a longer totality than this one.
+
+    Returns the seconds of overrun, 0.0 when there are none.
+
+    Loading the wrong duration is silent and costs the part of the eclipse that
+    cannot be retaken: the last corona ladder of a script written for a longer
+    totality is still running at third contact, so the command that loads the
+    bead exposure waits, is dropped, and the bead burst fires at the corona
+    ladder's exposure instead.  Fewer frames, none of them beads, and nothing
+    says anything until the photographs are reviewed.
+
+    The scheduler already knows every job's time and the eclipse already knows
+    when third contact is; comparing them is the difference between a warning
+    while there is still time to load another file and a ruined third contact.
+    """
+    c2 = reference_moments.get("C2")
+    c3 = reference_moments.get("C3")
+    if c2 is None or c3 is None:
+        return 0.0
+
+    deadline = c3.time_utc - timedelta(seconds=TOTALITY_OVERRUN_MARGIN_S)
+    latest = None
+    for job in scheduler.get_jobs():
+        when = getattr(job, "next_run_time", None)
+        if when is None or not job_touches_camera(job):
+            continue
+        if c2.time_utc <= when < c3.time_utc and when > deadline:
+            if latest is None or when > latest:
+                latest = when
+    if latest is None:
+        return 0.0
+
+    overrun = (latest - deadline).total_seconds()
+    totality = (c3.time_utc - c2.time_utc).total_seconds()
+    logging.error(
+        "This script was written for a longer totality than this one: a camera "
+        "command runs %.1f s into the %.0f s reserved before third contact, and "
+        "totality here is %.0f s.  Load the script for %.0f s - the one running "
+        "will hold the camera when the third contact beads need it",
+        overrun, TOTALITY_OVERRUN_MARGIN_S, totality, totality)
+    hardware_problems.report(
+        "Script",
+        "Written for a longer totality: %.0f s here" % totality,
+        detail="a camera command runs %.1f s into the third contact reserve" % overrun,
+    )
+    return overrun
 
 
 def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
@@ -154,6 +238,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
         - gps_time_offset: GPS–computer time offset (GPS UTC − computer UTC).  When positive the computer
                             is slow; execution times are shifted earlier by this amount so that actions
                             fire at the correct GPS-referenced wall-clock time.  Defaults to timedelta(0).
+
+    Returns: The name of the reference moment the line asked for when that moment does not exist,
+             None otherwise (including for lines skipped for any other reason).
     """
     # Use CSV reader to properly handle quoted fields with commas
     try:
@@ -273,9 +360,21 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
         trigger = DateTrigger(run_date=execution_time, timezone=pytz.utc)
 
-        scheduler.add_job(func, trigger=trigger, args=args, name=description)
-    except KeyError:
-        return
+        job = scheduler.add_job(func, trigger=trigger, args=args, name=description)
+        JOB_COMMANDS[job.id] = func_name
+    except KeyError as missing:
+        # A line naming a moment the calculation did not produce.  Usually a
+        # limb-corrected moment — BEADS_C2 and friends only exist when the
+        # correction is on and the limb profile is installed — or a typo.  The
+        # line cannot be scheduled, but it must not disappear without a word:
+        # silently dropping the contact bursts is exactly the failure nobody
+        # notices until the eclipse is over.  The name goes back to the caller,
+        # which is holding the user at the moment the script is loaded.
+        name = missing.args[0] if missing.args else str(missing)
+        logging.warning(
+            'schedule_command: no reference moment %s, so "%s" (%s) is not scheduled — '
+            'the rest of the script is unaffected', name, func_name, description)
+        return name
 
 # Main
 def main():

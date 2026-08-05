@@ -33,9 +33,9 @@ def main(args):
 
             # Only do a simulation if args.c1 is set
             if args.ref_moment:
-                scheduler = observe_solar_eclipse(timings, filename, cameras, None, args.ref_moment, args.minutes)
+                scheduler, _ = observe_solar_eclipse(timings, filename, cameras, None, args.ref_moment, args.minutes)
             else:
-                scheduler = observe_solar_eclipse(timings, filename, cameras, None, None, None)
+                scheduler, _ = observe_solar_eclipse(timings, filename, cameras, None, None, None)
 
             while len(scheduler.get_jobs()) > 0:
                 sleep(5)

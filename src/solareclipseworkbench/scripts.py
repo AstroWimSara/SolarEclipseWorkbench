@@ -70,7 +70,11 @@ def convert_command(line, ref_moment, sign, time_delta, extra_comment, output_fi
             sound_file = ref_moment + "_IN_" + sound_file
         command = "voice_prompt"
     else:
-        # Unknown command
+        # A dropped line must never be silent: an unrecognised command in an
+        # eclipse script means those moments simply do not fire, and that has
+        # to be visible at load time, not discovered on the card afterwards.
+        logging.warning("Script command %r is not recognised — this line will "
+                        "NOT run: %s", command_parts[0], line.strip())
         return output_file
 
     # Remove the double quote from the comment
