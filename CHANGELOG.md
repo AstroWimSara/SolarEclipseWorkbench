@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0rc2] - 2026-08-05
+
+### Fixed
+- Exposures longer than 3 seconds won't cause potential clashes with the next exposure - #172 by @fliker09
+
+
 ## [2.0.0rc1] - 2026-08-05
 
 ### Added
