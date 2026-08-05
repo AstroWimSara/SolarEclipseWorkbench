@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Nikon: shutter speeds are now properly read from the camera by @fliker09
 - Testing suite have been updated to support the update Sony code by @mrosseel
 - Canon: aperture is now properly set when shooting a single picture by fliker09
+- Exposures longer than 3 seconds won't cause potential clashes with the next exposure - #172 by @fliker09
 
 ## [1.10.7] - 2026-07-23
 
