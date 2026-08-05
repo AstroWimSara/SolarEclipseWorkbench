@@ -31,16 +31,42 @@ from solareclipseworkbench.lunar_limb import LimbBand
 
 EARTH_RADIUS_KM = EARTH_RADIUS / 1000.0
 
-# None of these are in the checkout.  The two lunar orientation kernels come
-# down from NAIF on first use, the way the ephemeris already does; the limb blob
-# is a 72 MB release asset, so everything here degrades to None when it is
-# absent and the caller falls back to mean-limb contacts.
+# The two lunar orientation kernels come down from NAIF on first use, the way
+# the ephemeris already does; the limb blob is a 72 MB release asset, so
+# everything here degrades to None when it is absent and the caller falls back
+# to mean-limb contacts.
 BAND_FILE_NAME = "lunar_limb_band_v1.bin"
 FRAME_KERNEL_NAME = "moon_080317.tf"
 ORIENTATION_KERNEL_NAME = "moon_pa_de421_1900-2050.bpc"
 EPHEMERIS_NAME = "de440s.bsp"
 
-BAND_FILE = Path(load.path_to(BAND_FILE_NAME))
+PACKAGE_DIRECTORY = Path(__file__).resolve().parent
+DATA_DIRECTORY = PACKAGE_DIRECTORY.parents[1] / "data"
+
+
+def data_path(name: str) -> Path:
+    """Where a data file is.
+
+    A checkout keeps the downloaded kernels and the limb blob in data/, and the
+    ephemeris ships inside the package; anything still missing resolves to
+    skyfield's load path, which is where it gets downloaded to.
+    """
+    for directory in (DATA_DIRECTORY, PACKAGE_DIRECTORY):
+        candidate = directory / name
+        if candidate.exists():
+            return candidate
+    return Path(load.path_to(name))
+
+
+def _open_kernel(name: str):
+    """An open handle on a kernel, downloaded on first use when it is not local."""
+    path = data_path(name)
+    if path.exists():
+        return open(path, "rb")
+    return load(name)
+
+
+BAND_FILE = data_path(BAND_FILE_NAME)
 
 # The reduced mean limb radius the l2 coefficients are built on.  Jubier charts
 # the same value as k2, and it is already the constant used when we generate
@@ -82,17 +108,17 @@ class BeadWindow:
 class LunarLimb:
     """The Moon's true limb, as seen from one place at one time."""
 
-    def __init__(self, band_path=BAND_FILE, frame_kernel_name=FRAME_KERNEL_NAME,
+    def __init__(self, band_path=None, frame_kernel_name=FRAME_KERNEL_NAME,
                  orientation_kernel_name=ORIENTATION_KERNEL_NAME,
                  ephemeris_name=EPHEMERIS_NAME):
-        self.band = LimbBand(band_path)
-        self.ephemeris = load(ephemeris_name)
+        self.band = LimbBand(Path(band_path) if band_path else BAND_FILE)
+        self.ephemeris = load(str(data_path(ephemeris_name)))
 
         constants = PlanetaryConstants()
-        constants.read_text(load(frame_kernel_name))
+        constants.read_text(_open_kernel(frame_kernel_name))
         # The binary kernel is read lazily on every rotation_at() call, so the
         # handle has to outlive this constructor.
-        self._orientation_kernel = load(orientation_kernel_name)
+        self._orientation_kernel = _open_kernel(orientation_kernel_name)
         constants.read_binary(self._orientation_kernel)
         self.frame = constants.build_frame_named("MOON_ME_DE421")
 
@@ -363,7 +389,7 @@ def load_default_limb():
                      "contacts and bead windows.", BAND_FILE)
         return None
     try:
-        return LunarLimb(BAND_FILE)
+        return LunarLimb()
     except Exception as exc:
         logging.warning("Could not load the lunar limb model, contacts will use the "
                         "mean limb: %s", exc)
