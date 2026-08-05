@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [2.0.0rc1] - 2026-07-31
+## [2.0.0rc1] - 2026-08-05
 
 ### Added
 - Show camera problems in the GUI instead of only in the log - #166 by @mrosseel
