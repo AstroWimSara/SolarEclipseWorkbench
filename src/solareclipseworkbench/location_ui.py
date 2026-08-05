@@ -466,6 +466,21 @@ class ElevationWorker(QThread):
 # LocationWidget
 # ---------------------------------------------------------------------------
 
+#: Added to the name of a location that was moved on the map, so a set of
+#: coordinates cannot quietly keep the name of the place it no longer is.
+MOVED_SUFFIX = "(moved)"
+
+
+def moved_location_name(name: str) -> str:
+    """The name to show for *name* after it was re-pinned on the map."""
+
+    name = (name or "").strip()
+    if not name:
+        return f"Custom pin {MOVED_SUFFIX}"
+    if name.endswith(MOVED_SUFFIX):
+        return name
+    return f"{name} {MOVED_SUFFIX}"
+
 class LocationWidget(QWidget):
     """Self-contained widget for choosing an observation location.
 
@@ -554,6 +569,27 @@ class LocationWidget(QWidget):
             self.latitude_edit.setText(str(latitude))
         if altitude is not None:
             self.altitude_edit.setText(str(altitude))
+
+    def set_picked_location(self, longitude: float, latitude: float,
+                            name: Optional[str] = None) -> None:
+        """Move to a spot the user picked on the map.
+
+        A picked spot is by definition not the saved location any more, so the
+        drop-down goes back to "Custom" and the fields become editable.  The
+        altitude belongs to the old spot and is looked up again for the new one.
+        """
+        self.location_combo.setCurrentText("Custom")
+        self._set_fields_editable(True)
+
+        self.longitude_edit.setText(f"{longitude:.6f}")
+        self.latitude_edit.setText(f"{latitude:.6f}")
+        if name is not None:
+            self.location_name_edit.setText(name)
+
+        # Cleared rather than left standing: the altitude of the old spot looks
+        # like a measurement of the new one, and it feeds the contact times.
+        self.altitude_edit.clear()
+        self._start_elevation_lookup(latitude, longitude)
 
     def get_coordinates(self):
         """Return ``(longitude, latitude, altitude)`` as floats.
@@ -834,11 +870,7 @@ class LocationWidget(QWidget):
             self.altitude_edit.setText(f"{alt:.1f}")
         elif lat is not None and lon is not None:
             # Browser did not supply altitude — fetch it from Open-Elevation
-            self.altitude_edit.setPlaceholderText("Fetching elevation…")
-            self._elevation_worker = ElevationWorker(lat, lon)
-            self._elevation_worker.finished.connect(self._on_elevation_received)
-            self._elevation_worker.error.connect(self._on_elevation_error)
-            self._elevation_worker.start()
+            self._start_elevation_lookup(lat, lon)
 
         if self._gps_dialog:
             self._gps_dialog.accept()
@@ -847,6 +879,14 @@ class LocationWidget(QWidget):
         if self._gps_worker:
             self._gps_worker.stop_server()
             self._gps_worker = None
+
+    def _start_elevation_lookup(self, latitude: float, longitude: float) -> None:
+        """Fill the altitude field from Open-Elevation, in the background."""
+        self.altitude_edit.setPlaceholderText("Fetching elevation…")
+        self._elevation_worker = ElevationWorker(latitude, longitude)
+        self._elevation_worker.finished.connect(self._on_elevation_received)
+        self._elevation_worker.error.connect(self._on_elevation_error)
+        self._elevation_worker.start()
 
     def _on_elevation_received(self, elevation: float) -> None:
         """Fill the altitude field after a successful Open-Elevation lookup."""
@@ -998,11 +1038,7 @@ class LocationWidget(QWidget):
         if alt is not None and alt != 0.0:
             self.altitude_edit.setText(f"{alt:.1f}")
         elif lat is not None and lon is not None:
-            self.altitude_edit.setPlaceholderText("Fetching elevation\u2026")
-            self._elevation_worker = ElevationWorker(lat, lon)
-            self._elevation_worker.finished.connect(self._on_elevation_received)
-            self._elevation_worker.error.connect(self._on_elevation_error)
-            self._elevation_worker.start()
+            self._start_elevation_lookup(lat, lon)
 
         # Store the measured GPS\u2013computer time offset
         self.gps_time_offset = time_offset

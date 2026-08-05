@@ -15,6 +15,8 @@ from PyQt6.QtCore import QObject, QPoint, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QWidget
 
+from solareclipseworkbench.constants import EARTH_RADIUS
+
 logger = logging.getLogger(__name__)
 
 TILE_SIZE = 256
@@ -38,6 +40,27 @@ def deg2num(longitude: float, latitude: float, zoom: int) -> Tuple[float, float]
     x = (longitude + 180.0) / 360.0 * n
     y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
     return x, y
+
+
+def distance_metres(longitude1: float, latitude1: float,
+                    longitude2: float, latitude2: float) -> float:
+    """Great-circle distance between two positions [degrees], in metres."""
+
+    phi1, phi2 = math.radians(latitude1), math.radians(latitude2)
+    d_phi = phi2 - phi1
+    d_lambda = math.radians(longitude2 - longitude1)
+    a = (math.sin(d_phi / 2) ** 2 +
+         math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2)
+    return 2 * EARTH_RADIUS * math.asin(math.sqrt(a))
+
+
+def num2deg(x: float, y: float, zoom: int) -> Tuple[float, float]:
+    """Return the (longitude, latitude) of fractional tile coordinates."""
+
+    n = 2.0 ** zoom
+    longitude = x / n * 360.0 - 180.0
+    latitude = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
+    return longitude, latitude
 
 
 class _TileFetcher(QObject):
@@ -81,13 +104,19 @@ class _TileFetcher(QObject):
 
 
 class TileMap(QWidget):
-    """Map centred on the observing site, with a crosshair marker and a scale bar.
+    """Map of the observing site, with a crosshair marker and a scale bar.
 
-    Scroll or use +/- to zoom; the site stays in the centre so the view always
-    answers "what is around the coordinates I typed in".
+    Scroll or use +/- to zoom, drag to look around, and double-click to pick a
+    different spot: the site is rarely the address that was geocoded, and the
+    field it is actually in is visible on the map.
     """
 
     zoom_changed = pyqtSignal(int)
+
+    #: A spot the user double-clicked, as (longitude, latitude) in degrees.  The
+    #: map does not move the marker itself: whoever owns the coordinates decides
+    #: whether to accept the pick.
+    location_picked = pyqtSignal(float, float)
 
     def __init__(self, parent=None, zoom: int = DEFAULT_ZOOM):
         super().__init__(parent)
@@ -95,6 +124,10 @@ class TileMap(QWidget):
         self._zoom = zoom
         self._longitude: Optional[float] = None
         self._latitude: Optional[float] = None
+        # Where the view is centred, which is the marker until the map is dragged.
+        self._centre_longitude: Optional[float] = None
+        self._centre_latitude: Optional[float] = None
+        self._drag_origin: Optional[QPoint] = None
         self._tiles: Dict[Tuple[int, int, int], QPixmap] = {}
         self._label = ""
 
@@ -106,12 +139,32 @@ class TileMap(QWidget):
         self.setCursor(Qt.CursorShape.CrossCursor)
 
     def set_location(self, longitude: float, latitude: float, label: str = "") -> None:
-        """Centre the map on the given position [degrees]."""
+        """Put the marker at the given position [degrees] and centre the view on it."""
 
         self._longitude = longitude
         self._latitude = latitude
+        self._centre_longitude = longitude
+        self._centre_latitude = latitude
         self._label = label
         self.update()
+
+    def centre_on_marker(self) -> None:
+        """Bring the marker back into view after the map has been dragged away."""
+
+        self._centre_longitude = self._longitude
+        self._centre_latitude = self._latitude
+        self.update()
+
+    def position_at(self, point: QPoint) -> Optional[Tuple[float, float]]:
+        """The (longitude, latitude) under a widget pixel, or None with no location set."""
+
+        if self._centre_longitude is None or self._centre_latitude is None:
+            return None
+
+        centre_x, centre_y = deg2num(self._centre_longitude, self._centre_latitude, self._zoom)
+        x = centre_x + (point.x() - self.width() / 2.0) / TILE_SIZE
+        y = centre_y + (point.y() - self.height() / 2.0) / TILE_SIZE
+        return num2deg(x, y, self._zoom)
 
     def set_zoom(self, zoom: int) -> None:
         zoom = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
@@ -129,6 +182,37 @@ class TileMap(QWidget):
         if steps:
             self.set_zoom(self._zoom + (1 if steps > 0 else -1))
         event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_origin is not None and self._centre_longitude is not None:
+            here = event.position().toPoint()
+            delta = here - self._drag_origin
+            self._drag_origin = here
+
+            centre_x, centre_y = deg2num(self._centre_longitude, self._centre_latitude, self._zoom)
+            self._centre_longitude, self._centre_latitude = num2deg(
+                centre_x - delta.x() / TILE_SIZE, centre_y - delta.y() / TILE_SIZE, self._zoom)
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin = None
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            picked = self.position_at(event.position().toPoint())
+            if picked is not None:
+                self.location_picked.emit(*picked)
+        super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
@@ -176,7 +260,7 @@ class TileMap(QWidget):
         width, height = self.width(), self.height()
         n = 2 ** self._zoom
 
-        centre_x, centre_y = deg2num(self._longitude, self._latitude, self._zoom)
+        centre_x, centre_y = deg2num(self._centre_longitude, self._centre_latitude, self._zoom)
         left = centre_x * TILE_SIZE - width / 2.0
         top = centre_y * TILE_SIZE - height / 2.0
 
@@ -203,23 +287,36 @@ class TileMap(QWidget):
             painter.drawText(QRect(0, 0, width, 20), Qt.AlignmentFlag.AlignCenter,
                              "loading map tiles…")
 
+    def _marker_point(self) -> QPoint:
+        """Where the marker sits on screen, which is the centre until the map is dragged."""
+
+        centre_x, centre_y = deg2num(self._centre_longitude, self._centre_latitude, self._zoom)
+        marker_x, marker_y = deg2num(self._longitude, self._latitude, self._zoom)
+        return QPoint(int(self.width() / 2 + (marker_x - centre_x) * TILE_SIZE),
+                      int(self.height() / 2 + (marker_y - centre_y) * TILE_SIZE))
+
     def _draw_marker(self, painter: QPainter) -> None:
-        centre = QPoint(self.width() // 2, self.height() // 2)
+        marker = self._marker_point()
 
         painter.setPen(QPen(QColor(255, 255, 255, 200), 3))
-        painter.drawLine(centre.x() - 20, centre.y(), centre.x() + 20, centre.y())
-        painter.drawLine(centre.x(), centre.y() - 20, centre.x(), centre.y() + 20)
+        painter.drawLine(marker.x() - 20, marker.y(), marker.x() + 20, marker.y())
+        painter.drawLine(marker.x(), marker.y() - 20, marker.x(), marker.y() + 20)
 
         painter.setPen(QPen(QColor("#d00000"), 1.5))
-        painter.drawLine(centre.x() - 20, centre.y(), centre.x() + 20, centre.y())
-        painter.drawLine(centre.x(), centre.y() - 20, centre.x(), centre.y() + 20)
+        painter.drawLine(marker.x() - 20, marker.y(), marker.x() + 20, marker.y())
+        painter.drawLine(marker.x(), marker.y() - 20, marker.x(), marker.y() + 20)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(centre, 8, 8)
+        painter.drawEllipse(marker, 8, 8)
+
+        if not self.rect().contains(marker):
+            painter.setPen(QColor("#d00000"))
+            painter.drawText(QRect(0, self.height() // 2 - 10, self.width(), 20),
+                             Qt.AlignmentFlag.AlignCenter, "the marker is off this view")
 
     def _draw_scale_bar(self, painter: QPainter) -> None:
         """Draw a bar whose length is a round number of metres at this latitude."""
 
-        metres_per_pixel = (EQUATOR_METRES * math.cos(math.radians(self._latitude)) /
+        metres_per_pixel = (EQUATOR_METRES * math.cos(math.radians(self._centre_latitude)) /
                             (TILE_SIZE * 2 ** self._zoom))
 
         for metres in (10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000):
@@ -245,18 +342,19 @@ class TileMap(QWidget):
 
         lines = [f"{abs(self._latitude):.5f}° {'N' if self._latitude >= 0 else 'S'}   "
                  f"{abs(self._longitude):.5f}° {'E' if self._longitude >= 0 else 'W'}",
-                 f"zoom {self._zoom} — scroll to zoom"]
+                 f"zoom {self._zoom} — scroll to zoom, drag to move, double-click to re-pin"]
         if self._label:
             lines.insert(0, self._label)
 
-        box = QRect(8, 8, max(200, self.width() // 3), 16 * len(lines) + 8)
+        metrics = painter.fontMetrics()
+        width = max(metrics.horizontalAdvance(line) for line in lines) + 14
+        box = QRect(8, 8, min(width, self.width() - 16), 16 * len(lines) + 8)
         painter.fillRect(box, QColor(255, 255, 255, 200))
         painter.setPen(QColor("#202020"))
         for index, line in enumerate(lines):
             painter.drawText(box.adjusted(6, 4 + index * 16, -4, 0), Qt.AlignmentFlag.AlignTop, line)
 
         attribution = "© OpenStreetMap contributors"
-        metrics = painter.fontMetrics()
         rect = QRect(self.width() - metrics.horizontalAdvance(attribution) - 12, self.height() - 34,
                      metrics.horizontalAdvance(attribution) + 8, 16)
         painter.fillRect(rect, QColor(255, 255, 255, 190))
