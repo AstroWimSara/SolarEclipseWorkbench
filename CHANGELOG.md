@@ -32,6 +32,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- A script line scheduled against a reference moment that does not exist is now reported when the script is loaded, with the number of lines it cost, instead of disappearing silently.  `BEADS_C2` and the other limb-corrected moments only exist when the correction is on and the limb profile is installed, so the same script can schedule perfectly one day and lose its contact bursts the next - by @mrosseel
+- Loading a script written for a longer totality than the one at your location is now reported: a camera command running into the last seconds before third contact is still holding the shutter when the beads sequence needs it - by @mrosseel
+- An unrecognised command in a script is logged instead of being dropped without a word - by @mrosseel
 - Cameras could not be used when the computer's language is not English, e.g. a Sony in Manual mode was reported as `Manuale` on an Italian system and rejected (Issue #185).  gphoto2 values and numbers are now always in English (C locale); the character set still follows the system language, so `export LC_ALL=C` is no longer needed
 - The values in the main window (reference moments, date and time) were drawn higher than their row titles; they are now vertically centred on the same line (Issue #190)
 - A closed Sony settings banner no longer reappears when a scheduled `sync_cameras` command runs; pressing `Camera(s)` still shows it again (Issue #187)
