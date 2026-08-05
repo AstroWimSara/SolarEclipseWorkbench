@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0rc2] - 2026-08-05
+
+### Fixed
+- Exposures longer than 3 seconds won't cause potential clashes with the next exposure - #172 by @fliker09
+
+
 ## [2.0.0rc1] - 2026-08-05
 
 ### Added
@@ -39,6 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Nikon: shutter speeds are now properly read from the camera by @fliker09
 - Testing suite have been updated to support the update Sony code by @mrosseel
 - Canon: aperture is now properly set when shooting a single picture by fliker09
+- Exposures longer than 3 seconds won't cause potential clashes with the next exposure - #172 by @fliker09
 
 ## [1.10.7] - 2026-07-23
 
