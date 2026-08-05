@@ -67,6 +67,8 @@ class _TileFetcher(QObject):
     """Downloads tiles off the GUI thread and hands them back through a signal."""
 
     tile_ready = pyqtSignal(int, int, int, bytes)
+    #: A tile that could not be had, which offline is every tile not yet cached.
+    tile_failed = pyqtSignal(int, int, int)
 
     def __init__(self):
         super().__init__()
@@ -96,6 +98,7 @@ class _TileFetcher(QObject):
             self.tile_ready.emit(zoom, x, y, response.content)
         except Exception as exc:
             logger.debug(f"Could not load map tile {zoom}/{x}/{y}: {exc}")
+            self.tile_failed.emit(zoom, x, y)
         finally:
             self._pending.discard((zoom, x, y))
 
@@ -129,10 +132,15 @@ class TileMap(QWidget):
         self._centre_latitude: Optional[float] = None
         self._drag_origin: Optional[QPoint] = None
         self._tiles: Dict[Tuple[int, int, int], QPixmap] = {}
+        # Tiles that could not be fetched.  Cleared whenever the view changes, so
+        # coming back onto a network retries rather than staying blank.
+        self._unavailable: set = set()
         self._label = ""
+        self._tile_note = ""
 
         self._fetcher = _TileFetcher()
         self._fetcher.tile_ready.connect(self._on_tile_ready)
+        self._fetcher.tile_failed.connect(self._on_tile_failed)
 
         self.setMinimumHeight(300)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -146,6 +154,7 @@ class TileMap(QWidget):
         self._centre_longitude = longitude
         self._centre_latitude = latitude
         self._label = label
+        self._unavailable.clear()
         self.update()
 
     def centre_on_marker(self) -> None:
@@ -153,6 +162,7 @@ class TileMap(QWidget):
 
         self._centre_longitude = self._longitude
         self._centre_latitude = self._latitude
+        self._unavailable.clear()
         self.update()
 
     def position_at(self, point: QPoint) -> Optional[Tuple[float, float]]:
@@ -171,6 +181,7 @@ class TileMap(QWidget):
         if zoom == self._zoom:
             return
         self._zoom = zoom
+        self._unavailable.clear()
         self.zoom_changed.emit(zoom)
         self.update()
 
@@ -204,6 +215,7 @@ class TileMap(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_origin = None
+            self._unavailable.clear()
             self.setCursor(Qt.CursorShape.CrossCursor)
         super().mouseReleaseEvent(event)
 
@@ -230,17 +242,26 @@ class TileMap(QWidget):
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
             self._tiles[(zoom, x, y)] = pixmap
+            self._unavailable.discard((zoom, x, y))
             if zoom == self._zoom:
                 self.update()
+
+    def _on_tile_failed(self, zoom: int, x: int, y: int) -> None:
+        self._unavailable.add((zoom, x, y))
+        if zoom == self._zoom:
+            self.update()
 
     def _tile(self, zoom: int, x: int, y: int) -> Optional[QPixmap]:
         """Return a cached tile, requesting it from the network when it is missing."""
 
         key = (zoom, x, y)
-        if key not in self._tiles:
+        if key in self._tiles:
+            return self._tiles[key]
+        # A tile that already failed is not asked for again on every repaint;
+        # any change of view clears that and tries once more.
+        if key not in self._unavailable:
             self._fetcher.request(zoom, x, y)
-            return None
-        return self._tiles[key]
+        return None
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -270,6 +291,7 @@ class TileMap(QWidget):
         last_y = math.floor((top + height) / TILE_SIZE)
 
         missing = False
+        offline = False
         for tile_x in range(first_x, last_x + 1):
             for tile_y in range(first_y, last_y + 1):
                 if tile_y < 0 or tile_y >= n:
@@ -279,13 +301,16 @@ class TileMap(QWidget):
                 pixmap = self._tile(self._zoom, tile_x % n, tile_y)
                 if pixmap is None:
                     missing = True
+                    offline = offline or (self._zoom, tile_x % n, tile_y) in self._unavailable
                     continue
                 painter.drawPixmap(target, pixmap)
 
-        if missing:
-            painter.setPen(QColor("#777777"))
-            painter.drawText(QRect(0, 0, width, 20), Qt.AlignmentFlag.AlignCenter,
-                             "loading map tiles…")
+        # Without tiles the map is blank, but the coordinates under the cursor are
+        # arithmetic: panning and re-pinning still work.  Drawn with the rest of
+        # the overlay so it does not end up underneath it.
+        self._tile_note = ("" if not missing else
+                           "no map tiles here — the pin still works" if offline else
+                           "loading map tiles…")
 
     def _marker_point(self) -> QPoint:
         """Where the marker sits on screen, which is the centre until the map is dragged."""
@@ -353,6 +378,11 @@ class TileMap(QWidget):
         painter.setPen(QColor("#202020"))
         for index, line in enumerate(lines):
             painter.drawText(box.adjusted(6, 4 + index * 16, -4, 0), Qt.AlignmentFlag.AlignTop, line)
+
+        if self._tile_note:
+            painter.setPen(QColor("#606060"))
+            painter.drawText(QRect(8, box.bottom() + 6, self.width() - 16, 18),
+                             Qt.AlignmentFlag.AlignLeft, self._tile_note)
 
         attribution = "© OpenStreetMap contributors"
         rect = QRect(self.width() - metrics.horizontalAdvance(attribution) - 12, self.height() - 34,

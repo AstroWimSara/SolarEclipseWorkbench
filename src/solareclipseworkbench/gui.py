@@ -2218,7 +2218,8 @@ class LocationPopup(QWidget, Observable):
             f"    {abs(latitude):.5f}° {'N' if latitude >= 0 else 'S'}    "
             f"{abs(longitude):.5f}° {'E' if longitude >= 0 else 'W'}"
             f"{moved}\n\n"
-            "It becomes a custom location and its altitude is looked up again.",
+            "It becomes a custom location.  The altitude is looked up again when "
+            "there is a connection, and otherwise stays as it is — check it.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

@@ -575,20 +575,23 @@ class LocationWidget(QWidget):
         """Move to a spot the user picked on the map.
 
         A picked spot is by definition not the saved location any more, so the
-        drop-down goes back to "Custom" and the fields become editable.  The
-        altitude belongs to the old spot and is looked up again for the new one.
+        drop-down goes back to "Custom" and the fields become editable.
         """
+        # The altitude belongs to the old spot, but it is the best number in the
+        # room until the lookup answers, and offline it is the only one there
+        # will be.  Switching to "Custom" empties every field, so it is carried
+        # across by hand rather than left to survive that.
+        altitude = self.altitude_edit.text()
+
         self.location_combo.setCurrentText("Custom")
         self._set_fields_editable(True)
 
         self.longitude_edit.setText(f"{longitude:.6f}")
         self.latitude_edit.setText(f"{latitude:.6f}")
+        self.altitude_edit.setText(altitude)
         if name is not None:
             self.location_name_edit.setText(name)
 
-        # Cleared rather than left standing: the altitude of the old spot looks
-        # like a measurement of the new one, and it feeds the contact times.
-        self.altitude_edit.clear()
         self._start_elevation_lookup(latitude, longitude)
 
     def get_coordinates(self):
@@ -898,10 +901,16 @@ class LocationWidget(QWidget):
             worker.wait(1000)
 
     def _on_elevation_error(self, message: str) -> None:
-        """Clear the placeholder text when the elevation lookup fails."""
+        """Keep whatever altitude is already there when the lookup fails.
+
+        In the field there is usually no network, and an altitude typed in or
+        carried over from the location this one was moved from is worth more
+        than sea level.  Only an empty field falls back to 0.
+        """
         self.altitude_edit.setPlaceholderText("Altitude above sea level")
-        self.altitude_edit.setText("0.0")
-        print(f"Elevation lookup failed: {message}")
+        if not self.altitude_edit.text().strip():
+            self.altitude_edit.setText("0.0")
+        logging.warning("Elevation lookup failed, keeping the altitude in the field: %s", message)
         worker = self._elevation_worker
         self._elevation_worker = None
         if worker is not None:
