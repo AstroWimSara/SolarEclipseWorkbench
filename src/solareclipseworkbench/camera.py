@@ -1080,9 +1080,9 @@ def _reset_canon_eos_ptp_session(camera) -> None:
 
 @_serialised_on_camera
 def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
-    """ Take a picture with the selected camera 
-    
-    Args: 
+    """ Take a picture with the selected camera
+
+    Args:
         - camera_name: Camera object
         - camera_settings: Settings of the camera (exposure, f, iso)
     """
@@ -1113,6 +1113,8 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
             logging.exception('Virtual camera capture failed: %s', e)
             raise
 
+    target = camera._camera if hasattr(camera, '_camera') else camera
+
     # For Nikon cameras, defensively ensure single-frame mode is active before
     # taking a single picture, in case a previous take_burst left the camera in
     # continuous/burst mode.
@@ -1120,7 +1122,6 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # a single picture (separate set_config call so a bad capturemode value can
     # never poison the ISO/shutter batch).
     if vendor in ('Nikon', 'Sony'):
-        target = camera._camera if hasattr(camera, '_camera') else camera
         try:
             cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
             capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(cfg2, 'capturemode'))
@@ -1146,8 +1147,13 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
             else:
                 logging.warning(
                     '%s: could not ensure single-frame mode before take_picture: %s', camera_name, exc)
-    else:
-        target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # Ensure that no lingering events are left before proceeding.
+    # Sony in PC mode must be skipped, to avoid disrupting Background Downloader.
+    if not (hasattr(camera, '_bg_downloader')
+            and camera._bg_downloader is not None
+            and camera._bg_downloader.is_alive()):
+        _drain_camera_events(target, context)
 
     # Fire the shutter via trigger_capture (PTP InitiateCapture).  This is the
     # only path that guarantees the camera uses the USB-programmed ISO, shutter
@@ -1270,7 +1276,7 @@ def __adapt_camera_settings(camera, camera_settings):
     # Always save to the camera's memory card, never to the computer.
     # This must be re-asserted on every shot because some cameras reset
     # capturetarget to 'Internal RAM' when the USB session is re-used.
-    # Skip Sony cameras, as this option is set in stone once USB is connected
+    # Skip Sony cameras, as this option is set in stone once USB is connected.
     try:
         if not _is_sony_camera_instance(camera):
             capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
@@ -1385,6 +1391,15 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             logging.exception('Virtual burst capture failed')
             raise
 
+    target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # Ensure that no lingering events are left before proceeding.
+    # Sony in PC mode must be skipped, to avoid disrupting Background Downloader.
+    if not (hasattr(camera, '_bg_downloader')
+            and camera._bg_downloader is not None
+            and camera._bg_downloader.is_alive()):
+        _drain_camera_events(target, context)
+
     # Take picture for real cameras
     if vendor == 'Canon':
         # For bursts, ensure the camera is in a continuous drive mode so
@@ -1410,7 +1425,6 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             _set_gp_config(camera, config, context)
 
             # Ensure that the camera truly finished, so it won't affect next commands
-            target = camera._camera if hasattr(camera, '_camera') else camera
             _wait_for_capture_complete(target, context)
             _drain_camera_events(target, context)
         except gphoto2.GPhoto2Error:
@@ -1454,7 +1468,6 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         except Exception:
             logging.exception('%s: high-level capture failed, trying low-level gp capture', camera_name)
             try:
-                target = camera._camera if hasattr(camera, '_camera') else camera
                 ctx = gp.gp_context_new()
                 gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
             except Exception:
@@ -1471,8 +1484,6 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         # Sony burst: enable continuous capture mode, turn on the bulb,
         # sleep for the chosen amount of time, turn off the bulb and
         # lastly drain camera's events
-        target = camera._camera if hasattr(camera, '_camera') else camera
-
         # Switch to continuous capture mode — look up the actual choice string so
         # we never send an invalid value that would cause set_config to fail.
         try:
@@ -1488,7 +1499,6 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             logging.warning('Could not set Sony capturemode to Continuous: %s', e)
 
         try:
-            _drain_camera_events(target, context)
             bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
             gp.gp_widget_set_value(bulb_mode, 1)
             _set_gp_config(camera, config, context)
@@ -1647,8 +1657,6 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             '%s: take_bracket 5-shot sequence: %s', camera_name, [choices[i] for i in indices],
         )
 
-        target = camera._camera if hasattr(camera, '_camera') else camera
-
         for idx in indices:
             speed = choices[idx]
             try:
@@ -1690,6 +1698,15 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
     if base_speed not in choices:
         base_speed = _find_closest_shutter_choice(ss_widget, base_speed)
 
+    target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # Ensure that no lingering events are left before proceeding.
+    # Sony in PC mode must be skipped, to avoid disrupting Background Downloader.
+    if not (hasattr(camera, '_bg_downloader')
+            and camera._bg_downloader is not None
+            and camera._bg_downloader.is_alive()):
+        _drain_camera_events(target, context)
+
     if vendor == 'Canon':
         try:
             # Turn on aeb
@@ -1708,7 +1725,6 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                 except Exception:
                     logging.exception('Bracket capture high-level failed, trying low-level gp capture')
                     try:
-                        target = camera._camera if hasattr(camera, '_camera') else camera
                         ctx = gp.gp_context_new()
                         gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
                     except Exception:
@@ -1791,7 +1807,6 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         except Exception:
             logging.exception('%s: high-level capture failed, trying low-level gp capture', camera_name)
             try:
-                target = camera._camera if hasattr(camera, '_camera') else camera
                 ctx = gp.gp_context_new()
                 gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
             except Exception:
@@ -1816,7 +1831,6 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         # Sony bracketing: enable continuous bracketing mode, turn on the bulb,
         # sleep for the chosen amount of time, turn off the bulb and
         # lastly drain camera's events in case 'PC+Camera' mode was chosen.
-        target = camera._camera if hasattr(camera, '_camera') else camera
         ev_step, num_pictures = parse_bracketing_string(steps)
         bracket_duration = calculate_bracketing_duration(ev_step, num_pictures, base_speed)
 
@@ -1834,7 +1848,6 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             logging.warning('Could not set Sony capturemode to "%s": %s', steps, e)
 
         try:
-            _drain_camera_events(target, context)
             bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
             gp.gp_widget_set_value(bulb_mode, 1)
             _set_gp_config(camera, config, context)
@@ -1965,6 +1978,8 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             logging.exception('Virtual camera HDR capture failed')
             raise
 
+    target = camera._camera if hasattr(camera, '_camera') else camera
+
     # For Nikon cameras, defensively ensure single-frame mode is active before
     # taking a single picture, in case a previous take_burst left the camera in
     # continuous/burst mode.
@@ -1972,7 +1987,6 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
     # a single picture (separate set_config call so a bad capturemode value can
     # never poison the ISO/shutter batch).
     if vendor in ('Nikon', 'Sony'):
-        target = camera._camera if hasattr(camera, '_camera') else camera
         try:
             cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
             capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(cfg2, 'capturemode'))
@@ -1998,11 +2012,6 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             else:
                 logging.warning(
                     '%s: could not ensure single-frame mode before take_picture: %s', camera_name, exc)
-    else:
-        target = camera._camera if hasattr(camera, '_camera') else camera
-
-    # Ensure that no lingering events are left before proceeding with the HDR sequence
-    _drain_camera_events(target, context)
 
     # Build the ordered shutter-speed list from this camera's actual capabilities
     choices = _get_shutter_speed_choices(config)
@@ -2043,15 +2052,35 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
                  [choices[i] for i in indices]
     )
 
+    # Ensure that no lingering events are left before proceeding.
+    # Sony in PC mode must be skipped, to avoid disrupting Background Downloader.
+    if not (hasattr(camera, '_bg_downloader')
+            and camera._bg_downloader is not None
+            and camera._bg_downloader.is_alive()):
+        _drain_camera_events(target, context)
+
     for idx in indices:
         speed = choices[idx]
         try:
             gp.gp_widget_set_value(ss_widget, speed)
             gp.gp_camera_set_config(target, config, context)
             gp.check_result(gp.gp_camera_trigger_capture(target, context))
+            # Sony requires this hack. It allows avoiding
+            # wrong shutter speed values being set or
+            # outright skipped frames in the sequence.
+            # Sadly, it's not fully solving this issue.
+            if vendor == 'Sony':
+                curr_speed = camera.get_config().get_child_by_name('shutterspeed').get_value()
+                if curr_speed != speed:
+                    logging.warning('%s: take_hdr has failed to set the shutter speed to %s',
+                                    camera_name,
+                                    speed)
+                    speed = curr_speed
+                speed_s = _parse_shutter_speed_seconds(speed)
+                time.sleep(speed_s)
             logging.info('%s: take_hdr has triggered capture at %s', camera_name, speed)
             # First successful trigger_capture establishes eos_remotemode=15 on EOS R.
-            if getattr(camera, 'vendor', None) == 'Canon':
+            if vendor == 'Canon':
                 camera._first_capture_done = True
         except gphoto2.GPhoto2Error as e:
             logging.warning('%s: take_hdr has failed capture at speed %s: %s', camera_name, speed, e)
@@ -2129,11 +2158,11 @@ def get_cameras() -> list:
 
 
 def __get_address(camera_name: str) -> str:
-    """ Gets the address of the camera if the name is given 
-    
+    """ Gets the address of the camera if the name is given
+
     Args:
         - camera_name: Name of the camera
-    
+
     Returns: Address of the camera
     """
 
@@ -2150,9 +2179,9 @@ def __get_address(camera_name: str) -> str:
 def get_camera(camera_name: str):
     """ Returns the initialized camera object of the selected camera
 
-    Args: 
+    Args:
         - camera_name: Name of the camera
-    
+
     Returns: Initialized camera object of the selected camera.
     """
 
@@ -2328,9 +2357,9 @@ def get_serial_number(camera: 'BaseCamera') -> Optional[str]:
 
 
 def get_free_space(camera: Camera) -> float:
-    """ Return the free space on the card of the selected camera 
-    
-    Args: 
+    """ Return the free space on the card of the selected camera
+
+    Args:
         - camera: Camera object
 
     Returns: Free space on the card of the camera [GB]
@@ -2378,9 +2407,9 @@ def get_free_space(camera: Camera) -> float:
 
 
 def get_space(camera: Camera) -> float:
-    """ Return the size of the memory card of the selected camera 
-    
-    Args: 
+    """ Return the size of the memory card of the selected camera
+
+    Args:
         - camera: Camera object
 
     Returns: Size of memory card of the camera [GB]
@@ -2426,8 +2455,8 @@ def get_space(camera: Camera) -> float:
 
 def get_shooting_mode(camera_name: str, camera: Camera) -> str:
     """ Return the shooting mode of the selected camera. Should be "Manual".
-    
-    Args: 
+
+    Args:
         - camera: Camera object
 
     Returns: Shooting mode of the camera
@@ -2467,8 +2496,8 @@ def get_shooting_mode(camera_name: str, camera: Camera) -> str:
 
 def get_focus_mode(camera: Camera) -> str:
     """ Return the focus mode of the selected camera. Should be "Manual"
-    
-    Args: 
+
+    Args:
         - camera: Camera object
 
     Returns: Focus mode of the camera
@@ -2492,9 +2521,9 @@ def get_focus_mode(camera: Camera) -> str:
 
 
 def get_battery_level(camera: Camera) -> str:
-    """ Return the battery level of the selected camera 
-    
-    Args: 
+    """ Return the battery level of the selected camera
+
+    Args:
         - camera: Name of the camera
 
     Returns: Current battery level of the camera [%]
@@ -2532,7 +2561,7 @@ def get_battery_level(camera: Camera) -> str:
 def get_time(camera: Camera) -> str:
     """ Returns the current time of the selected camera
 
-    Args: 
+    Args:
         - camera: Camera object
 
     Returns: Current time of the camera
@@ -2943,7 +2972,7 @@ def main():
             # mirror_lock(camera_object, camera_settings)
 
             # take_picture(camera_object, camera_settings)
-            
+
             time.sleep(1)
             camera_settings = CameraSettings(camera[0], "1/400", "6.3", 400)
             # take_bracket(camera_object, camera_settings, "+/- 1 2/3")

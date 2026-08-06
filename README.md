@@ -787,6 +787,7 @@ endfor
 - The computer you are using will probably fall asleep during the solar eclipse.  You can prevent this on macOS and Linux using [caffeine](https://www.caffeine-app.net/).  On Windows, you can use the Windows [powertoys](https://awake.den.dev/).
 - Sony cameras after cold boot might return wrong configuration values. Please press `Camera(s)` button to retrieve them one more time.
 - Nikon cameras after fresh connection might take a long time to finish their first shot. A potential mitigation is ensuring that the SD card has no other shots on it already.
+- Sony might set wrong shutter speed for some of the exposures when using `take_hdr` command. USB3 connection is prone to cause this more often than USB2 one. No solution has been devised yet.
 
 ## Converting scripts from Solar Eclipse Maestro
 
