@@ -102,7 +102,7 @@ pip install solareclipseworkbench
 
 ```bash
 sudo apt update
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.14-venv
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.14-venv gstreamer1.0-plugins-good
 ```
 
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
@@ -154,7 +154,7 @@ pip install solareclipseworkbench
 
 ```bash
 sudo apt update
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv gstreamer1.0-plugins-good
 ```
 
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
@@ -842,7 +842,7 @@ uv pip install PyObjC
 - Install uv by executing the following line in the terminal:
 
 ```bash
-sudo apt install curl git gstreamer1.0-plugins-base-apps
+sudo apt install curl git gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
