@@ -3372,7 +3372,7 @@ class QJobsTableView(QTableView):
             - row: Row index of the first job that will be executed next.
         """
 
-        index: QModelIndex = self.model().index(min(row + 5, self.model().rowCount(None) - 1), 0)
+        index: QModelIndex = self.model().index(min(row + 3, self.model().rowCount(None) - 1), 0)
         self.setCurrentIndex(index)
 
     def do(self, actions):

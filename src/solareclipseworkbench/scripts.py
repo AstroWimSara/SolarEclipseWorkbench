@@ -229,7 +229,7 @@ def convert_script(filename, reference_moments) -> io.StringIO:
                 for_parts = next(csv.reader([line], skipinitialspace=True))
                 start = for_parts[1] if len(for_parts) > 1 else ""
                 stop = for_parts[2] if len(for_parts) > 2 else ""
-                interval = int(for_parts[3]) if len(for_parts) > 3 else 10
+                interval = for_parts[3] if len(for_parts) > 3 else 10
                 start_delta = for_parts[4] if len(for_parts) > 4 else "0"
                 stop_delta = for_parts[5] if len(for_parts) > 5 else "0"
                 
@@ -268,7 +268,7 @@ def convert_script(filename, reference_moments) -> io.StringIO:
 
                             output_file = convert_command(line, start, sign, time_delta, extra_comment, output_file)
 
-                            current_time = current_time + timedelta(seconds=interval)
+                            current_time = current_time + timedelta(seconds=float(interval))
                             iteration = iteration + 1
 
                         line = input_file.readline()
