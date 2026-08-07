@@ -15,7 +15,7 @@ The exposure calculations take into account:
 All base values are for ISO 100, f/8, at 1000m observer altitude.
 """
 
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 import math
 
 
@@ -27,180 +27,65 @@ except ImportError:
     HAS_REFERENCE_MOMENTS = False
 
 
-# Exposure lookup tables: [sun_angle][observer_altitude] -> shutter_speed_seconds
-# Base settings: ISO 100, f/8
-# Sun angles: 0°, 5°, 10°, 15°, 30°, 45°, 60°
-# Observer altitudes: 0m, 1000m, 2000m, 3000m
+PHENOMENON_BRIGHTNESS = {
+    # Partial phases with fixed ND filters
+    "partial_nd_5_6": 128.0,
+    "partial_nd_5_0": 512.0,
+    "partial_nd_4_0": 4096.0,
 
-PARTIAL_PHASE_ND_5_0 = {
-    0: {0: 30.0, 1000: 2.0, 2000: 1/3, 3000: 1/8},
-    5: {0: 1/80, 1000: 1/160, 2000: 1/200, 3000: 1/320},
-    10: {0: 1/250, 1000: 1/320, 2000: 1/500, 3000: 1/500},
-    15: {0: 1/400, 1000: 1/500, 2000: 1/640, 3000: 1/640},
-    30: {0: 1/640, 1000: 1/640, 2000: 1/800, 3000: 1/800},
-    45: {0: 1/640, 1000: 1/800, 2000: 1/800, 3000: 1/800},
-    60: {0: 1/800, 1000: 1/800, 2000: 1/800, 3000: 1/800}
+    # Totality phenomena
+    "baileys_beads": 4096.0,
+    "chromosphere": 2048.0,
+    "prominences": 1024.0,
+    "corona_lower": 256.0,
+    "diamond_ring": 80.0,
+
+    "corona_inner_0.2R": 32.0,
+    "corona_inner_0.5R": 16.0,
+    "corona_middle": 4.0,
+
+    "corona_upper_2R": 2.0,
+    "corona_upper_3R": 1.0,
+    "corona_upper_4R": 0.5,
+    "corona_upper_8R": 0.2,
+
+    "earthshine": 0.09,
 }
 
-PARTIAL_PHASE_ND_4_0 = {
-    0: {0: 4.0, 1000: 1/5, 2000: 1/25, 3000: 1/60},
-    5: {0: 1/640, 1000: 1/1250, 2000: 1/1600, 3000: 1/2500},
-    10: {0: 1/2000, 1000: 1/2500, 2000: 1/4000, 3000: 1/4000},
-    15: {0: 1/3200, 1000: 1/4000, 2000: 1/5000, 3000: 1/5000},
-    30: {0: 1/5000, 1000: 1/5000, 2000: 1/6400, 3000: 1/6400},
-    45: {0: 1/6400, 1000: 1/6400, 2000: 1/6400, 3000: 1/6400},
-    60: {0: 1/6400, 1000: 1/6400, 2000: 1/6400, 3000: 1/6400}
-}
-
-BAILYS_BEADS = {
-    0: {0: 4.0, 1000: 1/5, 2000: 1/25, 3000: 1/60},
-    5: {0: 1/640, 1000: 1/1250, 2000: 1/1600, 3000: 1/2500},
-    10: {0: 1/2000, 1000: 1/2500, 2000: 1/4000, 3000: 1/4000},
-    15: {0: 1/3200, 1000: 1/4000, 2000: 1/5000, 3000: 1/5000},
-    30: {0: 1/5000, 1000: 1/5000, 2000: 1/6400, 3000: 1/6400},
-    45: {0: 1/6400, 1000: 1/6400, 2000: 1/6400, 3000: 1/6400},
-    60: {0: 1/6400, 1000: 1/6400, 2000: 1/6400, 3000: 1/6400}
-}
-
-CHROMOSPHERE = {
-    0: {0: 8.0, 1000: 1/2, 2000: 1/13, 3000: 1/30},
-    5: {0: 1/320, 1000: 1/640, 2000: 1/800, 3000: 1/1250},
-    10: {0: 1/1000, 1000: 1/1250, 2000: 1/2000, 3000: 1/2000},
-    15: {0: 1/1600, 1000: 1/2000, 2000: 1/2500, 3000: 1/2500},
-    30: {0: 1/2500, 1000: 1/250, 2000: 1/3200, 3000: 1/3200},
-    45: {0: 1/3200, 1000: 1/3200, 2000: 1/3200, 3000: 1/3200},
-    60: {0: 1/3200, 1000: 1/3200, 2000: 1/3200, 3000: 1/3200}
-}
-
-PROMINENCES = {
-    0: {0: 15.0, 1000: 1.0, 2000: 1/6, 3000: 1/15},
-    5: {0: 1/160, 1000: 1/320, 2000: 1/400, 3000: 1/640},
-    10: {0: 1/500, 1000: 1/640, 2000: 1/1000, 3000: 1/1000},
-    15: {0: 1/800, 1000: 1/1000, 2000: 1/1250, 3000: 1/1250},
-    30: {0: 1/1250, 1000: 1/1250, 2000: 1/1600, 3000: 1/1600},
-    45: {0: 1/1250, 1000: 1/1600, 2000: 1/1600, 3000: 1/1600},
-    60: {0: 1/1600, 1000: 1/1600, 2000: 1/1600, 3000: 1/1600}
-}
-
-CORONA_LOWER = {
-    0: {0: 60.0, 1000: 4.0, 2000: 1/1.3, 3000: 1/5},
-    5: {0: 1/40, 1000: 1/80, 2000: 1/125, 3000: 1/160},
-    10: {0: 1/125, 1000: 1/160, 2000: 1/250, 3000: 1/250},
-    15: {0: 1/200, 1000: 1/250, 2000: 1/320, 3000: 1/320},
-    30: {0: 1/320, 1000: 1/320, 2000: 1/400, 3000: 1/400},
-    45: {0: 1/320, 1000: 1/400, 2000: 1/400, 3000: 1/400},
-    60: {0: 1/400, 1000: 1/400, 2000: 1/400, 3000: 1/400}
-}
-
-CORONA_INNER_02R = {
-    0: {0: 480.0, 1000: 30.0, 2000: 6.0, 3000: 2.0},
-    5: {0: 1/5, 1000: 1/10, 2000: 1/15, 3000: 1/20},
-    10: {0: 1/15, 1000: 1/25, 2000: 1/30, 3000: 1/30},
-    15: {0: 1/25, 1000: 1/30, 2000: 1/40, 3000: 1/40},
-    30: {0: 1/40, 1000: 1/40, 2000: 1/50, 3000: 1/50},
-    45: {0: 1/40, 1000: 1/50, 2000: 1/50, 3000: 1/50},
-    60: {0: 1/50, 1000: 1/50, 2000: 1/50, 3000: 1/50}
-}
-
-CORONA_INNER_05R = {
-    0: {0: 960.0, 1000: 60.0, 2000: 11.0, 3000: 4.0},
-    5: {0: 1/2, 1000: 1/5, 2000: 1/8, 3000: 1/10},
-    10: {0: 1/8, 1000: 1/13, 2000: 1/15, 3000: 1/15},
-    15: {0: 1/13, 1000: 1/15, 2000: 1/20, 3000: 1/20},
-    30: {0: 1/20, 1000: 1/25, 2000: 1/25, 3000: 1/25},
-    45: {0: 1/25, 1000: 1/25, 2000: 1/25, 3000: 1/25},
-    60: {0: 1/25, 1000: 1/25, 2000: 1/25, 3000: 1/25}
-}
-
-CORONA_MIDDLE = {
-    0: {0: 3900.0, 1000: 240.0, 2000: 46.0, 3000: 16.0},
-    5: {0: 2.0, 1000: 1.0, 2000: 1/1.6, 3000: 1/2.5},
-    10: {0: 1/2, 1000: 1/3, 2000: 1/4, 3000: 1/5},
-    15: {0: 1/3, 1000: 1/4, 2000: 1/5, 3000: 1/6},
-    30: {0: 1/5, 1000: 1/6, 2000: 1/6, 3000: 1/6},
-    45: {0: 1/6, 1000: 1/6, 2000: 1/6, 3000: 1/6},
-    60: {0: 1/6, 1000: 1/6, 2000: 1/6, 3000: 1/6}
-}
-
-CORONA_UPPER = {
-    0: {0: 7800.0, 1000: 480.0, 2000: 120.0, 3000: 32.0},
-    5: {0: 4.0, 1000: 2.0, 2000: 1.0, 3000: 1/1.3},
-    10: {0: 1.0, 1000: 1/1.3, 2000: 1/1.6, 3000: 1/2},
-    15: {0: 1/1.6, 1000: 1/2, 2000: 1/2.5, 3000: 1/2.5},
-    30: {0: 1/2.5, 1000: 1/3, 2000: 1/4, 3000: 1/4},
-    45: {0: 1/3, 1000: 1/4, 2000: 1/4, 3000: 1/4},
-    60: {0: 1/4, 1000: 1/4, 2000: 1/4, 3000: 1/4}
-}
-
-CORONA_OUTER_3R = {
-    0: {0: 15540.0, 1000: 960.0, 2000: 180.0, 3000: 60.0},
-    5: {0: 7.0, 1000: 4.0, 2000: 2.0, 3000: 2.0},
-    10: {0: 2.0, 1000: 1.0, 2000: 1.0, 3000: 1.0},
-    15: {0: 1.0, 1000: 1.0, 2000: 1.0, 3000: 1/1.3},
-    30: {0: 1/1.3, 1000: 1/1.3, 2000: 1/1.6, 3000: 1/1.6},
-    45: {0: 1/1.3, 1000: 1/1.6, 2000: 1/1.6, 3000: 1/1.6},
-    60: {0: 1/1.6, 1000: 1/1.6, 2000: 1/1.6, 3000: 1/1.6}
-}
-
-CORONA_OUTER_4R = {
-    0: {0: 31080.0, 1000: 1920.0, 2000: 360.0, 3000: 120.0},
-    5: {0: 14.0, 1000: 7.0, 2000: 5.0, 3000: 3.0},
-    10: {0: 4.0, 1000: 3.0, 2000: 2.0, 3000: 2.0},
-    15: {0: 3.0, 1000: 2.0, 2000: 2.0, 3000: 2.0},
-    30: {0: 2.0, 1000: 1.0, 2000: 1.0, 3000: 1.0},
-    45: {0: 1.0, 1000: 1.0, 2000: 1.0, 3000: 1.0},
-    60: {0: 1.0, 1000: 1.0, 2000: 1.0, 3000: 1.0}
-}
-
-CORONA_OUTER_8R = {
-    0: {0: 77700.0, 1000: 4800.0, 2000: 900.0, 3000: 300.0},
-    5: {0: 36.0, 1000: 18.0, 2000: 11.0, 3000: 9.0},
-    10: {0: 11.0, 1000: 7.0, 2000: 6.0, 3000: 5.0},
-    15: {0: 7.0, 1000: 5.0, 2000: 4.0, 3000: 4.0},
-    30: {0: 4.0, 1000: 4.0, 2000: 3.0, 3000: 3.0},
-    45: {0: 4.0, 1000: 3.0, 2000: 3.0, 3000: 3.0},
-    60: {0: 3.0, 1000: 3.0, 2000: 3.0, 3000: 3.0}
-}
-
-DIAMOND_RING = {
-    0: {0: 180.0, 1000: 12.0, 2000: 2, 3000: 1/1.3},
-    5: {0: 1/13, 1000: 1/25, 2000: 1/40, 3000: 1/50},
-    10: {0: 1/40, 1000: 1/60, 2000: 1/80, 3000: 1/80},
-    15: {0: 1/60, 1000: 1/80, 2000: 1/100, 3000: 1/100},
-    30: {0: 1/100, 1000: 1/100, 2000: 1/125, 3000: 1/125},
-    45: {0: 1/125, 1000: 1/125, 2000: 1/125, 3000: 1/125},
-    60: {0: 1/125, 1000: 1/125, 2000: 1/125, 3000: 1/125}
-}
-
-EARTHSHINE = {
-    0: {0: 172680.0, 1000: 10740.0, 2000: 2040.0, 3000: 720.0},  # 2878m, 179m, 34m, 12m
-    5: {0: 60.0, 1000: 39.0, 2000: 25.0, 3000: 19.0},
-    10: {0: 24.0, 1000: 16.0, 2000: 13.0, 3000: 11.0},
-    15: {0: 15.0, 1000: 11.0, 2000: 10.0, 3000: 9.0},
-    30: {0: 9.0, 1000: 8.0, 2000: 7.0, 3000: 7.0},
-    45: {0: 8.0, 1000: 7.0, 2000: 7.0, 3000: 7.0},
-    60: {0: 7.0, 1000: 7.0, 2000: 7.0, 3000: 6.0}
-}
+# Reference used for phenomenon="partial" with an arbitrary ND filter.
+#
+PARTIAL_REFERENCE_ND = 5.0
+PARTIAL_REFERENCE_BRIGHTNESS = PHENOMENON_BRIGHTNESS["partial_nd_5_0"]
+PARTIAL_UNFILTERED_BRIGHTNESS = (
+    PARTIAL_REFERENCE_BRIGHTNESS * 10 ** PARTIAL_REFERENCE_ND
+)
 
 
-# Phenomenon name mapping
-EXPOSURE_TABLES = {
-    "partial_nd5": PARTIAL_PHASE_ND_5_0,
-    "partial_nd4": PARTIAL_PHASE_ND_4_0,
-    "bailys_beads": BAILYS_BEADS,
-    "chromosphere": CHROMOSPHERE,
-    "prominences": PROMINENCES,
-    "corona_lower": CORONA_LOWER,
-    "corona_inner_0.2R": CORONA_INNER_02R,
-    "corona_inner_0.5R": CORONA_INNER_05R,
-    "corona_middle": CORONA_MIDDLE,
-    "corona_upper": CORONA_UPPER,
-    "corona_outer_3R": CORONA_OUTER_3R,
-    "corona_outer_4R": CORONA_OUTER_4R,
-    "corona_outer_8R": CORONA_OUTER_8R,
-    "diamond_ring": DIAMOND_RING,
-    "earthshine": EARTHSHINE
+PHENOMENON_ALIASES = {
+    # Common spelling variants
+    "bailys_beads": "baileys_beads",
+    "baily_beads": "baileys_beads",
+    "baily's_beads": "baileys_beads",
+    "baileys_beads": "baileys_beads",
+
+    # Lower-case R variants
+    "corona_inner_0.2r": "corona_inner_0.2R",
+    "corona_inner_0.5r": "corona_inner_0.5R",
+    "corona_upper_2r": "corona_upper_2R",
+    "corona_upper_3r": "corona_upper_3R",
+    "corona_upper_4r": "corona_upper_4R",
+    "corona_upper_8r": "corona_upper_8R",
+
+    # Names used in your old code
+    "corona_upper": "corona_upper_2R",
+    "corona_outer_3R": "corona_upper_3R",
+    "corona_outer_4R": "corona_upper_4R",
+    "corona_outer_8R": "corona_upper_8R",
+
+    # Generic partial mode
+    "partial": "partial",
 }
+
 
 
 def _interpolate_1d(x: float, x0: float, x1: float, y0: float, y1: float) -> float:
@@ -256,6 +141,117 @@ def _interpolate_2d(sun_angle: float, observer_alt: float, lookup_table: Dict) -
     return _interpolate_1d(sun_angle, sun_lower, sun_upper, v0, v1)
 
 
+def normalise_phenomenon_name(phenomenon: str) -> str:
+    """
+    Normalise phenomenon names to the keys used by PHENOMENON_BRIGHTNESS.
+    """
+
+    key = phenomenon.strip()
+
+    if key in PHENOMENON_BRIGHTNESS:
+        return key
+
+    if key in PHENOMENON_ALIASES:
+        return PHENOMENON_ALIASES[key]
+
+    lower_key = key.lower()
+
+    if lower_key in PHENOMENON_ALIASES:
+        return PHENOMENON_ALIASES[lower_key]
+
+    return key
+
+
+def atmos_extinction_factor(
+    obj_altitude_deg: float,
+    observer_altitude_m: float,
+) -> float:
+    """
+    Python implementation of the JavaScript atmosExtinctionFactor function.
+
+    Parameters
+    ----------
+    obj_altitude_deg:
+        Object altitude above the horizon in degrees.
+
+    observer_altitude_m:
+        Observer altitude above sea level in metres.
+
+    Returns
+    -------
+    float
+        Atmospheric extinction factor.
+    """
+
+    if obj_altitude_deg > 0.0:
+        deg_to_rad = math.pi / 180.0
+        cos_z = math.cos((90.0 - obj_altitude_deg) * deg_to_rad)
+        air_mass = 1.0 / (cos_z + 0.025 * math.exp(-11.0 * cos_z))
+    else:
+        air_mass = 40.0
+
+    # Ozone
+    extinction = 0.016
+
+    # Rayleigh scattering
+    extinction += 0.1451 * math.exp(
+        -(observer_altitude_m / 1000.0) / 7.996
+    )
+
+    # Aerosol extinction to the human eye
+    extinction += 0.120 * math.exp(
+        -(observer_altitude_m / 1000.0) / 1.5
+    )
+
+    extinction *= air_mass
+
+    return 2.512 ** extinction
+
+
+def brightness_for_phenomenon(
+    phenomenon: str,
+    nd_filter: Optional[float] = None,
+) -> float:
+    """
+    Return the JavaScript EclipseEvent brightness value for a phenomenon.
+
+    For phenomenon="partial", nd_filter is required and is interpreted as
+    optical density, e.g. ND5.0 -> nd_filter=5.0.
+
+    For all totality phenomena, nd_filter must be None.
+    """
+
+    key = normalise_phenomenon_name(phenomenon)
+
+    if key == "partial":
+        if nd_filter is None:
+            raise ValueError(
+                "phenomenon='partial' requires nd_filter, for example nd_filter=5.0."
+            )
+
+        if nd_filter < 0:
+            raise ValueError("nd_filter may not be negative.")
+
+        return PARTIAL_UNFILTERED_BRIGHTNESS / (10 ** nd_filter)
+
+    if key not in PHENOMENON_BRIGHTNESS:
+        known = ", ".join(sorted(PHENOMENON_BRIGHTNESS))
+        raise ValueError(
+            f"Unknown phenomenon {phenomenon!r}. "
+            f"Known phenomena are: {known}, or use phenomenon='partial' "
+            f"with nd_filter."
+        )
+
+    if nd_filter is not None:
+        raise ValueError(
+            "nd_filter is only supported with phenomenon='partial'. "
+            f"The phenomenon {phenomenon!r} already has a fixed empirical "
+            "brightness value."
+        )
+
+    return PHENOMENON_BRIGHTNESS[key]
+
+
 def calculate_exposure(
     phenomenon: str,
     sun_altitude_deg: float,
@@ -284,42 +280,188 @@ def calculate_exposure(
         - Each f-stop doubles/halves exposure time
         - ND filter reduces light by 10^ND factor
     """
-    # Select appropriate table based on phenomenon and filter
-    if phenomenon.startswith("partial") and nd_filter:
-        if nd_filter >= 4.5:
-            table_key = "partial_nd5"
-        else:
-            table_key = "partial_nd4"
-    else:
-        table_key = phenomenon
-    
-    if table_key not in EXPOSURE_TABLES:
-        raise ValueError(f"Unknown phenomenon: {phenomenon}")
-    
-    lookup_table = EXPOSURE_TABLES[table_key]
-    
-    # Get base exposure (ISO 100, f/8)
-    base_exposure = _interpolate_2d(sun_altitude_deg, observer_altitude_m, lookup_table)
-    
-    # Adjust for ISO (ISO doubling = exposure halving)
-    iso_factor = 100.0 / iso
-    
-    # Adjust for aperture (each stop = 2x light)
-    # f/8 is base, so f/5.6 (one stop wider) = 2x light = 0.5x exposure
-    # f/11 (one stop narrower) = 0.5x light = 2x exposure
-    # Aperture area ∝ 1/f²
-    aperture_factor = (aperture / 8.0) ** 2
-    
-    # Adjust for ND filter (if not already in base table)
-    nd_factor = 1.0
-    if nd_filter and not phenomenon.startswith("partial"):
-        nd_factor = 10 ** (-nd_filter)
-    
-    # Calculate final exposure
-    exposure = base_exposure * iso_factor * aperture_factor * nd_factor
-    
-    return exposure
+    """
+    Calculate the atmospheric-extinction-corrected exposure time in seconds.
 
+        Exposure = fStop^2 / (ISO * Brightness)
+
+    followed by:
+
+        Exposure *= atmosExtinctionFactor(sunAlt, obsAlt)
+                    / atmosExtinctionFactor(90.0, 0.0)
+    """
+
+    if iso <= 0:
+        raise ValueError("iso must be greater than zero.")
+
+    if aperture <= 0:
+        raise ValueError("aperture must be greater than zero.")
+
+    brightness = brightness_for_phenomenon(
+        phenomenon=phenomenon,
+        nd_filter=nd_filter,
+    )
+
+    if brightness <= 0:
+        raise ValueError("brightness must be greater than zero.")
+
+    exposure_s = (aperture * aperture) / (iso * brightness)
+
+    reference_extinction = atmos_extinction_factor(90.0, 0.0)
+
+    if reference_extinction == 0:
+        raise ValueError("reference atmospheric extinction factor may not be zero.")
+
+    extinction_correction = (
+        atmos_extinction_factor(sun_altitude_deg, observer_altitude_m)
+        / reference_extinction
+    )
+
+    return exposure_s * extinction_correction
+
+
+def calculate_eclipse_exposures(
+    eclipse_time,
+    longitude: float,
+    latitude: float,
+    observer_altitude_m: float,
+    iso: int,
+    aperture: float,
+    nd_filter: Optional[float] = None,
+    timings: Optional[dict] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculate optimal exposures for all eclipse phenomena based on location
+    and camera settings.
+
+    Args:
+        eclipse_time:
+            astropy.time.Time object for the eclipse date.
+
+        longitude:
+            Observer longitude in degrees.
+
+        latitude:
+            Observer latitude in degrees.
+
+        observer_altitude_m:
+            Observer altitude above sea level in metres.
+
+        iso:
+            ISO setting.
+
+        aperture:
+            Aperture f-stop.
+
+        nd_filter:
+            ND filter optical density for the partial phase,
+            for example 5.0 for ND5.0. Use None if no partial-phase
+            exposures should be calculated.
+
+        timings:
+            Optional dictionary with timing moments. Each timing object is
+            expected to provide altitude, time_utc, and time_local.
+
+    Returns:
+        Dictionary mapping phenomenon names to calculated exposures and metadata.
+
+        Example:
+            {
+                "partial_c1": {
+                    "exposure": 0.00125,
+                    "shutter": "1/800",
+                    "sun_altitude": 45.2,
+                    "time_utc": ...,
+                    "time_local": ...
+                },
+                ...
+            }
+    """
+
+    # If reference moments are required but not provided, compute them.
+    if timings is None:
+        if not HAS_REFERENCE_MOMENTS:
+            raise ImportError("reference_moments module not available")
+
+        timings, magnitude, eclipse_type = calculate_reference_moments(
+            longitude,
+            latitude,
+            observer_altitude_m,
+            eclipse_time,
+        )
+
+    exposures: Dict[str, Dict[str, Any]] = {}
+
+    def add_exposure(
+        name: str,
+        phenomenon: str,
+        moment_key: str,
+        nd: Optional[float] = None,
+    ) -> None:
+        """
+        Add one exposure entry if the requested timing moment exists.
+        """
+
+        if moment_key not in timings:
+            return
+
+        moment = timings[moment_key]
+        sun_alt = moment.altitude
+
+        exp_time = calculate_exposure(
+            phenomenon=phenomenon,
+            sun_altitude_deg=sun_alt,
+            observer_altitude_m=observer_altitude_m,
+            iso=iso,
+            aperture=aperture,
+            nd_filter=nd,
+        )
+
+        exposures[name] = {
+            "exposure": exp_time,
+            "shutter": format_shutter_speed(exp_time),
+            "sun_altitude": sun_alt,
+            "time_utc": moment.time_utc,
+            "time_local": moment.time_local,
+        }
+
+    # Partial phases.
+    #
+    # The partial phases require an ND filter. If nd_filter is None, these
+    # entries are skipped, which matches your original behaviour.
+    if nd_filter is not None:
+        add_exposure("partial_c1", "partial", "C1", nd_filter)
+        add_exposure("partial_c4", "partial", "C4", nd_filter)
+
+    # Totality phenomena.
+    #
+    # Only calculate these if the eclipse has C2 and C3 timings.
+    if "C2" in timings and "C3" in timings:
+        # Phenomena at C2, start of totality.
+        add_exposure("baileys_beads_c2", "baileys_beads", "C2")
+        add_exposure("chromosphere_c2", "chromosphere", "C2")
+        add_exposure("diamond_ring_c2", "diamond_ring", "C2")
+
+        # Corona and prominences at maximum eclipse.
+        add_exposure("prominences", "prominences", "MAX")
+        add_exposure("corona_lower", "corona_lower", "MAX")
+        add_exposure("corona_inner_0.2R", "corona_inner_0.2R", "MAX")
+        add_exposure("corona_inner_0.5R", "corona_inner_0.5R", "MAX")
+        add_exposure("corona_middle", "corona_middle", "MAX")
+        add_exposure("corona_upper_2R", "corona_upper_2R", "MAX")
+        add_exposure("corona_upper_3R", "corona_upper_3R", "MAX")
+        add_exposure("corona_upper_4R", "corona_upper_4R", "MAX")
+        add_exposure("corona_upper_8R", "corona_upper_8R", "MAX")
+
+        # Phenomena at C3, end of totality.
+        add_exposure("baileys_beads_c3", "baileys_beads", "C3")
+        add_exposure("chromosphere_c3", "chromosphere", "C3")
+        add_exposure("diamond_ring_c3", "diamond_ring", "C3")
+
+        # Earthshine at maximum eclipse.
+        add_exposure("earthshine", "earthshine", "MAX")
+
+    return exposures
 
 def round_to_camera_shutter_speed(exposure_seconds: float) -> float:
     """
