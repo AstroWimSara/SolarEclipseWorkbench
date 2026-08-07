@@ -1,5 +1,20 @@
 # Solar Eclipse Workbench
 
+** Important notice**:  When generating a script where the sun is below 5 degrees, the calculated shutter speeds are too long!  Please use version 2.0.0rc5 or newer for the correct values!
+
+Installing version 2.0.0rc5 can be done very similar to the installation instructions, but replace the install command with 
+
+```bash
+pip install --pre solareclipseworkbench
+```
+
+to update, use
+
+```bash
+pip install --upgrade --pre solareclipseworkbench
+```
+
+
 ![Solar Eclipse Workbench logo](src/solareclipseworkbench/img/logo-small.jpg)
 
 ## Table of contents
