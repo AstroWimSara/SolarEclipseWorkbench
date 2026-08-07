@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.10.8] - 2026-08-07
+
+**This is an important fix, certainly when the sun is low above the horizon (below 5 degrees).  For a lot of people going to Spain for the August 12, 2026 eclipse, this is during the partial phases after totality.  ** 
+
+Please make a new script using the wizard to get the correct shutter speeds for your camera and location.  The wizard will now use the fixed math to calculate the correct shutter speeds.
+
+### Fixed
+
+- Post-C3 partials shutter speeds math looks broken - #184 by @WimDeMeester
+   - Before this fix, the calculated shutter speed when the sun was below 5 degrees were way to long.
+
 ## [1.10.7] - 2026-07-23
 
 ### Fixed
