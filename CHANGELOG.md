@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0rc4] - 2026-08-07
+
+### Fixed
+
+- for command can now handle float interval; jobs scrolling improved - #186 by @fliker09
+
 ## [2.0.0rc3] - 2026-08-06
 
 ### Fixed
