@@ -8,6 +8,10 @@ import pytest
 # Run Qt headless unless the caller explicitly asked for a display platform
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# Never download the 72 MB lunar limb profile from a test: tests that need it
+# are skipped when it is not installed
+os.environ.setdefault("SEW_NO_LIMB_DOWNLOAD", "1")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def qapp():

@@ -180,7 +180,7 @@ Choose which eclipse phenomena to photograph:
 - **First (C1) and Fourth (C4) Contacts**: Beginning and end of partial eclipse
 - **Equispaced Shots During Partial Phases**: Regular interval shots with solar filter
 - **Diamond Rings (C2 and C3)**: Just before/after totality
-- **Baily's Beads**: Beautiful beading effect at C2/C3
+- **Baily's Beads**: Beautiful beading effect at C2/C3.  With the lunar limb profile (downloaded automatically), the wizard knows when the beads are visible at your location and centres each beads burst on that window; the window is written as a comment in the script.  The bursts are still written relative to C2 and C3, so the script also works on a computer without the limb profile (then timed against the mean lunar limb)
 - **Chromosphere**: Sun's chromosphere visible briefly at C3
 - **Solar Corona**: During totality (with adjustable step interval)
 
