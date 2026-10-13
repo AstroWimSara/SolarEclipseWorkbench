@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Cameras could not be used when the computer's language is not English, e.g. a Sony in Manual mode was reported as `Manuale` on an Italian system and rejected (Issue #185).  gphoto2 values and numbers are now always in English (C locale); the character set still follows the system language, so `export LC_ALL=C` is no longer needed
 - A closed Sony settings banner no longer reappears when a scheduled `sync_cameras` command runs; pressing `Camera(s)` still shows it again (Issue #187)
 - Sunrise and sunset are now searched over the local calendar day of the eclipse.  Far from Greenwich the wrong day could be returned, e.g. the next morning's sunrise for Australia (Issue #188)
 - Sun altitudes in the GUI and in the wizard's script comments are now the apparent altitude (with atmospheric refraction), consistent with sunrise/sunset and with what Stellarium shows.  Before, the geometric altitude was shown, so a shot labelled "sun 0.1°" came about 5 minutes before the displayed sunset (Issue #188).  Exposures are still calculated with the geometric altitude

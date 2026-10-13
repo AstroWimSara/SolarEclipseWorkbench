@@ -2425,13 +2425,33 @@ def mirror_lock(camera: Camera, camera_settings: CameraSettings) -> None:
         gp.gp_camera_set_config(target, config, context)
 
 
+def _set_gphoto2_locale() -> None:
+    """Use the user's character set, but untranslated gphoto2 values.
+
+    libgphoto2 translates widget values with gettext (a Sony in Manual mode reports
+    "Manuale" on an Italian system) and formats numbers with the C library locale
+    ("f/5,6").  The code compares against the English values, so messages and numbers
+    are kept in the C locale.  The character set (LC_CTYPE) still follows the user's
+    locale, so camera strings with non-ASCII characters are converted correctly.
+    Qt sets the whole locale from the environment when the application starts, so this
+    is called again before cameras are detected or opened.  (Issue #185)
+    """
+    try:
+        locale.setlocale(locale.LC_ALL, '')
+    except locale.Error as e:
+        logging.debug('Could not set the locale from the environment: %s', e)
+    for category in ('LC_MESSAGES', 'LC_NUMERIC'):
+        if hasattr(locale, category):  # LC_MESSAGES does not exist on Windows
+            locale.setlocale(getattr(locale, category), 'C')
+
+
 def get_cameras() -> list:
     """ Returns a list with the cameras.
 
     Returns: List with all the attached cameras ([name, USB port]).
     """
 
-    locale.setlocale(locale.LC_ALL, '')
+    _set_gphoto2_locale()
 
     gp.check_result(gp.use_python_logging())
     # make a list of all available cameras
@@ -2563,6 +2583,7 @@ def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) 
     """
     display_name = alias if alias else model_name
     logging.debug('get_camera_by_port(%s, %s, alias=%s)', model_name, port, alias)
+    _set_gphoto2_locale()
 
     port_info_list = gp.PortInfoList()
     port_info_list.load()
