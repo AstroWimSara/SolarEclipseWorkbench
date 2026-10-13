@@ -20,10 +20,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Back to the newest python-gphoto2 (2.6.4, with libgphoto2 2.5.34); `take_burst` on Canon now works with both the old and the new libgphoto2
 - Every log message about one camera now starts with that camera's name (its alias when one is configured), so a DEBUG log with several cameras connected shows which body each message is about (Issue #156)
+- The eclipse plot and the jobs table are now separated by a splitter: drag it to give the scheduler more room, e.g. on widescreen displays.  Its position is remembered with `Save` and when closing the application (Issue #182)
 
 ### Fixed
 
 - Cameras could not be used when the computer's language is not English, e.g. a Sony in Manual mode was reported as `Manuale` on an Italian system and rejected (Issue #185).  gphoto2 values and numbers are now always in English (C locale); the character set still follows the system language, so `export LC_ALL=C` is no longer needed
+- The values in the main window (reference moments, date and time) were drawn higher than their row titles; they are now vertically centred on the same line (Issue #190)
 - A closed Sony settings banner no longer reappears when a scheduled `sync_cameras` command runs; pressing `Camera(s)` still shows it again (Issue #187)
 - Sunrise and sunset are now searched over the local calendar day of the eclipse.  Far from Greenwich the wrong day could be returned, e.g. the next morning's sunrise for Australia (Issue #188)
 - Sun altitudes in the GUI and in the wizard's script comments are now the apparent altitude (with atmospheric refraction), consistent with sunrise/sunset and with what Stellarium shows.  Before, the geometric altitude was shown, so a shot labelled "sun 0.1°" came about 5 minutes before the displayed sunset (Issue #188).  Exposures are still calculated with the geometric altitude

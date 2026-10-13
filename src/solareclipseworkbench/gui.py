@@ -26,7 +26,7 @@ from PyQt6.QtCore import QTimer, QRect, Qt, QAbstractTableModel, QModelIndex, QS
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -429,78 +429,78 @@ class SolarEclipseView(QMainWindow, Observable):
         self.reference_moments_widget = QWidget()
 
         self.c1_time_local_label = QLabel()
-        self.c1_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c1_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c2_time_local_label = QLabel()
-        self.c2_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c2_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.max_time_local_label = QLabel()
-        self.max_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.max_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c3_time_local_label = QLabel()
-        self.c3_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c3_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c4_time_local_label = QLabel()
-        self.c4_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c4_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sunrise_time_local_label = QLabel()
-        self.sunrise_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.sunrise_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sunset_time_local_label = QLabel()
-        self.sunset_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.sunset_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c1_time_utc_label = QLabel()
-        self.c1_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c1_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c2_time_utc_label = QLabel()
-        self.c2_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c2_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.max_time_utc_label = QLabel()
-        self.max_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.max_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c3_time_utc_label = QLabel()
-        self.c3_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c3_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c4_time_utc_label = QLabel()
-        self.c4_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c4_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sunrise_time_utc_label = QLabel()
-        self.sunrise_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.sunrise_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sunset_time_utc_label = QLabel()
-        self.sunset_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.sunset_time_utc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c1_countdown_label = QLabel()
-        self.c1_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c1_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c2_countdown_label = QLabel()
-        self.c2_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c2_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.max_countdown_label = QLabel()
-        self.max_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.max_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c3_countdown_label = QLabel()
-        self.c3_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c3_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c4_countdown_label = QLabel()
-        self.c4_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c4_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sunrise_countdown_label = QLabel()
-        self.sunrise_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.sunrise_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sunset_countdown_label = QLabel()
-        self.sunset_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.sunset_countdown_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c1_azimuth_label = QLabel()
-        self.c1_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c1_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c2_azimuth_label = QLabel()
-        self.c2_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c2_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.max_azimuth_label = QLabel()
-        self.max_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.max_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c3_azimuth_label = QLabel()
-        self.c3_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c3_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c4_azimuth_label = QLabel()
-        self.c4_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c4_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c1_altitude_label = QLabel()
-        self.c1_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c1_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c2_altitude_label = QLabel()
-        self.c2_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c2_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.max_altitude_label = QLabel()
-        self.max_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.max_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c3_altitude_label = QLabel()
-        self.c3_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c3_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c4_altitude_label = QLabel()
-        self.c4_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.c4_altitude_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.date_label = QLabel(f"Date [{self.date_format}]")
         self.date_label_local = QLabel()
-        self.date_label_local.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.date_label_local.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.time_label_local = QLabel()
-        self.time_label_local.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.time_label_local.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.time_label_local.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.time_label_local.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.date_label_utc = QLabel()
-        self.date_label_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.date_label_utc.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.time_label_utc = QLabel()
-        self.time_label_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.time_label_utc.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.longitude_label = QLabel()
         self.longitude_label.setToolTip(
@@ -533,7 +533,8 @@ class SolarEclipseView(QMainWindow, Observable):
             - Altitude [m];
             - Eclipse date;
             - Date format;
-            - Time format.
+            - Time format;
+            - Position of the splitter between the eclipse plot and the jobs table.
         """
 
         # Location
@@ -556,6 +557,27 @@ class SolarEclipseView(QMainWindow, Observable):
         self.settings.setValue("date_format", self.date_format)
         self.settings.setValue("time_format", self.time_format)
 
+        # Layout
+
+        self.save_layout_settings()
+
+    def save_layout_settings(self):
+        """ Save the position of the splitter between the eclipse plot and the jobs table. """
+
+        settings = getattr(self, "settings", None)
+        if settings is not None:
+            settings.setValue("output_splitter_state", self.output_splitter.saveState())
+
+    def restore_layout_settings(self):
+        """ Restore the position of the splitter between the eclipse plot and the jobs table. """
+
+        settings = getattr(self, "settings", None)
+        if settings is None:
+            return
+        state = settings.value("output_splitter_state", None)
+        if state is not None:
+            self.output_splitter.restoreState(state)
+
     def init_ui(self):
         """ Add all components to the UI. """
 
@@ -569,8 +591,8 @@ class SolarEclipseView(QMainWindow, Observable):
         place_time_group_box = QGroupBox()
         place_time_grid_layout = QGridLayout()
 
-        place_time_grid_layout.addWidget(QLabel("Local", alignment=Qt.AlignmentFlag.AlignRight), 0, 1)
-        place_time_grid_layout.addWidget(QLabel("UTC", alignment=Qt.AlignmentFlag.AlignRight), 0, 2)
+        place_time_grid_layout.addWidget(QLabel("Local", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 1)
+        place_time_grid_layout.addWidget(QLabel("UTC", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 2)
 
         place_time_grid_layout.addWidget(self.date_label, 1, 0)
         place_time_grid_layout.addWidget(self.date_label_local, 1, 1)
@@ -609,7 +631,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         reference_moments_group_box = QGroupBox()
         reference_moments_grid_layout = QGridLayout()
-        reference_moments_grid_layout.addWidget(QLabel("Time (local)", alignment=Qt.AlignmentFlag.AlignRight), 0, 1)
+        reference_moments_grid_layout.addWidget(QLabel("Time (local)", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 1)
         reference_moments_grid_layout.addWidget(self.c1_time_local_label, 1, 1)
         reference_moments_grid_layout.addWidget(self.c2_time_local_label, 2, 1)
         reference_moments_grid_layout.addWidget(self.max_time_local_label, 3, 1)
@@ -617,7 +639,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_time_local_label, 5, 1)
         reference_moments_grid_layout.addWidget(self.sunrise_time_local_label, 6, 1)
         reference_moments_grid_layout.addWidget(self.sunset_time_local_label, 7, 1)
-        reference_moments_grid_layout.addWidget(QLabel("Time (UTC)", alignment=Qt.AlignmentFlag.AlignRight), 0, 2)
+        reference_moments_grid_layout.addWidget(QLabel("Time (UTC)", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 2)
         reference_moments_grid_layout.addWidget(self.c1_time_utc_label, 1, 2)
         reference_moments_grid_layout.addWidget(self.c2_time_utc_label, 2, 2)
         reference_moments_grid_layout.addWidget(self.max_time_utc_label, 3, 2)
@@ -625,7 +647,7 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_time_utc_label, 5, 2)
         reference_moments_grid_layout.addWidget(self.sunrise_time_utc_label, 6, 2)
         reference_moments_grid_layout.addWidget(self.sunset_time_utc_label, 7, 2)
-        reference_moments_grid_layout.addWidget(QLabel("Countdown", alignment=Qt.AlignmentFlag.AlignRight), 0, 3)
+        reference_moments_grid_layout.addWidget(QLabel("Countdown", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 3)
         reference_moments_grid_layout.addWidget(self.c1_countdown_label, 1, 3)
         reference_moments_grid_layout.addWidget(self.c2_countdown_label, 2, 3)
         reference_moments_grid_layout.addWidget(self.max_countdown_label, 3, 3)
@@ -633,13 +655,13 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.c4_countdown_label, 5, 3)
         reference_moments_grid_layout.addWidget(self.sunrise_countdown_label, 6, 3)
         reference_moments_grid_layout.addWidget(self.sunset_countdown_label, 7, 3)
-        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]", alignment=Qt.AlignmentFlag.AlignRight), 0, 4)
+        reference_moments_grid_layout.addWidget(QLabel("Azimuth [°]", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 4)
         reference_moments_grid_layout.addWidget(self.c1_azimuth_label, 1, 4)
         reference_moments_grid_layout.addWidget(self.c2_azimuth_label, 2, 4)
         reference_moments_grid_layout.addWidget(self.max_azimuth_label, 3, 4)
         reference_moments_grid_layout.addWidget(self.c3_azimuth_label, 4, 4)
         reference_moments_grid_layout.addWidget(self.c4_azimuth_label, 5, 4)
-        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]", alignment=Qt.AlignmentFlag.AlignRight), 0, 5)
+        reference_moments_grid_layout.addWidget(QLabel("Altitude [°]", alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), 0, 5)
         reference_moments_grid_layout.addWidget(self.c1_altitude_label, 1, 5)
         reference_moments_grid_layout.addWidget(self.c2_altitude_label, 2, 5)
         reference_moments_grid_layout.addWidget(self.max_altitude_label, 3, 5)
@@ -663,18 +685,21 @@ class SolarEclipseView(QMainWindow, Observable):
         self.camera_overview.setFixedHeight(300)
         input_hbox.addWidget(self.camera_overview)
 
-        # noinspection SpellCheckingInspection
-        output_hbox = QHBoxLayout()
-        output_hbox.addWidget(self.eclipse_visualization)
-        # output_hbox.addWidget(self.canvas)
-        output_hbox.addWidget(self.jobs_table)
+        # Plot and jobs table share a user-resizable splitter, so the plot can be shrunk to give the scheduler
+        # more room (e.g. on widescreen displays).  Neither side can be collapsed completely.
+        self.output_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.output_splitter.addWidget(self.eclipse_visualization)
+        self.output_splitter.addWidget(self.jobs_table)
+        self.output_splitter.setChildrenCollapsible(False)
+        self.output_splitter.setStretchFactor(0, 1)
+        self.output_splitter.setStretchFactor(1, 2)
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
         global_layout.addWidget(self.camera_banner)
         global_layout.addLayout(input_hbox)
 
-        global_layout.addLayout(output_hbox)
+        global_layout.addWidget(self.output_splitter, 1)
 
         app_frame.setLayout(global_layout)
 
@@ -966,6 +991,7 @@ class SolarEclipseView(QMainWindow, Observable):
         if reply == QMessageBox.StandardButton.Yes:
             # Notify controller so it can clean up cameras, scheduler, etc.
             self.notify_observers(close_event)
+            self.save_layout_settings()
             close_event.accept()
         else:
             close_event.ignore()
@@ -1631,7 +1657,8 @@ class SolarEclipseController(Observer):
             - Date format (always present);
             - Time format (always present);
             - Location (longitude, latitude, altitude);
-            - Eclipse date.
+            - Eclipse date;
+            - Position of the splitter between the eclipse plot and the jobs table.
 
         If the location and eclipse date are present in the settings file, the reference moments will be updated
         automatically.
@@ -1647,6 +1674,10 @@ class SolarEclipseController(Observer):
         default_time_format, *_ = TIME_FORMATS
         time_format = self.view.settings.value("time_format", default_time_format, type=str)
         self.set_datetime_format(date_format, time_format)
+
+        # Layout
+
+        self.view.restore_layout_settings()
 
         # Location
 
