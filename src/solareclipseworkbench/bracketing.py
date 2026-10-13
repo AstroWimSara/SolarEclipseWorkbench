@@ -1,0 +1,178 @@
+"""The bracket of a take_bracket command: how far apart the frames are and how many there are.
+
+A script gives the bracket as ``"<EV step> <frames>"``, the same for every camera brand, e.g.
+``"1 3"`` (3 frames, 1 EV apart), ``"0.7 5"`` or ``"1 2/3 5"``.  The frames are centred on the
+exposure of the command: ``"1 3"`` at 1/60 takes 1/125, 1/60 and 1/30.
+
+Older forms are still accepted:
+
+- ``"+/- 1 2/3"`` (the Canon AEB syntax): 5 frames, 1 2/3 EV apart.
+- A Sony bracketing capture mode, e.g. ``"Bracketing C 0.3 Steps 5 Pictures"``: passed to the
+  camera as is.
+
+Decimal steps that are the usual camera rounding of thirds (0.3, 0.7, 1.3, ...) are read as thirds.
+
+No gphoto2 here: the scheduler, the timing estimates and the wizard use this as well.
+"""
+
+import math
+import re
+from dataclasses import dataclass
+from typing import List, Optional, Sequence
+
+# Number of frames of the old '+/- <step>' form, which had no frame count.
+DEFAULT_FRAMES = 5
+MIN_FRAMES = 3
+MAX_FRAMES = 9
+MAX_EV_STEP = 3.0
+
+_SONY_MODE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:EV\s*)?Steps?\s+(\d+)\s*Pictures?", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class BracketSpec:
+    """A bracket: ``frames`` exposures, ``ev_step`` EV apart, centred on the base exposure."""
+
+    ev_step: float
+    frames: int
+    mode_name: Optional[str] = None     # Sony capture mode given literally in the script
+
+    def ev_offsets(self) -> List[float]:
+        """EV offset of each frame from the base exposure, darkest first."""
+        half = self.frames // 2
+        return [k * self.ev_step for k in range(-half, half + 1)]
+
+    def describe(self) -> str:
+        return f"{self.frames} frames, {format_ev(self.ev_step)} EV apart"
+
+
+def snap_ev(ev: float) -> float:
+    """Read the decimal rounding of a third or half stop (0.3, 0.7, 1.3, 0.5, ...) as that exact value."""
+    thirds = round(ev * 3)
+    if abs(ev * 3 - thirds) < 0.15:
+        return thirds / 3
+    halves = round(ev * 2)
+    if abs(ev * 2 - halves) < 0.1:
+        return halves / 2
+    return ev
+
+
+def parse_ev(text: str) -> float:
+    """Parse an EV step: '1', '0.7', '2/3' or '1 2/3'.
+
+    Raises:
+        ValueError: If the text is not a positive EV step of at most 3 EV.
+    """
+    parts = text.replace("+/-", " ").replace("EV", " ").replace("ev", " ").split()
+    if not 1 <= len(parts) <= 2:
+        raise ValueError(f"'{text}' is not an EV step")
+    total = 0.0
+    for i, part in enumerate(parts):
+        try:
+            if "/" in part:
+                if i != len(parts) - 1:
+                    raise ValueError
+                num, den = part.split("/", 1)
+                total += int(num) / int(den)
+            else:
+                if i != 0:
+                    raise ValueError
+                total += float(part)
+        except (ValueError, ZeroDivisionError):
+            raise ValueError(f"'{text}' is not an EV step") from None
+    if not (math.isfinite(total) and 0 < total <= MAX_EV_STEP + 1e-6):
+        raise ValueError(f"EV step '{text}' must be more than 0 and at most {MAX_EV_STEP:g}")
+    return snap_ev(total)
+
+
+def format_ev(ev: float) -> str:
+    """Format an EV step the way cameras show it: '1/3', '1 2/3', '1/2', '2'."""
+    for den in (3, 2):
+        n = round(ev * den)
+        if abs(ev * den - n) < 1e-6:
+            whole, rest = divmod(n, den)
+            if rest == 0:
+                return str(whole)
+            return f"{whole} {rest}/{den}" if whole else f"{rest}/{den}"
+    return f"{ev:g}"
+
+
+def parse_bracket(text: str) -> BracketSpec:
+    """Parse the bracket field of a take_bracket command (see the module docstring).
+
+    Raises:
+        ValueError: With a message that can be shown to the user as is.
+    """
+    s = str(text).strip().strip('"').strip()
+    if not s:
+        raise ValueError("The bracket is empty: give the EV step and the number of frames, e.g. \"1 3\"")
+
+    if s.startswith("+/-"):
+        return BracketSpec(parse_ev(s[3:]), DEFAULT_FRAMES)
+
+    if re.search(r"[A-Za-z]", s):
+        match = _SONY_MODE.search(s) or re.search(r"(\d+\.\d+)\D+?(\d+)", s)
+        if not match:
+            raise ValueError(f"Bracket \"{s}\" is not understood: give the EV step and the number of "
+                             f"frames, e.g. \"1 3\"")
+        return BracketSpec(snap_ev(float(match.group(1))), int(match.group(2)), mode_name=s)
+
+    tokens = s.split()
+    try:
+        if len(tokens) < 2:
+            raise ValueError
+        frames = int(tokens[-1])
+    except ValueError:
+        raise ValueError(f"Bracket \"{s}\" is not understood: give the EV step and the number of frames, "
+                         f"e.g. \"1 3\" or \"1 2/3 5\"") from None
+    ev_step = parse_ev(" ".join(tokens[:-1]))
+    if frames % 2 == 0 or not MIN_FRAMES <= frames <= MAX_FRAMES:
+        raise ValueError(f"Bracket \"{s}\": the number of frames must be 3, 5, 7 or 9, not {frames}")
+    return BracketSpec(ev_step, frames)
+
+
+def match_ev_choice(choices: Sequence[str], ev_step: float) -> Optional[str]:
+    """The camera choice (e.g. Canon '+/- 2/3', Nikon '2/3 EV') for this EV step, or None."""
+    for choice in choices:
+        try:
+            if abs(parse_ev(choice) - ev_step) < 0.02:
+                return choice
+        except ValueError:
+            continue
+    return None
+
+
+def match_sony_mode(choices: Sequence[str], spec: BracketSpec) -> Optional[str]:
+    """The Sony continuous bracketing capture mode for this bracket, or None.
+
+    Single bracketing ('Bracketing S ...') needs one shutter press per frame, so only the
+    continuous modes ('Bracketing C ...') are used.
+    """
+    for choice in choices:
+        if not choice.lower().startswith("bracketing c"):
+            continue
+        match = _SONY_MODE.search(choice)
+        if (match and int(match.group(2)) == spec.frames
+                and abs(snap_ev(float(match.group(1))) - spec.ev_step) < 0.02):
+            return choice
+    return None
+
+
+def bracket_exposures(base_s: float, spec: BracketSpec) -> List[float]:
+    """Exposure time in seconds of each frame, darkest first."""
+    return [base_s * 2 ** offset for offset in spec.ev_offsets()]
+
+
+def nearest_shutter_choices(choices: Sequence[str], exposures_s: Sequence[float], seconds) -> List[str]:
+    """For each exposure, the camera shutter speed closest to it in stops.
+
+    Args:
+        choices: Shutter speed choices of the camera.
+        exposures_s: Wanted exposure times in seconds.
+        seconds: Function parsing a choice to seconds (<= 0 for 'bulb' and the like).
+    """
+    usable = [(c, seconds(c)) for c in choices]
+    usable = [(c, s) for c, s in usable if s > 0]
+    if not usable:
+        raise ValueError("The camera reports no shutter speeds")
+    return [min(usable, key=lambda cs: abs(math.log2(cs[1] / exposure)))[0] for exposure in exposures_s]

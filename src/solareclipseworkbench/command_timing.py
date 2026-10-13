@@ -24,6 +24,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+from solareclipseworkbench.bracketing import bracket_exposures, parse_bracket
 from solareclipseworkbench.exposure_calculator import parse_shutter_speed
 
 # get_config/set_config + trigger_capture + wait for capture complete.  Matches
@@ -106,13 +107,21 @@ def hdr_duration_s(start_shutter_speed: str, stops: int) -> float:
     return ramp_down + ramp_up + n_shots * HDR_SHOT_OVERHEAD_S + HDR_FIXED_OVERHEAD_S
 
 
-def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROFILE) -> float:
-    """Lower bound for a take_bracket.
+def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROFILE,
+                       bracket: Optional[str] = None) -> float:
+    """Lower bound for a take_bracket: the exposures of all frames plus one picture overhead.
 
-    The number of frames depends on vendor-specific bracket syntax, so only a
-    single frame is counted: this can miss a conflict but never invents one.
+    Canon and the software bracket pay the overhead per frame, Nikon and Sony
+    shoot the frames as one burst; counting it once can miss a conflict but
+    never invents one.  Without a readable bracket, a single frame is counted.
     """
-    return picture_duration_s(shutter_speed, profile)
+    try:
+        spec = parse_bracket(bracket) if bracket is not None else None
+    except ValueError:
+        spec = None
+    if spec is None:
+        return picture_duration_s(shutter_speed, profile)
+    return sum(bracket_exposures(_exposure_s(shutter_speed), spec)) + profile.picture_overhead_s
 
 
 # Partial-phase shots stay at least this far from C1, C2, C3 and C4.

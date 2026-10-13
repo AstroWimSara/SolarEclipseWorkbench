@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- `take_bracket` takes a bracket as `"<EV step> <frames>"` for every camera brand, e.g. `"1 3"` or `"0.7 5"`, instead of always 5 frames in a brand-specific syntax.  Canon picks the matching AEB step, Nikon its step and pattern, Sony the matching continuous bracketing mode; when the camera does not offer the bracket it is taken in software, with the frames placed in EV (not shutter speed list positions).  The Canon `"+/- 1 2/3"` form (5 frames) and Sony mode names still work.  An invalid bracket is reported when the script is loaded, and the busy-camera warning now counts every frame of a bracket (Issue #161)
 - Back to the newest python-gphoto2 (2.6.4, with libgphoto2 2.5.34); `take_burst` on Canon now works with both the old and the new libgphoto2
 - Every log message about one camera now starts with that camera's name (its alias when one is configured), so a DEBUG log with several cameras connected shows which body each message is about (Issue #156)
 - The eclipse plot and the jobs table are now separated by a splitter: drag it to give the scheduler more room, e.g. on widescreen displays.  Its position is remembered with `Save` and when closing the application (Issue #182)

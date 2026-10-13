@@ -16,6 +16,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional
 from solareclipseworkbench import configuration
 from solareclipseworkbench.logging_setup import camera_log
+from solareclipseworkbench.bracketing import (
+    bracket_exposures, format_ev, match_ev_choice, match_sony_mode, nearest_shutter_choices, parse_bracket,
+)
 
 
 class CameraError(Exception):
@@ -1803,77 +1806,6 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             log.warning('Sony burst capture failed: %s', e)
 
 
-def _parse_bracket_steps(steps: str) -> int:
-    """Parse a bracket steps string to the number of 1/3-stop index increments.
-
-    The camera's shutter speed list from gphoto2 uses 1/3-stop steps, so
-    '+/- 1 2/3' (1⅔ stops) maps to 5 index positions away from the base speed.
-
-    Supported formats (with optional '+/-' prefix):
-        '+/- 1/3'   → 1,  '+/- 2/3'   → 2,  '+/- 1'     → 3
-        '+/- 1 1/3' → 4,  '+/- 1 2/3' → 5,  '+/- 2'     → 6
-        '+/- 2 1/3' → 7,  '+/- 2 2/3' → 8,  '+/- 3'     → 9
-
-    Args:
-        steps: Bracket step string, e.g. '+/- 1 2/3'.
-
-    Returns:
-        Number of 1/3-stop shutter speed index steps for each side of the bracket.
-
-    Raises:
-        ValueError: If the string cannot be parsed.
-    """
-    s = steps.strip()
-    if s.startswith('+/-'):
-        s = s[3:].strip()
-
-    whole = 0
-    frac_num = 0
-    frac_den = 3  # denominator assumed to be 3 for all valid bracket fractions
-
-    for part in s.split():
-        if '/' in part:
-            num, den = part.split('/', 1)
-            frac_num = int(num)
-            frac_den = int(den)
-        else:
-            whole = int(part)
-
-    thirds = whole * 3 + (frac_num * 3 // frac_den)
-    if thirds <= 0:
-        raise ValueError(f"Could not parse bracket steps '{steps}' to a positive stop count")
-    return thirds
-
-
-def parse_bracketing_string(bracket_str: str) -> tuple[float, int]:
-    """Extract EV step size and number of pictures from a bracketing string."""
-    import re as _re
-    match = _re.search(r"(\d+\.\d+).+?(\d+)", bracket_str)
-    if not match:
-        raise ValueError(f"Invalid bracketing string format: '{bracket_str}'")
-
-    ev_step = float(match.group(1))
-    num_pictures = int(match.group(2))
-    return ev_step, num_pictures
-
-
-def ev_step_to_string(ev_step: float) -> str:
-    """Map a numeric EV step to its common string representation."""
-    mapping = {
-        0.3: "1/3",
-        0.5: "1/2",
-        0.7: "2/3",
-        1.0: "1",
-        2.0: "2",
-        3.0: "3",
-    }
-    # Allow small floating-point tolerance
-    for value, label in mapping.items():
-        if abs(ev_step - value) < 1e-6:
-            return label
-    raise ValueError(f"Unsupported EV step: {ev_step}")
-
-
 def calculate_bracketing_duration(
     ev_step: float,
     num_pictures: int,
@@ -1909,44 +1841,39 @@ def calculate_bracketing_duration(
 def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) -> None:
     """ Take a bracketing of images with the selected camera.
 
-    For Canon, the built-in AEB widget is used ('aeb') and 5 frames are fired.
-    For Nikon, bracketing is implemented in software: the shutter speed is
-    shifted by the requested number of stops for each side of the bracket.
-    No manual camera AEB setup is required for Nikon.
+    The bracket is centred on the exposure in camera_settings.  Canon uses its AEB
+    ('aeb'), Nikon its bracketing settings and Sony a continuous bracketing capture
+    mode.  When the camera does not offer the bracket, it is taken in software:
+    one picture per frame, changing the shutter speed in between.
+
+    Canon cannot set the number of AEB frames over USB: it is the 'Number of
+    bracketed shots' custom function.  A bracket with fewer frames than that
+    setting is fine (the first frames are 0, -, +); when it is set lower than the
+    bracket, the bracket stops at the end of the camera's sequence.
 
     Args:
-        - camera_name: Camera object
+        - camera: Camera object
         - camera_settings: Settings of the camera (exposure, f, iso)
-        - steps: Bracket half-width, e.g. '+/- 1 2/3' fires 5 shots at
-                 base-2*1⅔, base-1⅔, base, base+1⅔, base+2*1⅔ stops.
-                 Supported: '+/- 1/3' through '+/- 3'.
+        - steps: The bracket, '<EV step> <frames>', e.g. '1 3' or '0.7 5' (see
+                 bracketing.parse_bracket).  Older forms still work: '+/- 1 2/3'
+                 (5 frames) and, for Sony, a bracketing capture mode name.
     """
     vendor = getattr(camera, 'vendor', None)
     log = camera_log(camera)
+    spec = parse_bracket(steps)
+    log.debug('take_bracket: %s', spec.describe())
     context, config = __adapt_camera_settings(camera, camera_settings)
 
-    # Software bracketing:
-    # fire 5 shots at base-2*step, base-step, base, base+step, base+2*step,
-    # matching the Canon 5-frame bracket count.
-    def simulated_bracketing(bracket_str: str) -> None:
-        step_count = _parse_bracket_steps(bracket_str)
+    # Software bracketing: one picture per frame, at the camera shutter speed
+    # closest (in stops) to each exposure of the bracket.
+    def simulated_bracketing() -> None:
+        base_s = _parse_shutter_speed_seconds(base_speed)
+        if base_s <= 0:
+            raise ValueError(f"take_bracket needs a shutter speed, not '{base_speed}'")
+        speeds = nearest_shutter_choices(choices, bracket_exposures(base_s, spec), _parse_shutter_speed_seconds)
+        log.debug('take_bracket software sequence: %s', speeds)
 
-        base_idx = choices.index(base_speed)
-        # choices is sorted fastest→slowest; smaller index = less exposure (under)
-        indices = [
-            max(0, base_idx - 2 * step_count),
-            max(0, base_idx - step_count),
-            base_idx,
-            min(len(choices) - 1, base_idx + step_count),
-            min(len(choices) - 1, base_idx + 2 * step_count),
-        ]
-
-        log.debug(
-            'take_bracket 5-shot sequence: %s', [choices[i] for i in indices],
-        )
-
-        for idx in indices:
-            speed = choices[idx]
+        for speed in speeds:
             try:
                 gp.gp_widget_set_value(ss_widget, speed)
                 gp.gp_camera_set_config(target, config, context)
@@ -1961,14 +1888,14 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             _drain_camera_events(target, context)
 
         # Restore base shutter speed
-        gp.gp_widget_set_value(ss_widget, choices[base_idx])
+        gp.gp_widget_set_value(ss_widget, base_speed)
         _set_gp_config(camera, config, context)
         log.debug('take_bracket complete')
 
-    # Virtual camera: perform a few captures to simulate bracketing
+    # Virtual camera: one capture per frame
     if context is None:
         try:
-            for _ in range(3):
+            for _ in range(spec.frames):
                 camera.capture()
             return
         except Exception:
@@ -1997,18 +1924,31 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
 
     if vendor == 'Canon':
         try:
-            # Turn on aeb
             aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
-            gp.gp_widget_set_value(aeb, steps)
+        except gphoto2.GPhoto2Error:
+            log.warning("'aeb' is not supported, will fallback to simulated bracketing")
+            simulated_bracketing()
+            return
+        aeb_value = match_ev_choice(_widget_choices(aeb), spec.ev_step)
+        if aeb_value is None:
+            log.warning("AEB does not offer a step of %s EV, will fallback to simulated bracketing",
+                        format_ev(spec.ev_step))
+            simulated_bracketing()
+            return
+
+        try:
+            # Turn on aeb
+            gp.gp_widget_set_value(aeb, aeb_value)
             _set_gp_config(camera, config, context)
 
-            for br_shot in range(5):
+            for br_shot in range(spec.frames):
+                # After 3, 5, ... frames, a camera whose AEB is set to that many
+                # frames is back at the base exposure: its sequence is complete.
+                if br_shot >= 3 and br_shot % 2 == 1 and _canon_shutter_speed(target, context) == base_speed:
+                    log.warning("AEB stopped after %d frames instead of %d: set 'Number of bracketed "
+                                "shots' on the camera to %d", br_shot, spec.frames, spec.frames)
+                    break
                 try:
-                    if br_shot == 3:
-                        current_speed = gp.check_result(gp.gp_widget_get_value(ss_widget))
-                        if current_speed == base_speed:
-                            log.warning("5 frames AEB not supported, stopping at 3")
-                            break
                     camera.capture(gp.GP_CAPTURE_IMAGE, context)
                 except Exception:
                     log.exception('Bracket capture high-level failed, trying low-level gp capture')
@@ -2024,11 +1964,10 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             gp.gp_widget_set_value(aeb, "off")
             _set_gp_config(camera, config, context)
         except gphoto2.GPhoto2Error:
-            log.warning("'aeb' is not supported, will fallback to simulated bracketing")
-            simulated_bracketing(steps)
+            log.warning("'aeb' could not be used, will fallback to simulated bracketing")
+            simulated_bracketing()
     elif vendor == 'Nikon':
-        ev_step, num_pictures = parse_bracketing_string(steps)
-        nikon_ev_step = ev_step_to_string(ev_step)
+        num_pictures = spec.frames
 
         try:
             br_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bracketing'))
@@ -2037,7 +1976,7 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         except gphoto2.GPhoto2Error:
             log.warning(
                 "'bracketing' is not supported, will fallback to simulated bracketing")
-            simulated_bracketing(nikon_ev_step)
+            simulated_bracketing()
             return
 
         try:
@@ -2050,7 +1989,9 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
 
         try:
             aeb_bs_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aebracketingstep'))
-            gp.gp_widget_set_value(aeb_bs_widget, nikon_ev_step + ' EV')
+            step_value = (match_ev_choice(_widget_choices(aeb_bs_widget), spec.ev_step)
+                          or format_ev(spec.ev_step) + ' EV')
+            gp.gp_widget_set_value(aeb_bs_widget, step_value)
             _set_gp_config(camera, config, context)
         except gphoto2.GPhoto2Error as e:
             log.warning(
@@ -2059,9 +2000,7 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         try:
             aeb_bp_widget = gp.check_result(
                 gp.gp_widget_get_child_by_name(config, 'aebracketingpattern'))
-            n_aeb_bp_choices = gp.check_result(gp.gp_widget_count_choices(aeb_bp_widget))
-            aeb_bp_choices = [gp.check_result(gp.gp_widget_get_choice(aeb_bp_widget, i))
-                                for i in range(n_aeb_bp_choices)]
+            aeb_bp_choices = _widget_choices(aeb_bp_widget)
             final_aeb_bp_choice = None
             for aeb_bp_choice in aeb_bp_choices:
                 if aeb_bp_choice.startswith(str(num_pictures) + ' images'):
@@ -2076,7 +2015,7 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                 num_pictures = int(supported_num_pictures)
             gp.gp_widget_set_value(aeb_bp_widget, final_aeb_bp_choice)
             _set_gp_config(camera, config, context)
-        except gphoto2.GPhoto2Error as e:
+        except (gphoto2.GPhoto2Error, IndexError) as e:
             log.warning(
                 "failed to set 'aebracketingpattern' due to '%s'", e)
 
@@ -2118,21 +2057,27 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         # Sony bracketing: enable continuous bracketing mode, turn on the bulb,
         # sleep for the chosen amount of time, turn off the bulb and
         # lastly drain camera's events in case 'PC+Camera' mode was chosen.
-        ev_step, num_pictures = parse_bracketing_string(steps)
-        bracket_duration = calculate_bracketing_duration(ev_step, num_pictures, base_speed)
+        bracket_duration = calculate_bracketing_duration(spec.ev_step, spec.frames, base_speed)
 
         # Switch to continuous bracketing mode
         try:
             capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
-            if steps is not None:
-                gp.gp_widget_set_value(capture_mode, steps)
-                _set_gp_config(camera, config, context)
-                log.info('set capturemode to "%s" for bracketing', steps)
-            else:
-                log.warning(
-                    'capturemode "%s" choice not found, firing without mode change', steps)
         except gphoto2.GPhoto2Error as e:
-            log.warning('Could not set Sony capturemode to "%s": %s', steps, e)
+            log.warning("'capturemode' is not supported (%s), will fallback to simulated bracketing", e)
+            simulated_bracketing()
+            return
+        mode = spec.mode_name or match_sony_mode(_widget_choices(capture_mode), spec)
+        if mode is None:
+            log.warning('No continuous bracketing mode for %s, will fallback to simulated bracketing',
+                        spec.describe())
+            simulated_bracketing()
+            return
+        try:
+            gp.gp_widget_set_value(capture_mode, mode)
+            _set_gp_config(camera, config, context)
+            log.info('set capturemode to "%s" for bracketing', mode)
+        except gphoto2.GPhoto2Error as e:
+            log.warning('Could not set Sony capturemode to "%s": %s', mode, e)
 
         try:
             bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
@@ -2152,6 +2097,22 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                 _drain_camera_events(target, context, timeout_ms=700)
         except gphoto2.GPhoto2Error as e:
             log.warning('Sony burst capture failed: %s', e)
+    else:
+        simulated_bracketing()
+
+
+def _canon_shutter_speed(target, context) -> Optional[str]:
+    """The shutter speed the camera reports now (read fresh: the config of the
+    command still holds the value that was set)."""
+    try:
+        config = gp.check_result(gp.gp_camera_get_config(target, context))
+        try:
+            widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
+        except gphoto2.GPhoto2Error:
+            widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+        return gp.check_result(gp.gp_widget_get_value(widget))
+    except gphoto2.GPhoto2Error:
+        return None
 
 
 def _parse_shutter_speed_seconds(speed_str: str) -> float:

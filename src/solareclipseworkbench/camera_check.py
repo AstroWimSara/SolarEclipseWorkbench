@@ -28,6 +28,7 @@ from datetime import timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from solareclipseworkbench import scripts
+from solareclipseworkbench.bracketing import DEFAULT_FRAMES, parse_bracket
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     TimingProfile,
@@ -203,7 +204,10 @@ def estimate_frames(commands: List[ScriptCommand], vendor: Optional[str]) -> int
             except (IndexError, ValueError):
                 frames += 15
         elif cmd.func == "take_bracket":
-            frames += 5
+            try:
+                frames += parse_bracket(cmd.args[4]).frames
+            except (IndexError, ValueError):
+                frames += DEFAULT_FRAMES
         else:
             frames += 1
     return frames

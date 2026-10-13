@@ -15,6 +15,7 @@ from solareclipseworkbench.command_timing import (
     TimingProfile, DEFAULT_PROFILE,
 )
 from solareclipseworkbench.notifications import check_notification
+from solareclipseworkbench.bracketing import parse_bracket
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
@@ -72,7 +73,7 @@ def estimate_busy_s(func_name: str, script_args: list, camera=None,
         if func_name == "take_hdr":
             return hdr_duration_s(shutter, int(script_args[4]))
         if func_name == "take_bracket":
-            return bracket_duration_s(shutter, profile)
+            return bracket_duration_s(shutter, profile, script_args[4])
     except (IndexError, ValueError):
         pass
     return None
@@ -297,6 +298,19 @@ def get_continuous_mode_commands(scheduler: BackgroundScheduler, cameras: dict) 
     return result
 
 
+def _bracket_is_valid(args: list, cmd_str: str) -> bool:
+    """Check the bracket of a take_bracket now, so a typo shows up when the script is loaded."""
+    try:
+        parse_bracket(args[4])
+        return True
+    except IndexError:
+        problem = "take_bracket has no bracket: give the EV step and the number of frames, e.g. \"1 3\""
+    except ValueError as e:
+        problem = str(e)
+    hardware_problems.report("Script", f"{problem}.  This bracket will not be taken.", detail=cmd_str.strip())
+    return False
+
+
 def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
                      controller: SolarEclipseController, reference_moment_for_simulation: str,
                      simulated_start: datetime,
@@ -357,6 +371,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
             )
             return
     elif func_name != "command":
+        if func_name == "take_bracket" and not _bracket_is_valid(args, cmd_str):
+            return
         if cameras is not None:
             try:
                 if func_name != "sync_cameras":
