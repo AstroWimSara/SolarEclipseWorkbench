@@ -28,7 +28,7 @@ from datetime import timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from solareclipseworkbench import scripts
-from solareclipseworkbench.bracketing import DEFAULT_FRAMES, parse_bracket
+from solareclipseworkbench.bracketing import DEFAULT_FRAMES, is_native, native_brackets, parse_bracket
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     TimingProfile,
@@ -168,6 +168,16 @@ def _widget(config, *names):
     return None
 
 
+def read_brackets(config, vendor: Optional[str]) -> List[str]:
+    """The brackets the camera takes itself ('<EV step> <frames>'), see bracketing.native_brackets."""
+    choices = {}
+    for name in ("aeb", "aebracketingstep", "aebracketingpattern", "capturemode"):
+        widget = _widget(config, name)
+        if widget is not None:
+            choices[name] = _choices(widget)
+    return native_brackets(vendor, choices)
+
+
 def _count(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
@@ -286,6 +296,48 @@ def check_settings(camera, commands: List[ScriptCommand], report: TestReport) ->
                        f"Available: {', '.join(ap_choices[k] for k in sorted(ap_choices))}")
         else:
             report.add(OK, "All apertures are available", "f/" + ", f/".join(wanted_apertures))
+
+    check_brackets(config, getattr(camera, "vendor", None) or vendor_from_name(name), commands, report)
+
+
+def check_brackets(config, vendor: Optional[str], commands: List[ScriptCommand], report: TestReport) -> None:
+    """Check that the camera takes the brackets of the script itself."""
+    brackets = {}
+    for cmd in commands:
+        if cmd.func == "take_bracket" and len(cmd.args) > 4:
+            brackets[cmd.args[4]] = brackets.get(cmd.args[4], 0) + 1
+    if not brackets:
+        return
+
+    def quoted(texts):
+        return ", ".join(f'"{t}"' for t in texts)
+
+    specs = {}
+    for bracket in brackets:
+        try:
+            specs[bracket] = parse_bracket(bracket)
+        except ValueError:
+            pass
+    invalid = [b for b in brackets if b not in specs]
+    if invalid:
+        report.add(ERROR, "Bracket not understood: " + quoted(invalid),
+                   'Give the EV step and the number of frames, e.g. "1 3".  These brackets will not be taken.')
+
+    native = read_brackets(config, vendor)
+    software = [b for b in specs if not is_native(b, native)]
+    if software:
+        offered = f"The camera offers: {', '.join(native)}." if native else "The camera offers no bracketing over USB."
+        report.add(WARNING, "The camera does not take every bracket itself",
+                   f"{quoted(software)} will be taken in software: one picture per frame, which takes longer.  "
+                   + offered)
+    elif specs:
+        report.add(OK, "The camera takes every bracket itself", quoted(specs))
+
+    if vendor == "Canon" and specs:
+        frames = sorted({spec.frames for spec in specs.values()})
+        report.add(INFO, "Check the number of bracketed shots on the camera",
+                   f"Canon sets it in a custom function, not over USB.  The script uses "
+                   f"{' and '.join(map(str, frames))} frames: set the camera to at least {frames[-1]}.")
 
 
 def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport) -> None:
@@ -587,6 +639,7 @@ class CameraProfile:
     clock_settable: Optional[bool] = None         # None: not tested
     picture_overhead_s: Optional[float] = None    # measured; None: not measured
     burst_overhead_s: Optional[float] = None
+    brackets: List[str] = field(default_factory=list)   # brackets the camera takes itself, e.g. "1 3"
     tested: str = ""                              # date and time of the test
     full_test: bool = False
 
@@ -670,6 +723,7 @@ def read_camera_profile(camera) -> CameraProfile:
 
     return CameraProfile(camera=name, vendor=vendor, shutter_speeds=speeds, isos=sorted(set(isos)),
                          apertures=apertures, continuous_burst=continuous,
+                         brackets=read_brackets(config, vendor),
                          tested=time.strftime("%Y-%m-%d %H:%M"))
 
 
@@ -705,6 +759,14 @@ def check_camera(camera, full: bool = False) -> Tuple[TestReport, CameraProfile]
                    "Manual lens or telescope: the script keeps the aperture you enter; set it on the lens by hand.")
     if profile.continuous_burst:
         report.add(OK, "Continuous bursts are supported")
+    if profile.brackets:
+        detail = ", ".join(f'"{b}"' for b in profile.brackets)
+        if profile.vendor == "Canon":
+            detail += ".  The number of frames is set in the camera menu (Number of bracketed shots)."
+        report.add(OK, f"The camera takes {_count(len(profile.brackets), 'bracket')} itself", detail)
+    else:
+        report.add(INFO, "The camera offers no bracketing over USB",
+                   "take_bracket takes its frames in software: one picture per frame, slower than the camera.")
 
     check_camera_state(camera, [], report)
 
@@ -897,7 +959,9 @@ def adapt_script_lines(lines: List[str], camera_name: str, profile: CameraProfil
         if abs(fitted.error_stops) > 1 / 3:
             summary.off_limit.append(parts[-1])
         indent = line[:len(line) - len(line.lstrip())]
-        fields = parts[:5] + [fitted.shutter, fitted.aperture, str(fitted.iso)] + parts[8:-1]
+        # Keep the bracket of a take_bracket quoted ("1 3")
+        extra = [f'"{p}"' if " " in p else p for p in parts[8:-1]]
+        fields = parts[:5] + [fitted.shutter, fitted.aperture, str(fitted.iso)] + extra
         description = f"{parts[-1]} [{note}]".replace('"', "'")
         adapted.append(indent + ", ".join(fields) + f', "{description}"')
     return adapted, summary

@@ -42,6 +42,7 @@ from solareclipseworkbench.exposure_calculator import (
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only
 from solareclipseworkbench.camera_check import ExposureLimits, adapt_script_lines
+from solareclipseworkbench.bracketing import STANDARD_FRAMES, STANDARD_STEPS, format_ev, parse_bracket
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     CONTACT_BUFFER_S,
@@ -49,6 +50,7 @@ from solareclipseworkbench.command_timing import (
     vendor_from_name,
     picture_duration_s,
     hdr_duration_s,
+    bracket_planning_s,
 )
 from datetime import timedelta
 
@@ -1144,7 +1146,41 @@ class PhenomenaPage(QWizardPage):
         # Corona
         self.corona_check = QCheckBox("Solar corona series (inner/outer corona, auto-scheduled throughout totality)")
         self.corona_check.setChecked(True)
+        self.corona_check.stateChanged.connect(self._on_bracket_changed)
         phenomena_layout.addWidget(self.corona_check)
+
+        # Bracket each corona exposure (take_bracket)
+        self.bracket_check = QCheckBox("Bracket each corona exposure (take_bracket)")
+        self.bracket_check.setChecked(False)
+        self.bracket_check.stateChanged.connect(self._on_bracket_changed)
+        phenomena_layout.addWidget(self.bracket_check)
+
+        bracket_widget = QWidget()
+        bracket_layout = QHBoxLayout()
+        bracket_layout.setContentsMargins(20, 0, 0, 0)
+        bracket_layout.addWidget(QLabel("Step:"))
+        self.bracket_step_combo = QComboBox()
+        self.bracket_step_combo.setToolTip("Exposure difference between successive frames of the bracket")
+        self.bracket_step_combo.currentTextChanged.connect(self._on_bracket_step_changed)
+        bracket_layout.addWidget(self.bracket_step_combo)
+        bracket_layout.addWidget(QLabel("EV"))
+        bracket_layout.addSpacing(12)
+        bracket_layout.addWidget(QLabel("Frames:"))
+        self.bracket_frames_combo = QComboBox()
+        self.bracket_frames_combo.setToolTip("Number of frames, centred on the corona exposure")
+        self.bracket_frames_combo.currentTextChanged.connect(self._refresh_bracket_note)
+        bracket_layout.addWidget(self.bracket_frames_combo)
+        bracket_layout.addStretch()
+        bracket_widget.setLayout(bracket_layout)
+        phenomena_layout.addWidget(bracket_widget)
+
+        self.bracket_note = QLabel()
+        self.bracket_note.setWordWrap(True)
+        self.bracket_note.setContentsMargins(20, 0, 0, 0)
+        self.bracket_note.setStyleSheet("QLabel { color: #888; font-size: 9pt; font-style: italic; }")
+        phenomena_layout.addWidget(self.bracket_note)
+        self._bracket_options = {}      # step label -> numbers of frames
+        self._bracket_source = None     # CameraProfile the options were read from, or None
 
         # HDR burst at maximum eclipse
         self.hdr_check = QCheckBox("HDR burst at maximum eclipse (take_hdr)")
@@ -1351,6 +1387,81 @@ class PhenomenaPage(QWizardPage):
         self.registerField("hdr_start_speed", self.hdr_start_speed_combo, "currentText")
         self.registerField("hdr_iso_auto", self.hdr_iso_auto_radio)
         self.registerField("hdr_iso_manual", self.hdr_iso_combo, "currentText")
+        self.registerField("corona_bracket", self.bracket_check)
+        self.registerField("bracket_step", self.bracket_step_combo, "currentText")
+        self.registerField("bracket_frames", self.bracket_frames_combo, "currentText")
+        self._fill_bracket_options()
+
+    def initializePage(self):
+        """Offer the brackets of the camera chosen on the Equipment page."""
+        self._fill_bracket_options()
+
+    def _fill_bracket_options(self):
+        """Fill the step and frame lists: the camera's own brackets when it was tested, else standard values."""
+        wizard = self.wizard()
+        camera_name = (wizard.field('camera_name') or '').strip() if wizard else ''
+        profile = camera_profile_for(wizard, getattr(wizard, 'config_manager', None), camera_name) \
+            if camera_name else None
+
+        options = {}
+        for bracket in (profile.brackets if profile else []):
+            try:
+                spec = parse_bracket(bracket)
+            except ValueError:
+                continue
+            options.setdefault(spec.ev_step, set()).add(spec.frames)
+        if not options:
+            options = {ev: set(STANDARD_FRAMES) for ev in STANDARD_STEPS}
+        self._bracket_options = {format_ev(ev): sorted(frames) for ev, frames in sorted(options.items())}
+        self._bracket_source = profile
+
+        previous_step = self.bracket_step_combo.currentText() or "1"
+        self.bracket_step_combo.blockSignals(True)
+        self.bracket_step_combo.clear()
+        self.bracket_step_combo.addItems(list(self._bracket_options))
+        self.bracket_step_combo.blockSignals(False)
+        if previous_step in self._bracket_options:
+            self.bracket_step_combo.setCurrentText(previous_step)
+        self._on_bracket_step_changed(self.bracket_step_combo.currentText())
+        self._on_bracket_changed()
+
+    def _on_bracket_step_changed(self, step):
+        """Offer the numbers of frames the camera takes with this step."""
+        previous = self.bracket_frames_combo.currentText() or "3"
+        frames = [str(n) for n in self._bracket_options.get(step, [])]
+        self.bracket_frames_combo.blockSignals(True)
+        self.bracket_frames_combo.clear()
+        self.bracket_frames_combo.addItems(frames)
+        if previous in frames:
+            self.bracket_frames_combo.setCurrentText(previous)
+        self.bracket_frames_combo.blockSignals(False)
+        self._refresh_bracket_note()
+
+    def _refresh_bracket_note(self, *_):
+        """Explain where the bracket options come from, and what to set on a Canon."""
+        profile = self._bracket_source
+        if profile is None:
+            text = ("Camera not tested: standard values.  A bracket the camera does not offer is taken in "
+                    "software, one picture per frame (slower).  'Test Camera...' on the Equipment page lists "
+                    "the brackets the camera takes itself.")
+        elif not profile.brackets:
+            text = ("The camera offers no bracketing over USB: the frames are taken in software, one picture "
+                    "per frame (slower).")
+        else:
+            text = "Brackets the camera takes itself (read by 'Test Camera...')."
+            if profile.vendor == "Canon":
+                text += (f"  Set 'Number of bracketed shots' in the camera menu to "
+                         f"{self.bracket_frames_combo.currentText()}: it cannot be set over USB.")
+        self.bracket_note.setText(text)
+
+    def _on_bracket_changed(self, *_):
+        """Bracket options only apply to the corona series."""
+        corona = self.corona_check.isChecked()
+        self.bracket_check.setEnabled(corona)
+        enabled = corona and self.bracket_check.isChecked()
+        self.bracket_step_combo.setEnabled(enabled)
+        self.bracket_frames_combo.setEnabled(enabled)
+        self.bracket_note.setVisible(enabled)
     
     def _on_filter_changed(self, text):
         """Enable/disable manual entry based on filter selection."""
@@ -1486,7 +1597,11 @@ class SummaryPage(QWizardPage):
         if filter_val == "Manual":
             filter_val = f"{wizard.field('filter_manual')}"
         summary.append(f"Solar Filter ND: {filter_val}")
-        
+
+        if wizard.field('corona') and wizard.field('corona_bracket'):
+            summary.append(f"Corona Bracket: {wizard.field('bracket_frames')} frames, "
+                           f"{wizard.field('bracket_step')} EV apart")
+
         if wizard.field('voice_enabled'):
             voice_type = "Basic" if wizard.field('voice_basic') else "Extended"
             summary.append(f"Voice Prompts: {voice_type}")
@@ -1931,6 +2046,44 @@ class SummaryPage(QWizardPage):
             seconds = int(seconds)
             return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}.0"
 
+        # Bracket of every corona exposure ('<EV step> <frames>'), or None for single pictures
+        corona_bracket = None
+        if wizard.field('corona_bracket'):
+            corona_bracket = f"{wizard.field('bracket_step')} {wizard.field('bracket_frames')}"
+            try:
+                parse_bracket(corona_bracket)
+            except ValueError:
+                corona_bracket = None
+
+        def corona_shot_s(shutter):
+            """Busy time of one corona exposure: a picture, or a bracket."""
+            if corona_bracket:
+                return bracket_planning_s(shutter, corona_bracket, timing)
+            return picture_duration_s(shutter, timing)
+
+        def corona_command(ref, sign, offset, shutter, ap, iso, description):
+            """Script line of one corona exposure: take_picture, or take_bracket around it."""
+            if corona_bracket:
+                return (f'take_bracket, {ref}, {sign}, {offset}, {camera_name}, {shutter}, {ap}, {iso}, '
+                        f'"{corona_bracket}", "{description}"')
+            return f'take_picture, {ref}, {sign}, {offset}, {camera_name}, {shutter}, {ap}, {iso}, "{description}"'
+
+        def corona_maximum_lines(corona_middle_shutter):
+            """Fallback corona at MAX: one bracket, or 5 pictures 1 EV apart."""
+            if corona_bracket:
+                return [corona_command('MAX', '+', '0:00:00.0', corona_middle_shutter, aperture, preferred_iso,
+                                       "Corona maximum")]
+            result = []
+            bracket_exposures = get_exposure_bracket(parse_shutter_speed(corona_middle_shutter), stops=2, step=1.0)
+            offset_seconds = 0.0
+            for i, exp in enumerate(bracket_exposures):
+                rounded_exp = round_to_camera_shutter_speed(exp)
+                shutter = format_shutter_speed(rounded_exp)
+                result.append(f'take_picture, MAX, +, {_offset_str(offset_seconds)}, {camera_name}, {shutter}, '
+                              f'{aperture}, {preferred_iso}, "Corona maximum ({i - 2:+d} EV)"')
+                offset_seconds += rounded_exp + 2.0
+            return result
+
         def earthshine_plan():
             """(shutter, iso, aperture, busy seconds) of the earthshine shots at C2+30 s and C3-30 s,
             or None when they are not taken (not selected, or totality too short for them)."""
@@ -2342,8 +2495,9 @@ class SummaryPage(QWizardPage):
                             early_time += max(3, math.ceil(picture_duration_s(prominences_shutter, timing)))
                         else:
                             lines.append(f'# Early totality - inner corona')
-                        lines.append(f'take_picture, C2, +, {_offset_str(early_time)}, {camera_name}, {corona_lower[0]}, {corona_lower[2]}, {corona_lower[1]}, "Corona inner"')
-                        early_end = early_time + picture_duration_s(corona_lower[0], timing)
+                        lines.append(corona_command('C2', '+', _offset_str(early_time), corona_lower[0], corona_lower[2],
+                                                    corona_lower[1], "Corona inner"))
+                        early_end = early_time + corona_shot_s(corona_lower[0])
                         lines.append("")
                         
                         # Determine corona coverage based on totality duration
@@ -2368,6 +2522,8 @@ class SummaryPage(QWizardPage):
                         lines.append(f'# Corona sequence throughout totality - {coverage_desc}')
                         lines.append(f'# Pattern cycles: {" → ".join(corona_pattern)}')
                         lines.append(f'# Note: Exposures >5s are automatically adjusted (increased ISO/wider aperture)')
+                        if corona_bracket:
+                            lines.append(f'# Every corona exposure is bracketed: "{corona_bracket}" (EV step, frames)')
                         
                         # Calculate earthshine shot times if earthshine is enabled
                         earthshine_times = []
@@ -2433,7 +2589,7 @@ class SummaryPage(QWizardPage):
                                 # Offsets are written in whole seconds: round up first, so the
                                 # end time (and the next shot) follow from the written start
                                 current_time = math.ceil(current_time)
-                                shot_end_time = current_time + picture_duration_s(shutter, timing)
+                                shot_end_time = current_time + corona_shot_s(shutter)
                                 
                                 # Check if this shot would exceed totality
                                 if shot_end_time > totality_duration - end_buffer:
@@ -2462,7 +2618,8 @@ class SummaryPage(QWizardPage):
                                     if iso != preferred_iso or ap != aperture:
                                         settings_note = f" (adjusted: ISO {iso}, f/{ap})"
                                     
-                                    lines.append(f'take_picture, C2, +, {offset_str}, {camera_name}, {shutter}, {ap}, {iso}, "Corona {layer_desc} #{corona_shot_count}{settings_note}"')
+                                    lines.append(corona_command('C2', '+', offset_str, shutter, ap, iso,
+                                                                f"Corona {layer_desc} #{corona_shot_count}{settings_note}"))
                                     
                                     # Move to next available time slot (after current shot completes)
                                     current_time = shot_end_time
@@ -2486,23 +2643,7 @@ class SummaryPage(QWizardPage):
                             prominences_shutter = get_shutter('prominences', '1/125')
                             lines.append(f'take_picture, C2, +, 0:00:03.0, {camera_name}, {prominences_shutter}, {aperture}, {preferred_iso}, "Prominences"')
                         
-                        # Generate bracket at MAX (5 exposures)
-                        base_exposure = parse_shutter_speed(corona_middle_shutter)
-                        bracket_exposures = get_exposure_bracket(base_exposure, stops=2, step=1.0)
-                        
-                        offset_seconds = 0.0
-                        for i, exp in enumerate(bracket_exposures):
-                            rounded_exp = round_to_camera_shutter_speed(exp)
-                            shutter = format_shutter_speed(rounded_exp)
-                            ev_offset = i - 2
-                            
-                            sign = '+' if offset_seconds >= 0 else '-'
-                            abs_offset = abs(offset_seconds)
-                            offset_str = f"{int(abs_offset // 3600)}:{int((abs_offset % 3600) // 60):02d}:{int(abs_offset % 60):02d}.0"
-                            
-                            lines.append(f'take_picture, MAX, {sign}, {offset_str}, {camera_name}, {shutter}, {aperture}, {preferred_iso}, "Corona maximum ({ev_offset:+d} EV)"')
-                            
-                            offset_seconds += rounded_exp + 2.0
+                        lines.extend(corona_maximum_lines(corona_middle_shutter))
                         
                         lines.append("")
                         
@@ -2512,23 +2653,7 @@ class SummaryPage(QWizardPage):
                     lines.append(f"# Warning: {str(e)}")
                     corona_middle_shutter = get_shutter('corona_middle', '1/15')
                     
-                    # Generate bracket at MAX (5 exposures)
-                    base_exposure = parse_shutter_speed(corona_middle_shutter)
-                    bracket_exposures = get_exposure_bracket(base_exposure, stops=2, step=1.0)
-                    
-                    offset_seconds = 0.0
-                    for i, exp in enumerate(bracket_exposures):
-                        rounded_exp = round_to_camera_shutter_speed(exp)
-                        shutter = format_shutter_speed(rounded_exp)
-                        ev_offset = i - 2
-                        
-                        sign = '+' if offset_seconds >= 0 else '-'
-                        abs_offset = abs(offset_seconds)
-                        offset_str = f"{int(abs_offset // 3600)}:{int((abs_offset % 3600) // 60):02d}:{int(abs_offset % 60):02d}.0"
-                        
-                        lines.append(f'take_picture, MAX, {sign}, {offset_str}, {camera_name}, {shutter}, {aperture}, {preferred_iso}, "Corona maximum ({ev_offset:+d} EV)"')
-                        
-                        offset_seconds += rounded_exp + 2.0
+                    lines.extend(corona_maximum_lines(corona_middle_shutter))
                     
                     lines.append("")
             

@@ -124,6 +124,17 @@ def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROF
     return sum(bracket_exposures(_exposure_s(shutter_speed), spec)) + profile.picture_overhead_s
 
 
+def bracket_planning_s(shutter_speed: str, bracket: str, profile: TimingProfile = DEFAULT_PROFILE) -> float:
+    """Busy time to plan a take_bracket with: every frame pays the picture overhead.
+
+    That is what a Canon AEB and the software bracket take; Nikon and Sony shoot
+    the bracket as one burst and are faster.  Longer than bracket_duration_s, so
+    a generated script never triggers the load-time warning.
+    """
+    spec = parse_bracket(bracket)
+    return sum(bracket_exposures(_exposure_s(shutter_speed), spec)) + spec.frames * profile.picture_overhead_s
+
+
 # Partial-phase shots stay at least this far from C1, C2, C3 and C4.
 CONTACT_BUFFER_S = 10
 

@@ -559,6 +559,8 @@ python -m solareclipseworkbench.wizard
 
 On the equipment page, **Test Camera...** reads the shutter speeds, ISO values and apertures the connected camera offers with its lens, and (full test) measures how long a picture and a burst take and checks that the camera clock can be set.  The generated script is then fitted to the camera: exposures use the settings the camera really has (compensating with ISO or aperture where needed), and shots are spaced by the measured durations.  The result is saved with the camera, so this is needed once per camera and lens.  On the last page, **Verify with Camera...** checks the finished script against the connected camera.
 
+On the phenomena page, **Bracket each corona exposure** turns every shot of the corona series into a `take_bracket` with the chosen EV step and number of frames, spaced so each bracket has finished before the next one starts.  For a tested camera, only the brackets it takes itself are offered (read by **Test Camera...**); otherwise standard steps (1/3 to 3 EV) and 3, 5, 7 or 9 frames are offered, and a bracket the camera does not offer is taken in software.  Canon cameras cannot set the number of frames over USB: set `Number of bracketed shots` in the camera menu to the number chosen in the wizard.  **Verify with Camera...** warns when a bracket of the script will be taken in software.
+
 For a detailed walkthrough of each wizard step, see the [Wizard Guide](docs/WIZARD_GUIDE.md).
 For capturing your GPS coordinates from your smartphone (works over WiFi or phone hotspot — no internet required at the eclipse site), see [docs/GPS_PHONE.md](docs/GPS_PHONE.md).
 

@@ -26,6 +26,12 @@ MIN_FRAMES = 3
 MAX_FRAMES = 9
 MAX_EV_STEP = 3.0
 
+# EV steps and numbers of frames to offer when the camera's own options are not known.
+STANDARD_STEPS = (1 / 3, 2 / 3, 1.0, 4 / 3, 5 / 3, 2.0, 7 / 3, 8 / 3, 3.0)
+STANDARD_FRAMES = (3, 5, 7, 9)
+# Canon sets the number of AEB frames in a custom function, not over USB.
+CANON_FRAMES = (3, 5, 7)
+
 _SONY_MODE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:EV\s*)?Steps?\s+(\d+)\s*Pictures?", re.IGNORECASE)
 
 
@@ -176,3 +182,57 @@ def nearest_shutter_choices(choices: Sequence[str], exposures_s: Sequence[float]
     if not usable:
         raise ValueError("The camera reports no shutter speeds")
     return [min(usable, key=lambda cs: abs(math.log2(cs[1] / exposure)))[0] for exposure in exposures_s]
+
+
+def bracket_text(ev_step: float, frames: int) -> str:
+    """The bracket as written in a script, e.g. '1 2/3 5'."""
+    return f"{format_ev(ev_step)} {frames}"
+
+
+def native_brackets(vendor: Optional[str], choices: dict) -> List[str]:
+    """The brackets the camera takes itself, as '<EV step> <frames>' texts, smallest step first.
+
+    Args:
+        vendor: 'Canon', 'Nikon' or 'Sony'.
+        choices: Choices of the camera widgets 'aeb' (Canon), 'aebracketingstep' and
+                 'aebracketingpattern' (Nikon) and 'capturemode' (Sony); missing ones are skipped.
+
+    Canon brackets are listed with 3, 5 and 7 frames: the camera menu sets which one it takes.
+    """
+    pairs = set()
+
+    def steps_of(widget_choices):
+        for choice in widget_choices:
+            try:
+                yield parse_ev(choice)
+            except ValueError:
+                continue
+
+    if vendor == "Canon":
+        pairs = {(ev, n) for ev in steps_of(choices.get("aeb", [])) for n in CANON_FRAMES}
+    elif vendor == "Nikon":
+        frames = set()
+        for pattern in choices.get("aebracketingpattern", []):
+            match = re.match(r"\s*(\d+)\s*images?", pattern, re.IGNORECASE)
+            if match:
+                frames.add(int(match.group(1)))
+        frames = {n for n in frames if n % 2 == 1 and MIN_FRAMES <= n <= MAX_FRAMES}
+        pairs = {(ev, n) for ev in steps_of(choices.get("aebracketingstep", [])) for n in frames}
+    elif vendor == "Sony":
+        for mode in choices.get("capturemode", []):
+            match = _SONY_MODE.search(mode)
+            if mode.lower().startswith("bracketing c") and match:
+                n = int(match.group(2))
+                if n % 2 == 1 and MIN_FRAMES <= n <= MAX_FRAMES:
+                    pairs.add((snap_ev(float(match.group(1))), n))
+    return [bracket_text(ev, n) for ev, n in sorted(pairs)]
+
+
+def is_native(bracket: str, native: Sequence[str]) -> bool:
+    """Whether the camera takes this bracket itself (otherwise it is taken in software)."""
+    spec = parse_bracket(bracket)
+    for option in native:
+        other = parse_bracket(option)
+        if other.frames == spec.frames and abs(other.ev_step - spec.ev_step) < 0.02:
+            return True
+    return False
