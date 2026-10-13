@@ -2064,7 +2064,18 @@ class SummaryPage(QWizardPage):
         camera_profile = camera_profile_for(wizard, getattr(wizard, 'config_manager', None), camera_name)
         timing = camera_profile.timing_profile() if camera_profile else DEFAULT_PROFILE
         vendor = (camera_profile.vendor if camera_profile else None) or vendor_from_name(camera_name)
-        plan = contact_burst_plan(vendor, contact_bursts, timing)
+        # With the lunar limb profile, the beads bursts are centred on the Baily's beads
+        # windows.  They are still written relative to C2 and C3, so a script run
+        # without the limb profile keeps all its lines (timed against the mean limb).
+        bead_windows = {}
+        for contact in ("C2", "C3"):
+            if timings and contact in timings and all(f"BEADS_{contact}_{edge}" in timings
+                                                      for edge in ("START", "END")):
+                at = timings[contact].time_utc
+                bead_windows[contact] = tuple((timings[f"BEADS_{contact}_{edge}"].time_utc - at).total_seconds()
+                                              for edge in ("START", "END"))
+        plan = contact_burst_plan(vendor, contact_bursts, timing,
+                                  beads_c2=bead_windows.get("C2"), beads_c3=bead_windows.get("C3"))
         contact_burst_param = plan.burst_param
         contact_burst_s = plan.burst_s
         c2_diamond_start, c2_beads_start = plan.c2_diamond_start, plan.c2_beads_start
@@ -2076,6 +2087,34 @@ class SummaryPage(QWizardPage):
         def _offset_str(seconds):
             seconds = int(seconds)
             return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}.0"
+
+        def _contact_offset(reference, seconds_after):
+            """'<reference>, <sign>, <offset>' of a command this many seconds (to 0.1 s) after a contact."""
+            tenths = round(abs(seconds_after) * 10)
+            sign = "-" if seconds_after < 0 else "+"
+            return (f"{reference}, {sign}, {tenths // 36000}:{(tenths // 600) % 60:02d}:"
+                    f"{(tenths // 10) % 60:02d}.{tenths % 10}")
+
+        def _relative(reference, seconds_after):
+            """'C2-0.5s' / 'C3+1.0s', for comments."""
+            return f"{reference}{round(seconds_after, 1) + 0.0:+.1f}s"
+
+        def _window_comment(contact):
+            start, end = bead_windows[contact]
+            return (f"# Baily's beads window ({contact}): {_relative(contact, start)} to "
+                    f"{_relative(contact, end)} ({end - start:.1f}s, from the lunar limb profile)")
+
+        # The chromosphere shot before C3 has to have released the camera when
+        # the beads burst starts, which can be before C3 with the beads timed
+        chromosphere_shutter = get_shutter('chromosphere_c3', '1/250')
+        chromosphere_before_c3 = 2.0
+        if contact_bursts:
+            chromosphere_before_c3 = max(chromosphere_before_c3,
+                                         math.ceil((picture_duration_s(chromosphere_shutter, timing)
+                                                    - c3_beads_start) * 10) / 10)
+        # Seconds before C3 by which the corona sequence has finished
+        totality_end_buffer = max(10, math.ceil(chromosphere_before_c3) if wizard.field('chromosphere') else 0,
+                                  math.ceil(-c3_beads_start) if contact_bursts else 0)
 
         hdr_sequence = HDR_ONE_WAY if wizard.field('hdr_one_way') else HDR_ROUND_TRIP
 
@@ -2483,13 +2522,17 @@ class SummaryPage(QWizardPage):
         if has_totality:
             if wizard.field('diamond') or wizard.field('bailys'):
                 lines.append("# Diamond ring and Baily's beads (C2) - REMOVE SOLAR FILTER!")
+                if plan.beads_timed:
+                    lines.append(_window_comment("C2"))
+                    lines.append("# The beads burst is centred on that window.")
                 lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the diamond ring")
-                lines.append(f"# burst starts at C2-{c2_diamond_start}s and the beads burst at C2-{c2_beads_start}s.")
+                lines.append(f"# burst starts at {_relative('C2', -c2_diamond_start)} and the beads burst at "
+                             f"{_relative('C2', -c2_beads_start)}.")
                 beads_shutter = get_shutter('bailys_beads_c2', '1/500')
                 diamond_shutter = get_shutter('diamond_ring_c2', '1/250')
 
-                lines.append(f'take_burst, C2, -, {_offset_str(c2_diamond_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 diamond ring"')
-                lines.append(f'take_burst, C2, -, {_offset_str(c2_beads_start)}, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "Pre-C2 beads"')
+                lines.append(f'take_burst, {_contact_offset("C2", -c2_diamond_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 diamond ring"')
+                lines.append(f'take_burst, {_contact_offset("C2", -c2_beads_start)}, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 beads"')
                 lines.append("")
             
             # Totality/Annularity - Corona
@@ -2592,7 +2635,7 @@ class SummaryPage(QWizardPage):
                         # Generate shots from C2+10s (or later, after the early totality
                         # shots) to C3-10s, tracking cumulative time to avoid overlaps
                         start_offset = max(10, early_end)
-                        end_buffer = 10
+                        end_buffer = totality_end_buffer
                         usable_duration = totality_duration - start_offset - end_buffer
                         
                         if usable_duration > 0:
@@ -2693,8 +2736,7 @@ class SummaryPage(QWizardPage):
             # Chromosphere
             if wizard.field('chromosphere'):
                 lines.append("# Chromosphere")
-                chromo_shutter = get_shutter('chromosphere_c3', '1/250')
-                lines.append(f'take_picture, C3, -, 0:00:02.0, {camera_name}, {chromo_shutter}, {aperture}, {preferred_iso}, "Chromosphere pre-C3"')
+                lines.append(f'take_picture, {_contact_offset("C3", -chromosphere_before_c3)}, {camera_name}, {chromosphere_shutter}, {aperture}, {preferred_iso}, "Chromosphere pre-C3"')
                 lines.append("")
             
             # Earthshine (if requested and feasible)
@@ -2780,13 +2822,17 @@ class SummaryPage(QWizardPage):
             # C3 - Diamond ring and Baily's beads
             if wizard.field('diamond') or wizard.field('bailys'):
                 lines.append("# Diamond ring and Baily's beads (C3)")
+                if plan.beads_timed:
+                    lines.append(_window_comment("C3"))
+                    lines.append("# The beads burst is centred on that window.")
                 lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the beads burst")
-                lines.append(f"# starts at C3+{c3_beads_start}s and the diamond ring burst at C3+{c3_diamond_start}s.")
+                lines.append(f"# starts at {_relative('C3', c3_beads_start)} and the diamond ring burst at "
+                             f"{_relative('C3', c3_diamond_start)}.")
                 diamond_c3_shutter = get_shutter('diamond_ring_c3', '1/250')
                 beads_c3_shutter = get_shutter('bailys_beads_c3', '1/500')
 
-                lines.append(f'take_burst, C3, +, {_offset_str(c3_beads_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "Post-C3 beads"')
-                lines.append(f'take_burst, C3, +, {_offset_str(c3_diamond_start)}, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 diamond ring"')
+                lines.append(f'take_burst, {_contact_offset("C3", c3_beads_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 beads"')
+                lines.append(f'take_burst, {_contact_offset("C3", c3_diamond_start)}, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 diamond ring"')
                 lines.append("# REPLACE SOLAR FILTER after C3!")
                 lines.append("")
         

@@ -273,7 +273,10 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
             busy_windows.append(window)
 
     report_camera_conflicts(busy_windows)
-    warn_if_script_outlasts_totality(scheduler, reference_moments)
+    time_shift = gps_time_offset
+    if reference_moment:
+        time_shift += reference_moments[reference_moment.upper()].time_utc - simulated_start
+    warn_if_script_outlasts_totality(scheduler, reference_moments, time_shift)
 
     return unknown
 
@@ -345,6 +348,14 @@ CAMERA_FREE_COMMANDS = frozenset({'voice_prompt'})
 #: will do, and most of the jobs around second contact are voice prompts.
 JOB_COMMANDS: dict = {}
 
+#: The reference moment each scheduled job was written against, by job id.
+JOB_REFERENCES: dict = {}
+
+#: Reference moments that move with third contact.  A command written against
+#: one of them (e.g. a chromosphere shot at C3-2s) follows the totality it runs
+#: in, so it cannot be a sign of a script written for a longer totality.
+THIRD_CONTACT_REFERENCES = frozenset({"C3", "C3_MEAN", "BEADS_C3", "BEADS_C3_START", "BEADS_C3_END"})
+
 #: A totality command finishing this close to third contact is treated as
 #: overrunning it.  A corona ladder takes about six and a half seconds, so
 #: anything starting inside that window is still holding the camera when the
@@ -361,10 +372,17 @@ def job_touches_camera(job) -> bool:
     return JOB_COMMANDS.get(getattr(job, 'id', None), '') not in CAMERA_FREE_COMMANDS
 
 
-def warn_if_script_outlasts_totality(scheduler, reference_moments: dict) -> float:
+def warn_if_script_outlasts_totality(scheduler, reference_moments: dict,
+                                     time_shift: timedelta = timedelta(0)) -> float:
     """Say so when the script was written for a longer totality than this one.
 
     Returns the seconds of overrun, 0.0 when there are none.
+
+    Args:
+        - scheduler: Scheduler with the jobs of the loaded script
+        - reference_moments: Reference moments the script was scheduled against
+        - time_shift: How much earlier than the reference moments the jobs were scheduled
+                      (simulation offset plus GPS-computer time offset)
 
     Loading the wrong duration is silent and costs the part of the eclipse that
     cannot be retaken: the last corona ladder of a script written for a longer
@@ -388,6 +406,10 @@ def warn_if_script_outlasts_totality(scheduler, reference_moments: dict) -> floa
         when = getattr(job, "next_run_time", None)
         if when is None or not job_touches_camera(job):
             continue
+        if JOB_REFERENCES.get(getattr(job, "id", None)) in THIRD_CONTACT_REFERENCES:
+            continue
+        # Back on the time scale of the reference moments
+        when = when + time_shift
         if c2.time_utc <= when < c3.time_utc and when > deadline:
             if latest is None or when > latest:
                 latest = when
@@ -565,6 +587,7 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
         job = scheduler.add_job(func, trigger=trigger, args=args, name=description)
         JOB_COMMANDS[job.id] = func_name
+        JOB_REFERENCES[job.id] = ref_moment
     except KeyError as missing:
         # A line naming a moment the calculation did not produce.  Usually a
         # limb-corrected moment — BEADS_C2 and friends only exist when the

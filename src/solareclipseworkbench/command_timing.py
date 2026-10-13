@@ -22,7 +22,7 @@ queued behind it was dropped.
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 from solareclipseworkbench.bracketing import HDR_ROUND_TRIP, bracket_exposures, hdr_offsets, parse_bracket
 from solareclipseworkbench.exposure_calculator import parse_shutter_speed
@@ -137,10 +137,15 @@ def bracket_planning_s(shutter_speed: str, bracket: str, profile: TimingProfile 
 CONTACT_BUFFER_S = 10
 
 # The beads burst before C2 starts this many seconds before C2: shooting begins
-# about a second later, so it covers the last ~3 s before C2.
+# about a second later, so it covers the last ~3 s before C2.  Used when the
+# Baily's beads window is not known (no lunar limb profile).
 C2_BEADS_START_S = 4
 # The beads burst after C3 starts this many seconds after C3.
 C3_BEADS_START_S = 1
+
+# Shooting starts about this long after a take_burst command: the camera
+# configuration is written first.
+BURST_LEAD_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -149,22 +154,40 @@ class ContactBurstPlan:
 
     The bursts follow the order of the phenomena: before C2 the diamond ring is
     followed by the beads, after C3 the beads are followed by the diamond ring.
-    Everything is in whole seconds, as the wizard writes it.
+    The burst starts are in tenths of a second; when the Baily's beads window
+    is known, a beads burst can start after C2 or before C3, which shows as a
+    negative value.  The buffers and the first totality shot are whole seconds.
     """
 
     burst_param: float           # script parameter: frames for Nikon, seconds for Canon/Sony
     burst_s: float               # estimated time a burst keeps the camera busy
-    c2_diamond_start: int        # seconds before C2
-    c2_beads_start: int          # seconds before C2
-    c3_beads_start: int          # seconds after C3
-    c3_diamond_start: int        # seconds after C3
+    c2_diamond_start: float      # seconds before C2
+    c2_beads_start: float        # seconds before C2 (negative: after C2)
+    c3_beads_start: float        # seconds after C3 (negative: before C3)
+    c3_diamond_start: float      # seconds after C3
     c2_buffer: int               # partial shots end at least this long before C2
     c3_buffer: int               # partial shots start at least this long after C3
     totality_first_shot: int     # seconds after C2 of the first totality shot
+    beads_timed: bool = False    # whether the beads bursts are aimed at the Baily's beads windows
+
+
+def beads_burst_start(window: Tuple[float, float], shooting_s: float) -> float:
+    """When to start a beads burst so its shooting is centred on the Baily's beads window.
+
+    Args:
+        - window: Start and end of the window, in seconds relative to the contact (negative: before it)
+        - shooting_s: Time the shutter is held during the burst
+
+    Returns: Start of the take_burst command in seconds relative to the contact, to a tenth of a second.
+    """
+    centre = (window[0] + window[1]) / 2
+    return round(centre - shooting_s / 2 - BURST_LEAD_S, 1)
 
 
 def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
-                       profile: TimingProfile = DEFAULT_PROFILE) -> ContactBurstPlan:
+                       profile: TimingProfile = DEFAULT_PROFILE,
+                       beads_c2: Optional[Tuple[float, float]] = None,
+                       beads_c3: Optional[Tuple[float, float]] = None) -> ContactBurstPlan:
     """Space the C2/C3 bursts, and the shots next to them, by the estimated burst duration.
 
     Args:
@@ -172,23 +195,32 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
         - bursts_enabled: False when the script has no diamond ring/beads bursts; the
                           neighbouring shots then keep their usual distance from C2/C3.
         - profile: Overheads to plan with (defaults, or measured on the camera)
+        - beads_c2, beads_c3: Baily's beads window around C2 and C3 (BEADS_C2_START/_END, ...), in
+                              seconds relative to the contact.  The beads bursts are centred on them;
+                              without both, the bursts start at C2-4 s and C3+1 s.
     """
     # Nikon: number of frames.  Canon and Sony: seconds the shutter is held.
     burst_param = 30 if vendor == "Nikon" else 2
     burst_s = burst_duration_s(vendor, burst_param, profile)
     burst_whole_s = math.ceil(burst_s)
 
-    c2_beads_start = C2_BEADS_START_S
-    c2_diamond_start = c2_beads_start + burst_whole_s
-    c3_beads_start = C3_BEADS_START_S
-    c3_diamond_start = c3_beads_start + burst_whole_s
+    beads_timed = beads_c2 is not None and beads_c3 is not None
+    if beads_timed:
+        shooting_s = burst_shooting_s(vendor, burst_param, profile)
+        c2_beads_start = -beads_burst_start(beads_c2, shooting_s)
+        c3_beads_start = beads_burst_start(beads_c3, shooting_s)
+    else:
+        c2_beads_start = C2_BEADS_START_S
+        c3_beads_start = C3_BEADS_START_S
+    c2_diamond_start = round(c2_beads_start + burst_whole_s, 1)
+    c3_diamond_start = round(c3_beads_start + burst_whole_s, 1)
 
     if bursts_enabled:
         # Room for the last partial shot (at most 1/30 s) to finish before the
         # diamond ring burst starts, and for the C3 diamond ring burst to finish
         # before the first partial shot after C3.
-        c2_buffer = max(CONTACT_BUFFER_S, c2_diamond_start + math.ceil(picture_duration_s("1/30", profile)))
-        c3_buffer = max(CONTACT_BUFFER_S, c3_diamond_start + burst_whole_s)
+        c2_buffer = max(CONTACT_BUFFER_S, math.ceil(c2_diamond_start + picture_duration_s("1/30", profile)))
+        c3_buffer = max(CONTACT_BUFFER_S, math.ceil(c3_diamond_start + burst_whole_s))
         # Totality starts with the camera still busy with the beads burst.
         totality_first_shot = max(3, math.ceil(burst_s - c2_beads_start))
     else:
@@ -197,4 +229,5 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
         totality_first_shot = 3
 
     return ContactBurstPlan(burst_param, burst_s, c2_diamond_start, c2_beads_start, c3_beads_start,
-                            c3_diamond_start, c2_buffer, c3_buffer, totality_first_shot)
+                            c3_diamond_start, c2_buffer, c3_buffer, totality_first_shot,
+                            beads_timed and bursts_enabled)

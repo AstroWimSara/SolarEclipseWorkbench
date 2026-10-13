@@ -32,6 +32,7 @@ def scheduler():
     if scheduler.running:
         scheduler.shutdown(wait=False)
     utils.JOB_COMMANDS.clear()
+    utils.JOB_REFERENCES.clear()
 
 
 @pytest.fixture
@@ -43,9 +44,11 @@ def moments():
     }
 
 
-def _job_at(scheduler, seconds_after_c2, command):
-    job = scheduler.add_job(lambda: None, trigger=DateTrigger(run_date=C2 + timedelta(seconds=seconds_after_c2)))
+def _job_at(scheduler, seconds_after_c2, command, reference="C2", shift=timedelta(0)):
+    job = scheduler.add_job(lambda: None,
+                            trigger=DateTrigger(run_date=C2 + timedelta(seconds=seconds_after_c2) - shift))
     utils.JOB_COMMANDS[job.id] = command
+    utils.JOB_REFERENCES[job.id] = reference
     return job
 
 
@@ -74,3 +77,20 @@ def test_without_both_contacts_there_is_nothing_to_compare(scheduler, moments):
     _job_at(scheduler, TOTALITY_S - 3, "take_bracket")
 
     assert warn_if_script_outlasts_totality(scheduler, {"C2": moments["C2"]}) == 0.0
+
+
+def test_a_shot_written_against_third_contact_is_not_an_overrun(scheduler, moments):
+    """A chromosphere shot at C3-2s moves with C3, whatever the length of totality."""
+    _job_at(scheduler, TOTALITY_S - 2, "take_picture", reference="C3")
+
+    assert warn_if_script_outlasts_totality(scheduler, moments) == 0.0
+
+
+def test_simulated_and_gps_corrected_jobs_are_compared_on_the_eclipse_time_scale(scheduler, moments):
+    shift = timedelta(days=30, seconds=1.5)
+    _job_at(scheduler, TOTALITY_S - 4.4, "take_bracket", shift=shift)
+    _job_at(scheduler, TOTALITY_S - TOTALITY_OVERRUN_MARGIN_S - 1, "take_bracket", shift=shift)
+
+    overrun = warn_if_script_outlasts_totality(scheduler, moments, time_shift=shift)
+
+    assert overrun == pytest.approx(TOTALITY_OVERRUN_MARGIN_S - 4.4, abs=0.01)

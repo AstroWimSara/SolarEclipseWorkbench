@@ -6,7 +6,9 @@ import pytest
 import pytz
 
 from solareclipseworkbench.command_timing import (
+    BURST_LEAD_S,
     burst_duration_s,
+    burst_shooting_s,
     contact_burst_plan,
     picture_duration_s,
 )
@@ -139,3 +141,33 @@ def test_sony_burst_is_given_in_seconds():
 def test_without_bursts_neighbouring_shots_keep_their_usual_distance():
     plan = contact_burst_plan("Canon", bursts_enabled=False)
     assert (plan.c2_buffer, plan.c3_buffer, plan.totality_first_shot) == (10, 10, 3)
+
+
+# --- Bursts aimed at the Baily's beads windows ---------------------------------
+
+@pytest.mark.parametrize("vendor", ["Canon", "Nikon", "Sony"])
+def test_the_beads_bursts_are_centred_on_the_bead_windows(vendor):
+    beads_c2, beads_c3 = (-0.1, 3.1), (-0.0, 4.0)
+    plan = contact_burst_plan(vendor, beads_c2=beads_c2, beads_c3=beads_c3)
+    shooting = burst_shooting_s(vendor, plan.burst_param)
+
+    assert plan.beads_timed
+    for start, window in ((-plan.c2_beads_start, beads_c2), (plan.c3_beads_start, beads_c3)):
+        shooting_centre = start + BURST_LEAD_S + shooting / 2
+        assert shooting_centre == pytest.approx(sum(window) / 2, abs=0.05)
+
+
+def test_a_beads_burst_after_c2_moves_the_first_totality_shot():
+    plan = contact_burst_plan("Canon", beads_c2=(2.0, 6.0), beads_c3=(-6.0, -2.0))
+
+    assert plan.c2_beads_start < 0 and plan.c3_beads_start < 0
+    # The first totality shot waits for the beads burst, which now starts after C2
+    assert plan.totality_first_shot >= -plan.c2_beads_start + plan.burst_s
+    # The diamond ring bursts stay a whole burst away from the beads bursts
+    assert plan.c2_diamond_start - plan.c2_beads_start >= plan.burst_s
+    assert plan.c3_diamond_start - plan.c3_beads_start >= plan.burst_s
+
+
+def test_without_both_windows_the_fixed_offsets_are_used():
+    assert contact_burst_plan("Canon", beads_c2=(-0.1, 3.1)) == contact_burst_plan("Canon")
+    assert not contact_burst_plan("Canon").beads_timed
