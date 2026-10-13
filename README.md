@@ -62,6 +62,9 @@ pip install --upgrade --pre solareclipseworkbench
   - [Shortcomings](#shortcomings)
   - [Converting scripts from Solar Eclipse Maestro](#converting-scripts-from-solar-eclipse-maestro)
   - [Error handling](#error-handling)
+  - [Commands that are too close together](#commands-that-are-too-close-together)
+  - [Timing shots around C2 and C3](#timing-shots-around-c2-and-c3)
+  - [Handling camera(s) disconnect(s)](#handling-cameras-disconnects)
   - [Development Guide](#development-guide)
     - [Installation on macOS](#installation-on-macos-1)
     - [Installation on Ubuntu 24.04](#installation-on-ubuntu-2404-1)
@@ -360,6 +363,8 @@ Another thing to keep in mind - filename prefix. If you have multiple Sony camer
 
 Final note on the `PC+Camera` option - SEW will not actually save JPEG files to PC, they will be ignored and the PTP events on camera flushed, with RAW files being consistently written to SD card (please don't forget to set `RAW+J PC Save Img` setting with `JPEG only` option!).
 
+Camera clock - SEW cannot set the clock of a Sony camera over USB: pressing `Camera(s)` logs `Could not set date & time (unsupported operation?)`.  The clocks of consumer Sony bodies are also known to drift noticeably over a few days, so a clock set by hand well before the eclipse can be off by seconds on the day, and the times in the EXIF data of your pictures cannot be compared with the contact times.  This does not affect when SEW takes the pictures (that follows the computer clock, see [GPS time correction](#gps-time-correction)), only the times written in the files.  Set the camera clock as close to the eclipse as possible, or sync it from a script: [sony-location-info-link-sync](https://github.com/fliker09/sony-location-info-link-sync) can be run with a `command` line in your script.  The log of every run has the time each command released the shutter, in UTC with milliseconds, which is a reliable reference for when each picture was taken.
+
 
 ## Upgrading Solar Eclipse Workbench
 
@@ -491,7 +496,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
   - Battery level (in percentage);
   - Free memory (both in percentage and in GB).
 - Apart from updating the camera information in the UI, the following is done for all cameras:
-  - Syncing the time with the time of the computer the camera is connected to.  The camera clock is only changed when its current value can be read, and it is read back afterwards.  If the camera did not take the new time (some older cameras fall back to a default date such as 1980), the previous date and time are restored, a warning is shown, and SEW does not touch the clock of that camera again until it is restarted: set the date and time on the camera by hand in that case.  The `sync_cameras` script command works the same way;
+  - Syncing the time with the time of the computer the camera is connected to.  The camera clock is only changed when its current value can be read, and it is read back afterwards.  If the camera did not take the new time (some older cameras fall back to a default date such as 1980), the previous date and time are restored, a warning is shown, and SEW does not touch the clock of that camera again until it is restarted: set the date and time on the camera by hand in that case.  Sony cameras do not allow setting the clock over USB at all (see [Sony PC Remote settings discussion](#sony-pc-remote-settings-discussion)).  The `sync_cameras` script command works the same way;
   - Checking whether for the focus mode and the shooting mode are set to "Manual".  If this is not the case, a warning message is logged in the Console where the UI was started.
 
 #### Simulation mode
@@ -855,6 +860,16 @@ Every start of `sew` (and of `sew_wizard`) writes a new log file in `~/.SolarEcl
 ## Commands that are too close together
 
 A camera can only execute one command at a time, and a command keeps the camera busy for considerably longer than its exposure time: settings are sent over USB before the picture is taken, and after a `take_burst` the camera has to write its buffer to the card.  A command that has to wait more than 1.5 seconds for its camera is skipped rather than executed late.  When a script is loaded, Solar Eclipse Workbench estimates how long each command keeps its camera busy and warns about every command that will probably be skipped, so the script can be corrected before the eclipse.  As a rule of thumb, allow about 2 seconds plus the exposure time for `take_picture`, and about 6 seconds plus the burst duration for `take_burst`.  A Sony bracket takes about 4.5 seconds on top of its exposures, and on a Sony the first command after a change of drive mode (single pictures, burst, a bracketing mode) takes about 4 seconds longer; a `prepare_camera` ahead of time takes that change out of the sequence.
+
+## Timing shots around C2 and C3
+
+The seconds around second and third contact (Baily's beads, the diamond ring, the chromosphere) are the hardest to time.  A few things to keep in mind when writing these lines yourself:
+
+- **A burst or a bracket covers a stretch of time, not a moment.**  It starts at the scheduled time, plus the time needed to send the settings to the camera, and its frames follow one after the other from there.  A 5-frame bracket of 3 EV steps around 1/30 includes a 2 s exposure and takes about 7 seconds on a Sony A7R IIIA.  Before C2, schedule a sequence so that it *ends* where you want it; after C3, it *starts* where you want it.  The same offset on both sides does not give the same result: on the 2026 eclipse, a bracket at C2-1 s mostly shot totality, while one at C3+1 s shot the growing crescent well after C3 (Discussion #192).
+- **Keep 1.5 to 2 seconds away from the contacts, rather than 1 second.**  Different programs give contact times that differ by up to about a second (for the 2026 eclipse in Spain, SEW with the lunar limb correction, Solar Eclipse Maestro and Eclipse Chaser Log differed by up to 0.7 s at C2 and 1.0 s at C3), and the camera needs time to get going.
+- **C2 and C3 do not look the same.**  The mountains and valleys at the edge of the Moon decide where and for how long the Baily's beads show, and that is different at C2 and C3.  Use the limb-corrected contact times and the `BEADS_C2` / `BEADS_C3` windows (see [Lunar limb correction and Baily's beads](#lunar-limb-correction-and-bailys-beads)), the `Baily's beads` window, or the simulations on the Eclipse Chaser Log map, rather than mirroring your C2 lines at C3.
+- **Prepare the camera before a sequence.**  On a Sony, the first command after a change between single pictures, a burst and a bracketing mode takes about 4 seconds longer.  Put a `prepare_camera` a few seconds before the first shot of the C2 and C3 sequences (the wizard does this for you).
+- **Rehearse, and read the log.**  Run your script in simulation mode with the cameras you will use.  The log has, for every command, `… released the shutter at … UTC: … s after its scheduled time`, so you can see how late each sequence really starts and adjust the offsets.
 
 ## Handling camera(s) disconnect(s)
 
