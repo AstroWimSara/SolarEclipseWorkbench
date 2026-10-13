@@ -1,13 +1,19 @@
 import logging
 import csv
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import List, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
 from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, sync_cameras, scripts, execute_command
 from solareclipseworkbench import hardware_problems
-from solareclipseworkbench.camera import CameraSettings
+from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S
+from solareclipseworkbench.command_timing import (
+    vendor_from_name, picture_duration_s, burst_duration_s, hdr_duration_s, bracket_duration_s,
+    TimingProfile, DEFAULT_PROFILE,
+)
 from solareclipseworkbench.notifications import check_notification
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
@@ -21,6 +27,118 @@ COMMANDS = {
     'sync_cameras': sync_cameras,
     'command': execute_command
 }
+
+
+@dataclass(frozen=True)
+class CameraBusyWindow:
+    """When a scheduled camera command starts and how long it keeps the camera busy."""
+
+    camera: str
+    start: datetime
+    duration_s: float
+    description: str
+
+
+@dataclass(frozen=True)
+class CameraConflict:
+    """A command that has to wait for the camera because an earlier one is still running."""
+
+    window: CameraBusyWindow
+    blocked_by: CameraBusyWindow
+    wait_s: float
+    dropped: bool
+
+
+def estimate_busy_s(func_name: str, script_args: list, camera=None,
+                    profile: TimingProfile = DEFAULT_PROFILE) -> Optional[float]:
+    """Estimated time the camera is busy with a command, from its script arguments.
+
+    Args:
+        - func_name: Script command name (take_picture, take_burst, ...)
+        - script_args: Script fields after the time offset, without the description:
+                       camera name, shutter speed, aperture, ISO and, where applicable, the extra parameter
+        - camera: Camera object, used for its vendor (falls back to the name in the script)
+        - profile: Overheads to use (defaults, or measured on the camera)
+
+    Returns: Estimated duration in seconds, or None for commands that are not estimated.
+    """
+    try:
+        shutter = script_args[1].strip()
+        if func_name == "take_picture":
+            return picture_duration_s(shutter, profile)
+        if func_name == "take_burst":
+            vendor = getattr(camera, "vendor", None) or vendor_from_name(script_args[0])
+            return burst_duration_s(vendor, float(script_args[4]), profile)
+        if func_name == "take_hdr":
+            return hdr_duration_s(shutter, int(script_args[4]))
+        if func_name == "take_bracket":
+            return bracket_duration_s(shutter, profile)
+    except (IndexError, ValueError):
+        pass
+    return None
+
+
+def find_camera_conflicts(windows: List[CameraBusyWindow],
+                          max_wait_s: float = _MAX_LOCK_WAIT_S) -> List[CameraConflict]:
+    """Replay each camera's commands the way the camera USB lock serialises them.
+
+    A command that would have to wait for the camera longer than max_wait_s is
+    dropped when it fires (see camera._serialised_on_camera) and does not keep
+    the camera busy; one that waits less starts late and pushes the rest back.
+
+    Returns: The commands that will start late or be dropped, in time order.
+    """
+    conflicts = []
+    by_camera = {}
+    for window in windows:
+        by_camera.setdefault(window.camera, []).append(window)
+
+    for camera_windows in by_camera.values():
+        busy_until = None
+        busy_with = None
+        for window in sorted(camera_windows, key=lambda w: w.start):
+            wait_s = (busy_until - window.start).total_seconds() if busy_until is not None else 0.0
+            if wait_s > max_wait_s:
+                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=True))
+                continue
+            if wait_s > 0:
+                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=False))
+            actual_start = max(window.start, busy_until) if busy_until is not None else window.start
+            busy_until = actual_start + timedelta(seconds=window.duration_s)
+            busy_with = window
+
+    return sorted(conflicts, key=lambda c: c.window.start)
+
+
+def _hms(moment: datetime) -> str:
+    """Time of day with tenths of a second, e.g. 18:29:29.3."""
+    return moment.strftime("%H:%M:%S.%f")[:-5]
+
+
+def report_camera_conflicts(windows: List[CameraBusyWindow]) -> List[CameraConflict]:
+    """Warn about script commands that will be dropped because their camera is still busy.
+
+    Called when a script is loaded, so the problem shows up while the script can
+    still be fixed rather than as missing pictures after the eclipse.
+    """
+    conflicts = find_camera_conflicts(windows)
+    for conflict in conflicts:
+        blocker = conflict.blocked_by
+        detail = (f'"{blocker.description}" at {_hms(blocker.start)} UTC keeps {conflict.window.camera} '
+                  f'busy for about {blocker.duration_s:.0f} s; "{conflict.window.description}" at '
+                  f'{_hms(conflict.window.start)} UTC would have to wait {conflict.wait_s:.1f} s')
+        if conflict.dropped:
+            hardware_problems.report(
+                "Script",
+                f'"{conflict.window.description}" on {conflict.window.camera} will probably be skipped: '
+                f'the camera is still busy with "{blocker.description}".  Commands that wait more than '
+                f'{_MAX_LOCK_WAIT_S:.1f} s for the camera are dropped; schedule them further apart.',
+                detail=detail,
+                severity="warning",
+            )
+        elif conflict.wait_s > 0.05:
+            logging.info("Script timing: %s (it will be taken late).", detail)
+    return conflicts
 
 
 def calculate_next_solar_eclipses(count: int) -> list:
@@ -140,16 +258,21 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
     script_file.seek(0)
 
     # Loop over all lines in script file
+    busy_windows = []
     for cmd_str in script_file:
-        schedule_command(
+        window = schedule_command(
             scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start,
             gps_time_offset=gps_time_offset)
+        if window is not None:
+            busy_windows.append(window)
+
+    report_camera_conflicts(busy_windows)
 
 
 def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
                      controller: SolarEclipseController, reference_moment_for_simulation: str,
                      simulated_start: datetime,
-                     gps_time_offset: timedelta = timedelta(0)):
+                     gps_time_offset: timedelta = timedelta(0)) -> Optional[CameraBusyWindow]:
     """ Schedule the given command with the given scheduler and reference moments.
 
     Args:
@@ -165,6 +288,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
         - gps_time_offset: GPS–computer time offset (GPS UTC − computer UTC).  When positive the computer
                             is slow; execution times are shifted earlier by this amount so that actions
                             fire at the correct GPS-referenced wall-clock time.  Defaults to timedelta(0).
+
+    Returns: For a camera command, when it starts and how long it is expected to keep the camera
+             busy; None otherwise (or when the command was not scheduled).
     """
     # Use CSV reader to properly handle quoted fields with commas
     try:
@@ -189,6 +315,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     logging.info(f"Scheduling {func_name} at {ref_moment}{sign}{cmd_str_split[3].strip()}")
 
     args = cmd_str_split[4:-1]
+    script_args = list(args)
+    camera_obj = None
 
     if func_name == "voice_prompt":
         # Resolve the prompt now rather than when the job fires: a typo would
@@ -203,6 +331,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     elif func_name != "command":
         if cameras is not None:
             try:
+                if func_name != "sync_cameras":
+                    camera_obj = cameras[args[0].strip()]
                 if func_name == "take_picture":
                     settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
                     new_args = [cameras[args[0].strip()], settings]
@@ -286,7 +416,14 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
         scheduler.add_job(func, trigger=trigger, args=args, name=description)
     except KeyError:
-        return
+        return None
+
+    if camera_obj is None:
+        return None
+    busy_s = estimate_busy_s(func_name, script_args, camera_obj)
+    if busy_s is None:
+        return None
+    return CameraBusyWindow(script_args[0].strip(), execution_time, busy_s, description)
 
 # Main
 def main():

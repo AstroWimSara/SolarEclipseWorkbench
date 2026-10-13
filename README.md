@@ -814,6 +814,10 @@ If something goes wrong, an error message will be shown in the terminal and logg
 
 Every start of `sew` (and of `sew_wizard`) writes a new log file in `~/.SolarEclipseWorkbench/logs/`, named after the moment it started, e.g. `sew-20260812-171503Z.log`.  Log files are never overwritten or deleted by the application, so the log of an eclipse is still available afterwards, however often the application was restarted.  The log contains every command that was scheduled and executed (or skipped), the contact times, the GPS clock offset and the connected cameras.  Timestamps are in UTC with millisecond resolution, like the contact times, so they can be compared directly with the times of the pictures.
 
+## Commands that are too close together
+
+A camera can only execute one command at a time, and a command keeps the camera busy for considerably longer than its exposure time: settings are sent over USB before the picture is taken, and after a `take_burst` the camera has to write its buffer to the card.  A command that has to wait more than 1.5 seconds for its camera is skipped rather than executed late.  When a script is loaded, Solar Eclipse Workbench estimates how long each command keeps its camera busy and warns about every command that will probably be skipped, so the script can be corrected before the eclipse.  As a rule of thumb, allow about 2 seconds plus the exposure time for `take_picture`, and about 6 seconds plus the burst duration for `take_burst`.
+
 ## Handling camera(s) disconnect(s)
 
 In case your camera was turned off or disconnected from USB, you don't have to restart the app to reconnect back to your camera. Once your camera is back online, press `Stop`, agree to remove the scheduled jobs, press `Camera(s)` and see if the camera is properly detected. After that, load your script again (thankfully, the file dialog will remember your last directory) and the execution will resume (do note that the events missed while you were restoring the connection will not be re-attempted).
