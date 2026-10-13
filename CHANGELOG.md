@@ -13,11 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Warning when a script is loaded if a command will probably be skipped because its camera is still busy with an earlier command (estimated from the exposure time, the USB overhead and, for bursts, the time to empty the camera buffer)
 - Wizard: `Test Camera...` on the equipment page reads the shutter speeds, ISO values and apertures the camera offers with its lens, its burst support and state, and (full test) sets and verifies the camera clock and measures how long a picture and a burst take.  The result is saved with the camera, and the generated script is fitted to it: exposures are moved to settings the camera really has, keeping the brightness the same (with ISO or aperture where the shutter speed alone cannot), shots the camera cannot expose as planned are marked, and shots are spaced by the measured durations
 - Wizard: `Verify with Camera...` checks the generated script against the connected camera: the camera name, availability of every ISO, shutter speed and aperture, mode dial, focus, battery, card space, auto power off, burst support, clock and timing.  The summary also shows the timing check of the generated script
-- Each run writes its own log file in `~/.SolarEclipseWorkbench/logs/`, with UTC millisecond timestamps, the contact times, GPS offset and cameras of the run; log files are never overwritten
+- Each run writes its own log file in `~/.SolarEclipseWorkbench/logs/`, with UTC millisecond timestamps, the contact times, GPS offset and cameras of the run; log files are never overwritten (Issue #191)
 
 ### Changed
 
 - Back to the newest python-gphoto2 (2.6.4, with libgphoto2 2.5.34); `take_burst` on Canon now works with both the old and the new libgphoto2
+- Every log message about one camera now starts with that camera's name (its alias when one is configured), so a DEBUG log with several cameras connected shows which body each message is about (Issue #156)
 
 ### Fixed
 
@@ -31,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Wizard: the HDR sequence could start while the first earthshine exposure was still running; it now starts after it, and is placed relative to C2 like the other totality shots
 - Wizard: corona shots could start up to 1 s late because their start was rounded up to a whole second while the next shot was spaced from the unrounded time
 - Setting the camera clock could leave older cameras at a default date (1980 or similar).  The plain PTP date property was written as "YYYY-MM-DD hh:mm:ss" instead of the PTP format "YYYYMMDDThhmmss", and the result was never checked.  The clock is now set through libgphoto2's own `syncdatetime` where the camera offers it, written in the format the camera reports otherwise, and read back: a camera that does not take the time gets its previous date and time back, a warning is shown, and its clock is left alone for the rest of the session.  Setting the clock also no longer competes with a scheduled shot for the USB connection
+- A shot dropped because its camera was still busy with an earlier command was logged without the name of the camera
+- Two Sony log messages (event drain at disconnect, forced USB lock release) showed a literal `%s` instead of the camera name
 - The log file in `/tmp` was overwritten at every start, so the log of an eclipse was lost as soon as the application was restarted; log messages from camera and scheduler threads were also dropped while the eclipse visualisation or contact times were being calculated
 
 ## [2.0.0rc5] - 2026-08-07

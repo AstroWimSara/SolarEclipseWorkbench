@@ -45,7 +45,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
     MIN_AUTO_POWER_OFF_S
 from solareclipseworkbench import hardware_problems
-from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only
+from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -267,7 +267,7 @@ class SolarEclipseModel:
             if id(camera) in seen_ids:
                 continue
             seen_ids.add(id(camera))
-            logging.info(f"Syncing time for camera {camera_name}")
+            camera_log(camera_name).info("syncing time")
             set_time(camera)
 
     def check_camera_state(self):
@@ -2949,7 +2949,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             try:
                                 camera.disconnect()
                             except Exception:
-                                logging.debug('Worker: disconnect of %s raised (non-fatal)', camera_name)
+                                camera_log(camera_name).debug('Worker: disconnect raised (non-fatal)')
                         self._force_camera_refresh = False
 
                     alias_map = ConfigManager().get_camera_aliases() or None
@@ -2973,7 +2973,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         continue
                     seen_camera_ids.add(cam_id)
                     try:
-                        logging.debug('Worker: processing camera %s', camera_name)
+                        camera_log(camera_name).debug('Worker: processing camera')
                         battery_level = get_battery_level(camera).rstrip('%')
                         free_space_gb = get_free_space(camera)
                         total_space = get_space(camera)
@@ -2987,7 +2987,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     except Exception as exc:
                         error_str = str(exc).lower()
                         if any(x in error_str for x in ['-52', '-2', 'could not find the requested device', 'bad parameters']):
-                            logging.warning('Stale camera connection detected on %s (%s)', camera_name, exc)
+                            camera_log(camera_name).warning('Stale camera connection detected (%s)', exc)
                             hardware_problems.report(
                                 str(camera_name),
                                 'Lost the USB connection to this camera',
@@ -2996,7 +2996,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                             needs_refresh = True
                             self._force_camera_refresh = True
                             break
-                        logging.exception('Worker: exception while processing camera %s', camera_name)
+                        camera_log(camera_name).exception('Worker: exception while processing camera')
                         # The row survives with N/A values, which on its own looks
                         # like the camera is simply idle.  Say why.
                         hardware_problems.report(
@@ -3166,7 +3166,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                                 try:
                                     cam.start_background_downloader()
                                 except Exception:
-                                    logging.warning('%s: failed to start Background Downloader', camera_model)
+                                    camera_log(camera_model).warning('failed to start Background Downloader')
 
                                 banner_lines.append(text)
                                 sony_banner_label_visibility = True

@@ -1,10 +1,11 @@
 """Tests for the per-run log files."""
 
 import logging
+import threading
 
 import pytest
 
-from solareclipseworkbench import logging_setup
+from solareclipseworkbench import camera, logging_setup
 
 
 @pytest.fixture
@@ -57,3 +58,60 @@ def test_silencing_the_console_keeps_the_log_file(tmp_path):
         assert logging_setup.file_handlers_only([console_handler, file_handler]) == [file_handler]
     finally:
         file_handler.close()
+
+
+class _NamedCamera:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_camera_log_starts_every_message_with_the_camera_name(caplog):
+    caplog.set_level(logging.DEBUG)
+    logging_setup.camera_log(_NamedCamera("Sun Wide")).debug("set aperture to %s", "f/8")
+    logging_setup.camera_log("Sun Tele").warning("no continuous drive mode available")
+
+    assert caplog.messages == ["Sun Wide: set aperture to f/8", "Sun Tele: no continuous drive mode available"]
+
+
+def test_camera_log_takes_a_percent_sign_in_the_name_literally(caplog):
+    caplog.set_level(logging.DEBUG)
+    log = logging_setup.camera_log("Canon 100%")
+    log.info("battery level is %s", "75%")
+    log.info("connected to AC")
+
+    assert caplog.messages == ["Canon 100%: battery level is 75%", "Canon 100%: connected to AC"]
+
+
+def test_camera_log_exception_keeps_the_traceback(caplog):
+    try:
+        raise RuntimeError("-110 I/O in progress")
+    except RuntimeError:
+        logging_setup.camera_log("Sun Wide").exception("low-level capture failed")
+
+    record, = caplog.records
+    assert record.getMessage() == "Sun Wide: low-level capture failed"
+    assert record.levelno == logging.ERROR and record.exc_info is not None
+
+
+def test_shot_dropped_on_a_busy_camera_names_the_camera(caplog, monkeypatch):
+    """With two bodies connected, a dropped shot must say which one it was."""
+    monkeypatch.setattr(camera, "_MAX_LOCK_WAIT_S", 0.01)
+    busy = _NamedCamera("Sun Tele")
+    busy._usb_lock = threading.RLock()
+    held, release = threading.Event(), threading.Event()
+
+    def hold_the_camera():
+        with busy._usb_lock:
+            held.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_the_camera)
+    holder.start()
+    held.wait(5)
+    try:
+        camera.take_picture(busy, camera.CameraSettings("Sun Tele", "1/1000", "8", 100))
+    finally:
+        release.set()
+        holder.join()
+
+    assert caplog.messages[-1].startswith("Sun Tele: take_picture dropped")

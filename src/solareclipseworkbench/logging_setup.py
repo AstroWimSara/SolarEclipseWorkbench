@@ -104,6 +104,36 @@ def get_log_path() -> Optional[Path]:
     return _log_path
 
 
+class _CameraLogAdapter(logging.LoggerAdapter):
+    """Puts "<camera name>: " in front of every message."""
+
+    def log(self, level, msg, *args, **kwargs):
+        name = self.extra["camera"]
+        if args:
+            # The prefix goes through %-formatting with the message: a "%" in the name must not act as a placeholder.
+            name = name.replace("%", "%%")
+        self.logger.log(level, f"{name}: {msg}", *args, **kwargs)
+
+
+def camera_log(camera) -> logging.LoggerAdapter:
+    """Logger whose messages all start with the name of the given camera.
+
+    With more than one camera connected, a message without the camera's name
+    cannot be traced back to a body.  Log through this instead of through
+    `logging` directly for everything that concerns one camera:
+
+        log = camera_log(camera)
+        log.debug("set aperture to %s", aperture)   # -> "Sun Wide: set aperture to f/8"
+
+    Args:
+        - camera: Camera object (its `name` is used, which is the alias when one is configured), or a camera name
+
+    Returns: Logger adapter on the root logger.
+    """
+    name = camera if isinstance(camera, str) else getattr(camera, "name", None) or str(camera)
+    return _CameraLogAdapter(logging.getLogger(), {"camera": name})
+
+
 def file_handlers_only(handlers: list) -> list:
     """The handlers that write to a log file.
 
