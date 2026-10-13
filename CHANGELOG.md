@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Connected cameras are kept awake before the script starts: idle cameras are pinged over USB every 20 seconds so their auto power off does not put them to sleep (paused around totality and just before scheduled commands, so shots are never delayed), and a camera that stops responding is reported in the GUI
 - Warning when pressing `Camera(s)` if a Canon's `Auto power off` or a Nikon's standby timer is shorter than 30 minutes (Sony does not expose this setting)
+- Each run writes its own log file in `~/.SolarEclipseWorkbench/logs/`, with UTC millisecond timestamps, the contact times, GPS offset and cameras of the run; log files are never overwritten
+
+### Fixed
+
+- The log file in `/tmp` was overwritten at every start, so the log of an eclipse was lost as soon as the application was restarted; log messages from camera and scheduler threads were also dropped while the eclipse visualisation or contact times were being calculated
 
 ## [2.0.0rc5] - 2026-08-07
 

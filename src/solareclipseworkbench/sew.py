@@ -6,6 +6,7 @@ from astropy.time import Time
 from solareclipseworkbench import camera
 from solareclipseworkbench import gui
 from solareclipseworkbench.location_ui import ConfigManager
+from solareclipseworkbench.logging_setup import setup_logging
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.utils import observe_solar_eclipse
 
@@ -14,6 +15,7 @@ def main(args):
     if args.gui:
         gui.main()
     else:
+        setup_logging("sew")
         # Check for all needed parameters
         # Use "is not False" rather than truthiness: an altitude (or longitude/
         # latitude) of 0 is valid but falsy, and would otherwise be rejected.

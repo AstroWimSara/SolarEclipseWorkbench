@@ -65,6 +65,17 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
     Returns: Scheduler that is used to schedule the commands.
     """
 
+    # Record what this run is based on, so the log can be read on its own afterwards.
+    logging.info("Starting observation with script %s", commands_filename)
+    for name, moment in ref_moments.items():
+        time_utc = getattr(moment, "time_utc", None)
+        if time_utc is not None:
+            logging.info("Reference moment %s: %s UTC", name, time_utc.strftime("%Y-%m-%d %H:%M:%S.%f")[:-5])
+    if reference_moment:
+        logging.info("Simulation: %s in %s minutes", reference_moment, minutes_to_reference_moment)
+    logging.info("GPS - computer clock offset: %.3f s", gps_time_offset.total_seconds())
+    logging.info("Cameras: %s", ", ".join(cameras.keys()) if cameras else "none")
+
     scheduler = start_scheduler()
 
     # Calculate simulated time

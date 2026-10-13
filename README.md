@@ -810,7 +810,9 @@ Scripts from Solar Eclipse Maestro are converted automatically to scripts that c
 
 ## Error handling
 
-If something goes wrong, an error message will be shown in the terminal and logged in the log file `/tmp/solareclipseworkbench.log`.
+If something goes wrong, an error message will be shown in the terminal and logged in the log file.
+
+Every start of `sew` (and of `sew_wizard`) writes a new log file in `~/.SolarEclipseWorkbench/logs/`, named after the moment it started, e.g. `sew-20260812-171503Z.log`.  Log files are never overwritten or deleted by the application, so the log of an eclipse is still available afterwards, however often the application was restarted.  The log contains every command that was scheduled and executed (or skipped), the contact times, the GPS clock offset and the connected cameras.  Timestamps are in UTC with millisecond resolution, like the contact times, so they can be compared directly with the times of the pictures.
 
 ## Handling camera(s) disconnect(s)
 

@@ -45,6 +45,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
     MIN_AUTO_POWER_OFF_S
 from solareclipseworkbench import hardware_problems
+from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -73,7 +74,6 @@ BEFORE_AFTER = {
 REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%a, %d %b %Y %H:%M:%S', filename="/tmp/solareclipseworkbench.log", filemode='w')
 
 
 class BannerNotification(QFrame):
@@ -1336,7 +1336,7 @@ class SolarEclipseController(Observer):
                     old_handlers = list(root_logger.handlers)
                     old_level = root_logger.level
                     try:
-                        root_logger.handlers = []
+                        root_logger.handlers = file_handlers_only(old_handlers)
                         rm, mag, typ = self.model.get_reference_moments()
                         result_container["result"] = (rm, mag, typ)
                     except Exception:
@@ -1736,7 +1736,7 @@ class SolarEclipseController(Observer):
             try:
                 # Prevent external libraries from printing to terminal while
                 # downloads happen.
-                root_logger.handlers = []
+                root_logger.handlers = file_handlers_only(old_handlers)
                 reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
                 result_container["result"] = (reference_moments, magnitude, eclipse_type)
             except Exception:
@@ -2294,7 +2294,7 @@ class EclipsePlotWidget(QtWidgets.QWidget):
             old_level = root_logger.level
             try:
                 # Temporarily remove handlers to avoid terminal noise
-                root_logger.handlers = []
+                root_logger.handlers = file_handlers_only(old_handlers)
                 if EclipsePlotWidget.CACHED_TIMESCALE is None:
                     EclipsePlotWidget.CACHED_TIMESCALE = load.timescale()
                 if EclipsePlotWidget.CACHED_EPHEMERIDES is None:
@@ -3456,13 +3456,7 @@ class QJobsTableView(QTableView):
 
 
 def main():
-    time_string = time.strftime("%Y%m%d-%H%M%S")
-    logging.basicConfig(filename=f'{time_string}.log', level=logging.DEBUG, format='%(asctime)s %(message)s')
-    # Also log to stdout so users see debug output in terminal
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-    logging.getLogger().addHandler(console_handler)
+    setup_logging("sew")
     LOGGER.info("Starting up Solar Eclipse Workbench")
 
     parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")

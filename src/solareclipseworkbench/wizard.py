@@ -39,6 +39,7 @@ from solareclipseworkbench.exposure_calculator import (
     round_to_camera_shutter_speed
 )
 from solareclipseworkbench.reference_moments import calculate_reference_moments
+from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only
 from datetime import timedelta
 
 
@@ -1299,7 +1300,7 @@ class SummaryPage(QWizardPage):
             old_level = root_logger.level
             try:
                 # Remove handlers so external libraries don't print to terminal
-                root_logger.handlers = []
+                root_logger.handlers = file_handlers_only(old_handlers)
                 # Run the actual computation
                 res = calculate_reference_moments(longitude, latitude, altitude, eclipse_time)
                 result['res'] = res
@@ -2439,6 +2440,7 @@ class SEWConfigWizard(QWizard):
 
 def main():
     """Main entry point for the wizard application."""
+    setup_logging("sew_wizard")
     app = QApplication(sys.argv)
     app.setApplicationName("Solar Eclipse Workbench Configuration Wizard")
     apply_system_color_scheme(app)
