@@ -1,5 +1,6 @@
 """Test that all partial phase actions are generated without limits and sync_cameras are included."""
 
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -85,8 +86,12 @@ def test_full_partial_generation():
     # Check for example sync commands that should be removed
     example_sync = [l for l in lines if 'Example sync commands' in l]
     
-    # Check for shots below horizon (should be none)
-    below_horizon = [l for l in lines if 'sun -' in l and 'take_picture' in l]
+    # Check for shots below horizon (should be none).  The label shows the apparent altitude of the sun's centre:
+    # shots continue while the sun is partly below the horizon, until its upper limb sets at about -0.27°.
+    shot_altitudes = [(l, float(m.group(1))) for l in lines if 'take_picture' in l
+                      for m in [re.search(r', sun (-?[0-9.]+)°', l)] if m]
+    below_horizon = [l for l, alt in shot_altitudes if alt < -0.3]
+    partly_set = [l for l, alt in shot_altitudes if alt < 0]
     
     print(f"Partial C1-C2 shots generated: {len(take_picture_c1_c2)}")
     print(f"Partial C3-C4 shots generated: {len(take_picture_c3_c4)}")
@@ -151,6 +156,7 @@ def test_full_partial_generation():
     
     # Verify no shots below horizon
     assert len(below_horizon) == 0, f"Shots below horizon should be filtered out, found {len(below_horizon)}"
+    assert len(partly_set) > 0, "Shots while the sun is partly below the horizon should be kept (Issue #188)"
     
     print("✓ All tests passed!")
     print(f"✓ Generated {len(take_picture_c1_c2)} C1-C2 shots (exceeds old 50-shot limit)")

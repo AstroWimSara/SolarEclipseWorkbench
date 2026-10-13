@@ -421,6 +421,7 @@ def calculate_eclipse_exposures(
             "exposure": exp_time,
             "shutter": format_shutter_speed(exp_time),
             "sun_altitude": sun_alt,
+            "sun_apparent_altitude": getattr(moment, "apparent_altitude", sun_alt),
             "time_utc": moment.time_utc,
             "time_local": moment.time_local,
         }
@@ -585,7 +586,7 @@ def calculate_sun_altitude_at_time(
     observer_altitude_m: float
 ) -> float:
     """
-    Calculate sun altitude at a specific time.
+    Calculate the geometric sun altitude (centre of the sun, no refraction) at a specific time.
     
     Args:
         target_time: datetime object for the time to calculate
@@ -596,6 +597,35 @@ def calculate_sun_altitude_at_time(
     
     Returns:
         Sun altitude in degrees
+    """
+    return calculate_sun_altitudes_at_time(
+        target_time, eclipse_time, longitude, latitude, observer_altitude_m
+    )[0]
+
+
+def calculate_sun_altitudes_at_time(
+    target_time,
+    eclipse_time,
+    longitude: float,
+    latitude: float,
+    observer_altitude_m: float
+) -> Tuple[float, float]:
+    """
+    Calculate the geometric and the apparent sun altitude at a specific time.
+
+    The geometric altitude (centre of the sun, no refraction) is what the exposure calculation uses.  The apparent
+    altitude includes atmospheric refraction: it is the altitude as seen, and the one to show to the user.  Near the
+    horizon refraction lifts the sun by about 0.5°.
+
+    Args:
+        target_time: datetime object for the time to calculate
+        eclipse_time: astropy.time.Time object for the eclipse date
+        longitude: Observer longitude in degrees
+        latitude: Observer latitude in degrees
+        observer_altitude_m: Observer altitude above sea level in meters
+
+    Returns:
+        (geometric altitude, apparent altitude) in degrees
     """
     if not HAS_REFERENCE_MOMENTS:
         raise ImportError("reference_moments module not available")
@@ -614,8 +644,9 @@ def calculate_sun_altitude_at_time(
     astro = (earth + place).at(t).observe(sun_ephem)
     app = astro.apparent()
     alt, az, distance = app.altaz()
+    apparent_alt, _, _ = app.altaz(temperature_C=10.0, pressure_mbar='standard')
     
-    return alt.degrees
+    return alt.degrees, apparent_alt.degrees
 
 
 def calculate_eclipse_exposures(
@@ -676,6 +707,7 @@ def calculate_eclipse_exposures(
             "exposure": exp_time,
             "shutter": format_shutter_speed(exp_time),
             "sun_altitude": sun_alt,
+            "sun_apparent_altitude": getattr(moment, "apparent_altitude", sun_alt),
             "time_utc": moment.time_utc,
             "time_local": moment.time_local
         }

@@ -852,7 +852,7 @@ class SolarEclipseView(QMainWindow, Observable):
             self.c1_time_utc_label.setText(format_time(c1_info.time_utc, self.time_format))
             self.c1_time_local_label.setText(format_time(c1_info.time_local, self.time_format))
             self.c1_azimuth_label.setText(str(int(c1_info.azimuth)))
-            self.c1_altitude_label.setText(str(int(c1_info.altitude)))
+            self.c1_altitude_label.setText(str(round(c1_info.apparent_altitude)))
         else:
             self.c1_time_utc_label.setText("")
             self.c1_time_local_label.setText("")
@@ -866,7 +866,7 @@ class SolarEclipseView(QMainWindow, Observable):
             self.c2_time_utc_label.setText(format_time(c2_info.time_utc, self.time_format))
             self.c2_time_local_label.setText(format_time(c2_info.time_local, self.time_format))
             self.c2_azimuth_label.setText(str(int(c2_info.azimuth)))
-            self.c2_altitude_label.setText(str(int(c2_info.altitude)))
+            self.c2_altitude_label.setText(str(round(c2_info.apparent_altitude)))
         else:
             self.c2_time_utc_label.setText("")
             self.c2_time_local_label.setText("")
@@ -880,7 +880,7 @@ class SolarEclipseView(QMainWindow, Observable):
             self.max_time_utc_label.setText(format_time(max_info.time_utc, self.time_format))
             self.max_time_local_label.setText(format_time(max_info.time_local, self.time_format))
             self.max_azimuth_label.setText(str(int(max_info.azimuth)))
-            self.max_altitude_label.setText(str(int(max_info.altitude)))
+            self.max_altitude_label.setText(str(round(max_info.apparent_altitude)))
         else:
             self.max_time_utc_label.setText("")
             self.max_time_local_label.setText("")
@@ -894,7 +894,7 @@ class SolarEclipseView(QMainWindow, Observable):
             self.c3_time_utc_label.setText(format_time(c3_info.time_utc, self.time_format))
             self.c3_time_local_label.setText(format_time(c3_info.time_local, self.time_format))
             self.c3_azimuth_label.setText(str(int(c3_info.azimuth)))
-            self.c3_altitude_label.setText(str(int(c3_info.altitude)))
+            self.c3_altitude_label.setText(str(round(c3_info.apparent_altitude)))
         else:
             self.c3_time_utc_label.setText("")
             self.c3_time_local_label.setText("")
@@ -908,7 +908,7 @@ class SolarEclipseView(QMainWindow, Observable):
             self.c4_time_utc_label.setText(format_time(c4_info.time_utc, self.time_format))
             self.c4_time_local_label.setText(format_time(c4_info.time_local, self.time_format))
             self.c4_azimuth_label.setText(str(int(c4_info.azimuth)))
-            self.c4_altitude_label.setText(str(int(c4_info.altitude)))
+            self.c4_altitude_label.setText(str(round(c4_info.apparent_altitude)))
         else:
             self.c4_time_utc_label.setText("")
             self.c4_time_local_label.setText("")

@@ -27,14 +27,17 @@ def ut_to_hms(ut):
 
 class ReferenceMomentInfo:
 
-    def __init__(self, time_utc: datetime, azimuth: Angle, altitude: float, timezone: pytz.timezone):
+    def __init__(self, time_utc: datetime, azimuth: Angle, altitude: float, timezone: pytz.timezone,
+                 apparent_altitude: float = None):
         """ Keep information for the reference moments.
 
         Args:
             - time_utc: Time of the reference moment [UTC]
             - time_local: Local time of the reference moment.
             - azimuth: Azimuth of the sun at this time.
-            - altitude: Altitude of the sun at this time.
+            - altitude: Geometric altitude of the sun's centre at this time (no refraction), used for exposures.
+            - apparent_altitude: Altitude of the sun's centre as seen, i.e. with atmospheric refraction.  This is
+              what is displayed.  At sunrise and sunset it is about -0.27°: the upper limb touches the horizon.
         """
 
         self.time_utc = time_utc
@@ -42,6 +45,7 @@ class ReferenceMomentInfo:
 
         self.azimuth = azimuth.degrees
         self.altitude = altitude
+        self.apparent_altitude = altitude if apparent_altitude is None else apparent_altitude
 
 
 def _find_timezone(longitude: float, latitude: float) -> str:
@@ -106,21 +110,26 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
     loc = Topos(location.lat.value, location.lon.value, elevation_m=location.height.value)
     observer = eph['Earth'] + place
 
-    date = ts.utc(time.datetime.year, time.datetime.month, time.datetime.day, 4)
+    # Search sunrise/sunset over the local calendar day of the eclipse (local midnight to local midnight).  A fixed
+    # UTC window picks the wrong day far from Greenwich, e.g. the next morning's sunrise in Australia.
+    eclipse_utc = datetime(time.datetime.year, time.datetime.month, time.datetime.day, tzinfo=pytz.UTC) \
+        + timedelta(hours=result['ut_maximum'])
+    local_midnight = timezone.localize(datetime.combine(eclipse_utc.astimezone(timezone).date(), datetime.min.time()))
+    date = ts.from_datetime(local_midnight)
 
     sunrise, y = almanac.find_risings(observer, sun_ephem, date, date + 1)
     sunset, y = almanac.find_settings(observer, sun_ephem, date, date + 1)
     timings = {}
-    alt, az = __calculate_alt_az(ts, earth, sun_ephem, loc, sunrise.utc_datetime()[0])
-    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt.degrees, timezone)
+    alt, az, apparent_alt = __calculate_alt_az(ts, earth, sun_ephem, loc, sunrise.utc_datetime()[0])
+    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt.degrees, timezone, apparent_alt.degrees)
     timings['sunrise'] = sunrise
 
-    alt, az = __calculate_alt_az(ts, earth, sun_ephem, loc, sunset.utc_datetime()[0])
-    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt.degrees, timezone)
+    alt, az, apparent_alt = __calculate_alt_az(ts, earth, sun_ephem, loc, sunset.utc_datetime()[0])
+    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt.degrees, timezone, apparent_alt.degrees)
     timings['sunset'] = sunset
 
-    first_contact_alt, first_contact_az = calculate_alt_az(earth, loc, result['ut_first_contact'], sun_ephem, time, ts)
-    last_contact_alt, last_contact_az = calculate_alt_az(earth, loc, result['ut_last_contact'], sun_ephem, time, ts)
+    first_contact_alt, first_contact_az, first_contact_app = calculate_alt_az(earth, loc, result['ut_first_contact'], sun_ephem, time, ts)
+    last_contact_alt, last_contact_az, last_contact_app = calculate_alt_az(earth, loc, result['ut_last_contact'], sun_ephem, time, ts)
 
     # Normalize altitudes to numeric degrees for comparison
     res_h_val = getattr(result['h'], 'degrees', result['h'])
@@ -134,39 +143,39 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
 
         c1 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
                                                      sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
-                                                     first_contact_az, first_contact_alt.degrees, timezone)
+                                                     first_contact_az, first_contact_alt.degrees, timezone, first_contact_app.degrees)
         timings["C1"] = c1
 
         if result['ut_second_contact'] != result['ut_third_contact']:
-            second_contact_alt, second_contact_az = calculate_alt_az(earth, loc, result['ut_second_contact'], sun_ephem,
+            second_contact_alt, second_contact_az, second_contact_app = calculate_alt_az(earth, loc, result['ut_second_contact'], sun_ephem,
                                                                    time, ts)
             sc_h, sc_m, sc_s = ut_to_hms(result['ut_second_contact'])
             sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
 
             c2 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
                                               sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
-                                     second_contact_az, second_contact_alt.degrees, timezone)
+                                     second_contact_az, second_contact_alt.degrees, timezone, second_contact_app.degrees)
             timings["C2"] = c2
 
-        max_contact_alt, max_contact_az = calculate_alt_az(earth, loc, result['ut_maximum'], sun_ephem,
+        max_contact_alt, max_contact_az, max_contact_app = calculate_alt_az(earth, loc, result['ut_maximum'], sun_ephem,
                                                                time, ts)
         sc_h, sc_m, sc_s = ut_to_hms(result['ut_maximum'])
         sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
 
         maximum = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
                                           sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
-                                 max_contact_az, max_contact_alt.degrees, timezone)
+                                 max_contact_az, max_contact_alt.degrees, timezone, max_contact_app.degrees)
         timings["MAX"] = maximum
 
         if result['ut_second_contact'] != result['ut_third_contact']:
-            third_contact_alt, third_contact_az = calculate_alt_az(earth, loc, result['ut_third_contact'], sun_ephem,
+            third_contact_alt, third_contact_az, third_contact_app = calculate_alt_az(earth, loc, result['ut_third_contact'], sun_ephem,
                                                                    time, ts)
             sc_h, sc_m, sc_s = ut_to_hms(result['ut_third_contact'])
             sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
 
             c3 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
                                               sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
-                                     third_contact_az, third_contact_alt.degrees, timezone)
+                                     third_contact_az, third_contact_alt.degrees, timezone, third_contact_app.degrees)
             timings["C3"] = c3
 
             timings["duration"] = timedelta(hours=(result['ut_third_contact'] - result['ut_second_contact']))
@@ -176,7 +185,7 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
 
         c4 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
                                                      sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
-                                                     last_contact_az, last_contact_alt.degrees, timezone)
+                                                     last_contact_az, last_contact_alt.degrees, timezone, last_contact_app.degrees)
         timings["C4"] = c4
 
         return timings, result['mag'], result['type']
@@ -190,17 +199,17 @@ def calculate_alt_az(earth, loc, reference_moment, sun_ephem, time, ts):
     first_contact_datetime = datetime(time.datetime.year, time.datetime.month, time.datetime.day,
                                       hours, minutes, int(seconds), int((seconds - int(seconds)) * 1_000_000)).replace(
         tzinfo=pytz.UTC)
-    first_contact_alt, first_contact_az = __calculate_alt_az(ts, earth, sun_ephem, loc, first_contact_datetime)
-    return first_contact_alt, first_contact_az
+    return __calculate_alt_az(ts, earth, sun_ephem, loc, first_contact_datetime)
 
 
 def __calculate_alt_az(ts, earth, sun_ephem, loc, timing):
-    astro = (earth + loc).at(
-        ts.utc(timing.year, timing.month, timing.day, timing.hour, timing.minute, timing.second)).observe(sun_ephem)
+    """ Return the geometric altitude, the azimuth and the apparent (refracted) altitude of the sun. """
+    astro = (earth + loc).at(ts.from_datetime(timing)).observe(sun_ephem)
     app = astro.apparent()
 
     alt, az, distance = app.altaz()
-    return alt, az
+    apparent_alt, _, _ = app.altaz(temperature_C=10.0, pressure_mbar='standard')
+    return alt, az, apparent_alt
 
 
 def main():
@@ -213,7 +222,7 @@ def main():
     print("Type: ", eclipse_type)
     print("Magnitude: ", magnitude)
     print("")
-    print("{:<10} {:<25} {:<25} {:<25} {:<25}".format("Moment", "UTC", "Local time", "Azimuth", "Altitude"))
+    print("{:<10} {:<25} {:<25} {:<25} {:<25}".format("Moment", "UTC", "Local time", "Azimuth", "Apparent altitude"))
     print(
         "------------------------------------------------------------------------------------------------------------")
     for key, value in timings.items():
@@ -221,7 +230,7 @@ def main():
             # Also show microseconds in the UTC and local time
             print("{:<10} {:<25} {:<25} {:<25} {:<25}".format(key, value.time_utc.strftime("%m/%d/%Y %H:%M:%S.%f"),
                                                               value.time_local.strftime("%m/%d/%Y %H:%M:%S.%f"),
-                                                              value.azimuth, value.altitude))
+                                                              value.azimuth, value.apparent_altitude))
         else:
             print("{:<10} {:<25}".format(key, str(value)))
 

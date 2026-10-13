@@ -34,7 +34,7 @@ from solareclipseworkbench.exposure_calculator import (
     calculate_eclipse_exposures, 
     format_shutter_speed,
     parse_shutter_speed,
-    calculate_sun_altitude_at_time,
+    calculate_sun_altitudes_at_time,
     calculate_exposure,
     get_exposure_bracket,
     round_to_camera_shutter_speed
@@ -175,6 +175,21 @@ def ask_test_level(parent, title, text, full_text):
     if box.clickedButton() is settings_button:
         return False
     return None
+
+
+def _sun_above_horizon(timings, time_utc):
+    """Whether (part of) the sun is visible above the horizon at the given time.
+
+    Uses the sunrise and sunset of the reference moments, so shots are kept while the sun is partly below the
+    horizon, up to the moment its (refracted) upper limb sets, exactly as the sunset shown in the GUI.
+    """
+    sunrise = timings.get('sunrise') if timings else None
+    sunset = timings.get('sunset') if timings else None
+    if sunrise is not None and time_utc < sunrise.time_utc:
+        return False
+    if sunset is not None and time_utc > sunset.time_utc:
+        return False
+    return True
 
 
 class IntroPage(QWizardPage):
@@ -1755,7 +1770,7 @@ class SummaryPage(QWizardPage):
             lines.append(f"# Calculated Exposures (ISO {preferred_iso}, f/{aperture}):")
             lines.append(f"# ------------------------------------------------")
             for name, data in exposures.items():
-                sun_alt = data['sun_altitude']
+                sun_alt = data.get('sun_apparent_altitude', data['sun_altitude'])
                 shutter = data['shutter']
                 lines.append(f"#   {name:25s}: {shutter:>10s}  (sun alt: {sun_alt:5.1f}°)")
             lines.append(f"#")
@@ -1947,12 +1962,12 @@ class SummaryPage(QWizardPage):
                     timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
                 if timings and 'C1' in timings:
                     c1_time = timings['C1'].time_utc
-                    c1_sun_alt = calculate_sun_altitude_at_time(
+                    _, c1_sun_alt = calculate_sun_altitudes_at_time(
                         c1_time, eclipse_time, longitude, latitude, altitude
                     )
                     
                     # Only add C1 shots if sun is above horizon
-                    if c1_sun_alt >= 0:
+                    if _sun_above_horizon(timings, c1_time):
                         lines.append("# First contact (C1) - with solar filter")
                         c1_shutter = get_shutter('partial_c1', '1/800')
                         # Spaced by the time a picture takes on this camera (2 s by default)
@@ -2025,7 +2040,7 @@ class SummaryPage(QWizardPage):
                             break
                         
                         # Calculate sun altitude at this time
-                        sun_alt = calculate_sun_altitude_at_time(
+                        sun_alt, sun_apparent_alt = calculate_sun_altitudes_at_time(
                             shot_time, eclipse_time, longitude, latitude, altitude
                         )
                         
@@ -2054,7 +2069,7 @@ class SummaryPage(QWizardPage):
                         offset_seconds = (c2_time - shot_time).total_seconds()
                         offset_str = f"{int(offset_seconds // 3600)}:{int((offset_seconds % 3600) // 60):02d}:{int(offset_seconds % 60):02d}.0"
                         
-                        partial_shots_c1_c2.append((offset_str, shutter, adjusted_iso, shot_time, sun_alt))
+                        partial_shots_c1_c2.append((offset_str, shutter, adjusted_iso, shot_time, sun_apparent_alt))
                     
                     # Filter out shots below horizon and add sync commands
                     sync_interval_minutes = 0
@@ -2063,15 +2078,15 @@ class SummaryPage(QWizardPage):
                         sync_interval_minutes = int(sync_interval.split()[0])
                     
                     shot_count = 0
-                    for idx, (offset, shutter, iso, shot_time, sun_alt) in enumerate(partial_shots_c1_c2):
-                        # Skip shots when sun is below horizon
-                        if sun_alt < 0:
+                    for idx, (offset, shutter, iso, shot_time, sun_apparent_alt) in enumerate(partial_shots_c1_c2):
+                        # Skip shots when the sun has not risen yet or has set
+                        if not _sun_above_horizon(timings, shot_time):
                             continue
                         
                         shot_count += 1
                         time_str = shot_time.strftime('%H:%M:%S')
                         iso_note = f" (ISO {iso})" if iso != preferred_iso else ""
-                        lines.append(f'take_picture, C2, -, {offset}, {camera_name}, {shutter}, {aperture}, {iso}, "Partial C1-C2 #{shot_count} @ {time_str}, sun {sun_alt:.1f}°{iso_note}"')
+                        lines.append(f'take_picture, C2, -, {offset}, {camera_name}, {shutter}, {aperture}, {iso}, "Partial C1-C2 #{shot_count} @ {time_str}, sun {sun_apparent_alt:.1f}°{iso_note}"')
                         
                         # Add sync_cameras periodically if enabled
                         if sync_interval_minutes > 0 and idx > 0:
@@ -2117,7 +2132,7 @@ class SummaryPage(QWizardPage):
                             break
                         
                         # Calculate sun altitude at this time
-                        sun_alt = calculate_sun_altitude_at_time(
+                        sun_alt, sun_apparent_alt = calculate_sun_altitudes_at_time(
                             shot_time, eclipse_time, longitude, latitude, altitude
                         )
                         
@@ -2145,19 +2160,19 @@ class SummaryPage(QWizardPage):
                         offset_seconds = (shot_time - c3_time).total_seconds()
                         offset_str = f"{int(offset_seconds // 3600)}:{int((offset_seconds % 3600) // 60):02d}:{int(offset_seconds % 60):02d}.0"
                         
-                        partial_shots_c3_c4.append((offset_str, shutter, adjusted_iso, shot_time, sun_alt))
+                        partial_shots_c3_c4.append((offset_str, shutter, adjusted_iso, shot_time, sun_apparent_alt))
                     
                     # Filter out shots below horizon
                     shot_count = 0
-                    for idx, (offset, shutter, iso, shot_time, sun_alt) in enumerate(partial_shots_c3_c4):
-                        # Skip shots when sun is below horizon
-                        if sun_alt < 0:
+                    for idx, (offset, shutter, iso, shot_time, sun_apparent_alt) in enumerate(partial_shots_c3_c4):
+                        # Skip shots when the sun has not risen yet or has set
+                        if not _sun_above_horizon(timings, shot_time):
                             continue
                         
                         shot_count += 1
                         time_str = shot_time.strftime('%H:%M:%S')
                         iso_note = f" (ISO {iso})" if iso != preferred_iso else ""
-                        lines.append(f'take_picture, C3, +, {offset}, {camera_name}, {shutter}, {aperture}, {iso}, "Partial C3-C4 #{shot_count} @ {time_str}, sun {sun_alt:.1f}°{iso_note}"')
+                        lines.append(f'take_picture, C3, +, {offset}, {camera_name}, {shutter}, {aperture}, {iso}, "Partial C3-C4 #{shot_count} @ {time_str}, sun {sun_apparent_alt:.1f}°{iso_note}"')
                         
                         # Add sync_cameras periodically if enabled
                         if sync_interval_minutes > 0 and idx > 0:
@@ -2207,7 +2222,7 @@ class SummaryPage(QWizardPage):
                         if shot_time >= c4_end_time:
                             break
 
-                        sun_alt = calculate_sun_altitude_at_time(
+                        sun_alt, sun_apparent_alt = calculate_sun_altitudes_at_time(
                             shot_time, eclipse_time, longitude, latitude, altitude
                         )
 
@@ -2230,7 +2245,7 @@ class SummaryPage(QWizardPage):
                         shutter = format_shutter_speed(exposure)
                         offset_seconds = (shot_time - c1_time).total_seconds()
                         offset_str = f"{int(offset_seconds // 3600)}:{int((offset_seconds % 3600) // 60):02d}:{int(offset_seconds % 60):02d}.0"
-                        partial_shots_c1_c4.append((offset_str, shutter, adjusted_iso, shot_time, sun_alt))
+                        partial_shots_c1_c4.append((offset_str, shutter, adjusted_iso, shot_time, sun_apparent_alt))
 
                     sync_interval_minutes = 0
                     if wizard.field('sync_enabled'):
@@ -2238,13 +2253,14 @@ class SummaryPage(QWizardPage):
                         sync_interval_minutes = int(sync_interval.split()[0])
 
                     shot_count = 0
-                    for idx, (offset, shutter, iso, shot_time, sun_alt) in enumerate(partial_shots_c1_c4):
-                        if sun_alt < 0:
+                    for idx, (offset, shutter, iso, shot_time, sun_apparent_alt) in enumerate(partial_shots_c1_c4):
+                        # Skip shots when the sun has not risen yet or has set
+                        if not _sun_above_horizon(timings, shot_time):
                             continue
                         shot_count += 1
                         time_str = shot_time.strftime('%H:%M:%S')
                         iso_note = f" (ISO {iso})" if iso != preferred_iso else ""
-                        lines.append(f'take_picture, C1, +, {offset}, {camera_name}, {shutter}, {aperture}, {iso}, "Partial #{shot_count} @ {time_str}, sun {sun_alt:.1f}°{iso_note}"')
+                        lines.append(f'take_picture, C1, +, {offset}, {camera_name}, {shutter}, {aperture}, {iso}, "Partial #{shot_count} @ {time_str}, sun {sun_apparent_alt:.1f}°{iso_note}"')
 
                         if sync_interval_minutes > 0 and idx > 0:
                             offset_seconds_val = (shot_time - c1_time).total_seconds()
@@ -2619,12 +2635,12 @@ class SummaryPage(QWizardPage):
                     timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
                 if timings and 'C4' in timings:
                     c4_time = timings['C4'].time_utc
-                    c4_sun_alt = calculate_sun_altitude_at_time(
+                    _, c4_sun_alt = calculate_sun_altitudes_at_time(
                         c4_time, eclipse_time, longitude, latitude, altitude
                     )
                     
                     # Only add C4 shots if sun is above horizon
-                    if c4_sun_alt >= 0:
+                    if _sun_above_horizon(timings, c4_time):
                         lines.append("# Fourth contact (C4) - with solar filter")
                         c4_shutter = get_shutter('partial_c4', '1/800')
                         step = max(2, math.ceil(picture_duration_s(c4_shutter, timing)))

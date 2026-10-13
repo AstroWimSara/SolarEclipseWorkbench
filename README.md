@@ -464,6 +464,10 @@ The functionality of the toolbar buttons is as follows (from left to right):
   - Countdown;
   - Altitude (in degrees);
   - Azimuth (in degrees).
+- Sunrise and sunset are the moments the upper edge of the sun touches the horizon, as in almanacs and Stellarium.
+- The altitude shown is the apparent altitude of the centre of the sun, i.e. including atmospheric refraction, which
+  lifts the sun by about half a degree near the horizon.  At sunrise and sunset it is about -0.3°.  The exposure
+  calculation uses the geometric altitude (without refraction).
 - This information can only be populated when the location and the eclipse date have been indicated.  Note that the reference moments are not automatically updated in case either of them would be modified.
 - Together with the information about the reference moments, the eclipse type (partial / total / annular) will be displayed.  For total and annular eclipses, also the time between C2 and C3 will be shown (next to the eclipse type).
 
