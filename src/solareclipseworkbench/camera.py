@@ -17,9 +17,9 @@ from typing import Any, Tuple, Optional
 from solareclipseworkbench import configuration
 from solareclipseworkbench.logging_setup import camera_log
 from solareclipseworkbench.bracketing import (
-    HDR_ONE_WAY, HDR_ROUND_TRIP, bracket_exposures, format_ev, hdr_native_bracket, hdr_offsets, hdr_speeds,
-    match_ev_choice,
-    match_sony_mode, native_brackets, nearest_shutter_choices, parse_bracket, parse_hdr_sequence,
+    HDR_ONE_WAY, HDR_ROUND_TRIP, bracket_deviation, bracket_exposures, format_ev, hdr_native_bracket, hdr_offsets,
+    hdr_speeds, match_ev_choice, match_sony_mode, native_brackets, nearest_shutter_choices, parse_bracket,
+    parse_hdr_sequence,
 )
 
 
@@ -1874,6 +1874,11 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             raise ValueError(f"take_bracket needs a shutter speed, not '{base_speed}'")
         speeds = nearest_shutter_choices(choices, bracket_exposures(base_s, spec), _parse_shutter_speed_seconds)
         log.debug('take_bracket software sequence: %s', speeds)
+        # E.g. 1/3 EV steps on a camera set to 1/2 EV steps, or the shortest or longest speed reached
+        deviation = bracket_deviation(speeds, base_s, spec.ev_offsets(), _parse_shutter_speed_seconds)
+        if deviation > 0.17:
+            log.warning('take_bracket: the camera has no shutter speeds for %s; frames are up to %.1f EV off: %s',
+                        spec.describe(), deviation, speeds)
 
         for speed in speeds:
             try:

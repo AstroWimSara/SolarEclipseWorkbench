@@ -27,7 +27,7 @@ MAX_FRAMES = 9
 MAX_EV_STEP = 3.0
 
 # EV steps and numbers of frames to offer when the camera's own options are not known.
-STANDARD_STEPS = (1 / 3, 2 / 3, 1.0, 4 / 3, 5 / 3, 2.0, 7 / 3, 8 / 3, 3.0)
+STANDARD_STEPS = (1 / 3, 1 / 2, 2 / 3, 1.0, 4 / 3, 3 / 2, 5 / 3, 2.0, 7 / 3, 5 / 2, 8 / 3, 3.0)
 STANDARD_FRAMES = (3, 5, 7, 9)
 # Canon sets the number of AEB frames in a custom function, not over USB.
 CANON_FRAMES = (3, 5, 7)
@@ -305,3 +305,30 @@ def hdr_speeds(choices: Sequence[str], start_s: float, stops: int, sequence: str
     stops = min(stops, max(0, int(math.floor(math.log2(slowest_s / start_s) + 0.1))))
     offsets = hdr_offsets(stops, sequence)
     return nearest_shutter_choices(choices, [start_s * 2 ** k for k in offsets], seconds), stops
+
+
+# --- Exposure step of the camera ---------------------------------------------------
+
+def exposure_step(choices: Sequence[str], seconds) -> Optional[float]:
+    """The exposure step of the camera (1/3, 1/2 or 1 EV), from its shutter speed choices.
+
+    Cameras list their shutter speeds in the exposure step they are set to, so the
+    number of speeds per stop gives the step.  None when the list is too short to tell.
+
+    Args:
+        choices: Shutter speed choices of the camera.
+        seconds: Function parsing a choice to seconds (<= 0 for 'bulb' and the like).
+    """
+    values = sorted({s for s in (seconds(c) for c in choices) if s > 0})
+    if len(values) < 7:
+        return None
+    per_stop = (len(values) - 1) / math.log2(values[-1] / values[0])
+    for step in (1 / 3, 1 / 2, 1.0):
+        if abs(per_stop * step - 1) < 0.15:
+            return step
+    return None
+
+
+def bracket_deviation(speeds: Sequence[str], base_s: float, offsets: Sequence[float], seconds) -> float:
+    """How far (in EV) the chosen shutter speeds are from the wanted offsets, at most."""
+    return max(abs(math.log2(seconds(speed) / base_s) - offset) for speed, offset in zip(speeds, offsets))

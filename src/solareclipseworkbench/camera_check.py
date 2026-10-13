@@ -29,7 +29,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from solareclipseworkbench import scripts
 from solareclipseworkbench.bracketing import (
-    DEFAULT_FRAMES, hdr_offsets, is_native, native_brackets, parse_bracket, parse_hdr_sequence,
+    DEFAULT_FRAMES, exposure_step, format_ev, hdr_offsets, is_native, native_brackets, parse_bracket,
+    parse_hdr_sequence,
 )
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
@@ -280,6 +281,8 @@ def check_settings(camera, commands: List[ScriptCommand], report: TestReport) ->
                        f"Available: {', '.join(c for c, _ in ss_choices)}")
         else:
             report.add(OK, "All shutter speeds are available", _count(len(shutters), "distinct speed"))
+        check_exposure_step([c for c, _ in ss_choices], getattr(camera, "vendor", None) or vendor_from_name(name),
+                            report)
 
     # Aperture
     ap_widget = _widget(config, "aperture", "f-number")
@@ -301,6 +304,19 @@ def check_settings(camera, commands: List[ScriptCommand], report: TestReport) ->
             report.add(OK, "All apertures are available", "f/" + ", f/".join(wanted_apertures))
 
     check_brackets(config, getattr(camera, "vendor", None) or vendor_from_name(name), commands, report)
+
+
+def check_exposure_step(shutter_speeds: List[str], vendor: Optional[str], report: TestReport) -> None:
+    """Report the exposure step the camera is set to (1/3 or 1/2 EV), seen from its shutter speeds."""
+    step = exposure_step(shutter_speeds, lambda c: _shutter_seconds(c) or 0)
+    if step is None:
+        return
+    if vendor == "Sony" and step > 0.4:
+        report.add(WARNING, f"Exposure step {format_ev(step)} EV: set the camera to 1/3 EV steps",
+                   "Sony shutter speeds are not set reliably over USB (gphoto2) in 1/2 EV steps.")
+    else:
+        report.add(OK, f"Exposure step {format_ev(step)} EV",
+                   "Brackets and HDR sequences use the shutter speed closest to each exposure.")
 
 
 def check_brackets(config, vendor: Optional[str], commands: List[ScriptCommand], report: TestReport) -> None:
@@ -747,6 +763,7 @@ def check_camera(camera, full: bool = False) -> Tuple[TestReport, CameraProfile]
 
     if profile.shutter_speeds:
         report.add(OK, f"Shutter speeds {profile.shutter_range()}", ", ".join(profile.shutter_speeds))
+        check_exposure_step(profile.shutter_speeds, profile.vendor, report)
     else:
         report.add(WARNING, "The camera does not list its shutter speeds",
                    "Is the mode dial at M?  Without the list the script cannot be fitted to the camera.")
