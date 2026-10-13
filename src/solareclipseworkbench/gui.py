@@ -1057,8 +1057,11 @@ class SolarEclipseController(Observer):
     def update_time(self):
         """ Update the displayed current time and countdown clocks."""
 
-        current_time_local = datetime.datetime.now()
-        current_time_utc = current_time_local.astimezone(tz=datetime.timezone.utc)
+        # Show GPS time when a USB GPS fix has measured the computer clock error, so the
+        # countdowns agree with the (equally corrected) scheduled commands.
+        gps_time_offset = self.model.gps_time_offset
+        current_time_local = datetime.datetime.now() + gps_time_offset
+        current_time_utc = datetime.datetime.now(tz=datetime.timezone.utc) + gps_time_offset
 
         self.model.local_time = current_time_local
         self.model.utc_time = current_time_utc
@@ -3278,10 +3281,15 @@ class JobsTableModel(QAbstractTableModel, Observable):
         self.controller = controller
         self.time_format = self.controller.view.time_format
 
+        # The jobs were scheduled on the computer clock, shifted by this GPS–computer offset.
+        # Adding it back shows the true (GPS) UTC execution times.  It is captured here, not
+        # read live, because it must match the offset the scheduler used for these jobs.
+        self.gps_time_offset: datetime.timedelta = self.controller.model.gps_time_offset
+
         from solareclipseworkbench.reference_moments import _find_timezone
         timezone = pytz.timezone(_find_timezone(self.controller.model.longitude, self.controller.model.latitude))
 
-        now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+        now_utc = datetime.datetime.now(tz=datetime.timezone.utc) + self.gps_time_offset
         data = []
 
         self.execution_times_utc_as_datetime = []
@@ -3292,6 +3300,7 @@ class JobsTableModel(QAbstractTableModel, Observable):
 
             execution_time_utc: datetime.datetime = job.next_run_time
             if execution_time_utc:
+                execution_time_utc = execution_time_utc + self.gps_time_offset
                 execution_time_local = execution_time_utc.astimezone(timezone)
 
                 countdown = "-"
@@ -3370,7 +3379,7 @@ class JobsTableModel(QAbstractTableModel, Observable):
         if self._data.shape[0] > 0:
 
             self.beginResetModel()
-            now_utc = datetime.datetime.now().astimezone(tz=datetime.timezone.utc)
+            now_utc = datetime.datetime.now(tz=datetime.timezone.utc) + self.gps_time_offset
             time_format = self.controller.view.time_format
             for row in range(len(self.execution_times_local_as_datetime)):
 

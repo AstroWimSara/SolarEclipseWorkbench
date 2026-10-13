@@ -67,6 +67,10 @@ _KNOWN_GPS_IDS: frozenset = frozenset(
 
 _BAUD_RATE = 9600
 
+# Number of RMC time stamps used to measure the GPS–computer clock offset
+# (one per second at the usual 1 Hz update rate).
+_OFFSET_SAMPLES = 5
+
 
 # ---------------------------------------------------------------------------
 # Device discovery
@@ -141,6 +145,22 @@ def check_serial_permission() -> bool:
     except (KeyError, OSError):
         # Group doesn't exist or cannot be queried – optimistically allow
         return True
+
+
+def estimate_time_offset(samples) -> timedelta:
+    """Return the GPS − computer clock offset from ``(gps_time, arrival_time)`` pairs.
+
+    ``gps_time`` is the UTC time stamp in an RMC sentence and ``arrival_time``
+    the computer time at which that sentence was read.  An NMEA time stamp
+    refers to the start of the GPS second, but the sentence only arrives after
+    the receiver has computed and transmitted it, and lines can sit in the
+    serial buffer for a while.  Every sample therefore underestimates the
+    offset by its latency, so the sample with the largest offset (smallest
+    latency) is the best estimate.
+    """
+    if not samples:
+        raise ValueError("At least one (gps_time, arrival_time) sample is required")
+    return max(gps_time - arrival_time for gps_time, arrival_time in samples)
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +259,13 @@ def _make_usb_gps_worker():
                 self.error.emit(f"Could not open {device}:\n{exc}")
                 return
 
+            # Discard sentences buffered before the port was opened: their time
+            # stamps are stale and would make the GPS clock look behind.
+            try:
+                ser.reset_input_buffer()
+            except (serial.SerialException, OSError):
+                pass
+
             self.status.emit(
                 "Waiting for GPS fix (may take 1–3 minutes in open sky)…"
             )
@@ -247,6 +274,7 @@ def _make_usb_gps_worker():
             lon: Optional[float] = None
             alt: float = 0.0
             gps_time: Optional[datetime] = None
+            time_samples: list = []  # (RMC gps_time, computer arrival time)
             total_lines = 0
             nmea_lines = 0
             parsed_lines = 0
@@ -288,9 +316,12 @@ def _make_usb_gps_worker():
                         self.error.emit(f"Serial read error:\n{exc}")
                         return
 
+                    # Computer time at which this line arrived, used for the clock offset
+                    arrival_time = datetime.now(timezone.utc)
+
                     total_lines += 1
                     if raw:
-                        last_activity = datetime.now(timezone.utc)
+                        last_activity = arrival_time
 
                     line = raw.decode("ascii", errors="replace").strip()
                     if not line.startswith("$"):
@@ -353,23 +384,33 @@ def _make_usb_gps_worker():
                             lon = msg.longitude
                             if msg.datetime:
                                 gps_time = msg.datetime.replace(tzinfo=timezone.utc)
+                                time_samples.append((gps_time, arrival_time))
 
                     if (
                         datetime.now(timezone.utc) - last_progress_emit
                     ).total_seconds() >= 2.0:
                         idle = (datetime.now(timezone.utc) - last_activity).total_seconds()
-                        self.status.emit(
-                            "GPS stream active. "
-                            f"nmea={nmea_lines}, parsed={parsed_lines}, "
-                            f"GGA quality={last_gga_fix_quality}, sats={last_gga_sats}, "
-                            f"RMC={last_rmc_status}, idle={idle:.0f}s"
-                        )
+                        if lat is not None and lon is not None and time_samples:
+                            self.status.emit(
+                                "GPS fix acquired, measuring clock offset "
+                                f"({len(time_samples)}/{_OFFSET_SAMPLES})…"
+                            )
+                        else:
+                            self.status.emit(
+                                "GPS stream active. "
+                                f"nmea={nmea_lines}, parsed={parsed_lines}, "
+                                f"GGA quality={last_gga_fix_quality}, sats={last_gga_sats}, "
+                                f"RMC={last_rmc_status}, idle={idle:.0f}s"
+                            )
                         last_progress_emit = datetime.now(timezone.utc)
 
-                    # Emit as soon as we have a valid position AND GPS time
-                    if lat is not None and lon is not None and gps_time is not None:
-                        computer_time = datetime.now(timezone.utc)
-                        time_offset = gps_time - computer_time
+                    # Emit once we have a valid position and enough GPS time stamps
+                    if (
+                        lat is not None
+                        and lon is not None
+                        and len(time_samples) >= _OFFSET_SAMPLES
+                    ):
+                        time_offset = estimate_time_offset(time_samples)
                         self.location_received.emit(
                             {
                                 "lat": lat,
