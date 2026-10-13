@@ -73,6 +73,8 @@ BEFORE_AFTER = {
 
 REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
+SAVE_MESSAGE_TIMEOUT = 10000  # How long the outcome of `Save` stays in the status bar [ms]
+
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 
 
@@ -535,6 +537,10 @@ class SolarEclipseView(QMainWindow, Observable):
             - Date format;
             - Time format;
             - Position of the splitter between the eclipse plot and the jobs table.
+
+        The outcome is shown in the status bar and logged (Issue #181).
+
+        Returns: True if the settings were written to disk, False otherwise.
         """
 
         # Location
@@ -543,7 +549,9 @@ class SolarEclipseView(QMainWindow, Observable):
         latitude = self.latitude_label.text()
         altitude = self.altitude_label.text()
 
-        if longitude and latitude and altitude:
+        missing = [name for name, value in (("longitude", longitude), ("latitude", latitude),
+                                            ("altitude", altitude)) if not value]
+        if not missing:
             self.settings.setValue("longitude", float(longitude))
             self.settings.setValue("latitude", float(latitude))
             self.settings.setValue("altitude", float(altitude))
@@ -560,6 +568,27 @@ class SolarEclipseView(QMainWindow, Observable):
         # Layout
 
         self.save_layout_settings()
+
+        # Write to disk now, so a failure can be reported
+
+        self.settings.sync()
+        filename = self.settings.fileName()
+
+        if self.settings.status() != QSettings.Status.NoError:
+            message = f"Could not save the settings to {filename}"
+            LOGGER.error(message)
+            self.statusBar().showMessage(message, SAVE_MESSAGE_TIMEOUT)
+            return False
+
+        if missing:
+            message = (f"Settings saved to {filename}, without the location "
+                       f"({', '.join(missing)} not set)")
+            LOGGER.warning(message)
+        else:
+            message = f"Settings saved to {filename}"
+            LOGGER.info(message)
+        self.statusBar().showMessage(message, SAVE_MESSAGE_TIMEOUT)
+        return True
 
     def save_layout_settings(self):
         """ Save the position of the splitter between the eclipse plot and the jobs table. """

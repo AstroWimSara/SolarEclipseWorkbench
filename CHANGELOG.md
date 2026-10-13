@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Each run writes its own log file in `~/.SolarEclipseWorkbench/logs/`, with UTC millisecond timestamps, the contact times, GPS offset and cameras of the run; log files are never overwritten (Issue #191)
 - Banner reminder for Nikon cameras to set the release-mode dial to a Continuous mode for `take_burst` and `take_bracket`, which the app cannot change on bodies with a physical dial (`take_hdr` takes single frames, so it works in any mode).  Once a script is loaded, it names the commands the script uses per Nikon, and disappears when the script only takes single pictures.  Sony and Nikon messages share one banner, and a closed banner comes back when its message changes (Issue #160)
 
+- `Save` now reports its outcome in a new status bar at the bottom of the main window and in the log: where the settings were saved, a warning when the location was left out because longitude, latitude or altitude is not set, and an error when the settings file cannot be written.  The status bar also shows the toolbar button descriptions on hover (Issue #181)
+
 ### Changed
 
 - Back to the newest python-gphoto2 (2.6.4, with libgphoto2 2.5.34); `take_burst` on Canon now works with both the old and the new libgphoto2
