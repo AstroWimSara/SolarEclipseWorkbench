@@ -8,7 +8,7 @@ import time
 
 import gphoto2
 import gphoto2 as gp
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 
 from gphoto2 import Camera
@@ -2845,6 +2845,171 @@ def get_battery_level(camera: Camera) -> str:
         raise
 
 
+# --- Camera clock -----------------------------------------------------------
+#
+# The clock is set when cameras are connected and by every sync_cameras command
+# in a script.  Cameras expose it under different names and encodings
+# (libgphoto2 2.5.x):
+#
+#   datetimeutc  Canon EOS (newer bodies): UTC, as a date widget
+#   datetime     Canon EOS / Nikon / PTP DateTime: local time, as a date widget,
+#                or as text on some drivers
+#   d034         Raw PTP DateTime property (no libgphoto2 mapping): text in the
+#                PTP format "YYYYMMDDThhmmss"
+#
+# libgphoto2 also offers syncdatetime / syncdatetimeutc toggles, which set the
+# clock to the computer time with whatever conversion that model needs; they
+# are preferred when present.
+#
+# Writing a value the camera does not understand makes some (older) bodies fall
+# back to a default date such as 1980 or the year the model came out.  The
+# clock is therefore only written when its current value can be read, and is
+# read back afterwards: if it is not within CLOCK_TOLERANCE_S of the computer
+# time, the previous value is restored, the problem is reported, and the clock
+# of that camera is left alone for the rest of the session.
+
+_CLOCK_WIDGETS = ('datetimeutc', 'datetime', 'd034')
+_PTP_DATETIME_FORMAT = '%Y%m%dT%H%M%S'
+_TEXT_DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+# How far the camera clock may be off after setting it before it counts as failed.
+CLOCK_TOLERANCE_S = 15.0
+# A clock this close to the computer time is not rewritten.
+_CLOCK_IN_SYNC_S = 1.0
+# How long setting the clock may wait for the camera (e.g. while a shot runs).
+_CLOCK_LOCK_WAIT_S = 2.0
+
+# Names of the cameras whose clock could not be set reliably in this session.
+_clock_sync_disabled: set = set()
+
+
+class ClockReading:
+    """The camera clock as read through one config widget.
+
+    Attributes:
+        - widget: Name of the config widget ('datetimeutc', 'datetime' or 'd034')
+        - raw: Value as read, kept so that it can be written back unchanged
+        - camera_time: Camera time as a naive local datetime, or None if the value could not be interpreted
+        - error_s: Camera time minus computer time in seconds, or None if the value could not be interpreted
+    """
+
+    def __init__(self, widget: str, raw: Any, camera_time: Optional[datetime], error_s: Optional[float]):
+        self.widget = widget
+        self.raw = raw
+        self.camera_time = camera_time
+        self.error_s = error_s
+
+    @property
+    def readable(self) -> bool:
+        return self.error_s is not None
+
+    def __repr__(self):
+        return f"ClockReading({self.widget!r}, {self.raw!r}, error_s={self.error_s})"
+
+
+def _get_widget(config, name: str):
+    """Child widget by name, or None when the camera does not have it."""
+    try:
+        return config.get_child_by_name(name)
+    except Exception:
+        return None
+
+
+def _text_clock_format(value: str) -> Optional[str]:
+    """strptime format of a textual clock value, or None if it is not understood."""
+    value = str(value).strip()
+    for fmt, length in ((_PTP_DATETIME_FORMAT, 15), (_TEXT_DATETIME_FORMAT, 19)):
+        try:
+            datetime.strptime(value[:length], fmt)
+            return fmt
+        except ValueError:
+            continue
+    return None
+
+
+def _interpret_clock(widget_type, raw, now: float) -> Tuple[Optional[datetime], Optional[float]]:
+    """Camera time (naive local) and its offset from the computer time.
+
+    Drivers differ in whether the value is UTC or local wall-clock time, so both
+    readings are tried and the one closest to the computer time is used: what
+    has to be caught is a clock that is wrong by years, not by a time zone.
+    """
+    utc_offset = datetime.fromtimestamp(now) - datetime.fromtimestamp(now, timezone.utc).replace(tzinfo=None)
+    try:
+        if widget_type == gp.GP_WIDGET_DATE:
+            value = float(raw)
+            candidates = [value - now, value - (now + utc_offset.total_seconds())]
+            camera_time = datetime.fromtimestamp(value)
+        else:
+            fmt = _text_clock_format(raw)
+            if fmt is None:
+                return None, None
+            length = 15 if fmt == _PTP_DATETIME_FORMAT else 19
+            camera_time = datetime.strptime(str(raw).strip()[:length], fmt)
+            local_now = datetime.fromtimestamp(now)
+            candidates = [(camera_time - local_now).total_seconds(),
+                          (camera_time - (local_now - utc_offset)).total_seconds()]
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None, None
+    return camera_time, min(candidates, key=abs)
+
+
+def _read_clock(config, names=_CLOCK_WIDGETS) -> Optional[ClockReading]:
+    """Read the camera clock from the first of the given widgets the camera has."""
+    for name in names:
+        widget = _get_widget(config, name)
+        if widget is None:
+            continue
+        try:
+            raw = widget.get_value()
+            widget_type = widget.get_type()
+        except Exception:
+            continue
+        camera_time, error_s = _interpret_clock(widget_type, raw, time.time())
+        return ClockReading(name, raw, camera_time, error_s)
+    return None
+
+
+def _write_clock(config, reading: ClockReading) -> str:
+    """Set the clock in config (not yet sent to the camera) to the computer time.
+
+    Returns: Description of how the clock was set, for the log.
+    """
+    toggle_name = 'syncdatetimeutc' if reading.widget == 'datetimeutc' else 'syncdatetime'
+    toggle = _get_widget(config, toggle_name)
+    if toggle is not None and reading.widget != 'd034':
+        toggle.set_value(1)
+        return toggle_name
+
+    widget = config.get_child_by_name(reading.widget)
+    if widget.get_type() == gp.GP_WIDGET_DATE:
+        widget.set_value(int(time.time()))
+        return f'{reading.widget} (date)'
+    # Write text in the same format the camera reported.
+    fmt = _text_clock_format(reading.raw)
+    widget.set_value(time.strftime(fmt))
+    return f'{reading.widget} ("{fmt}")'
+
+
+def read_camera_clock(camera) -> Optional[ClockReading]:
+    """Read the camera clock without changing it.
+
+    Returns: The reading (check .readable), or None if the camera does not expose its clock.
+    """
+    if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
+        return ClockReading('datetime', time.strftime(_TEXT_DATETIME_FORMAT), datetime.now(), 0.0)
+    lock = getattr(camera, '_usb_lock', None)
+    if lock is not None and not lock.acquire(timeout=_CLOCK_LOCK_WAIT_S):
+        logging.warning('%s: camera busy, clock not read', getattr(camera, 'name', camera))
+        return None
+    try:
+        # Prefer the local clock for display: it is what ends up in the EXIF data.
+        return _read_clock(camera.get_config(), ('datetime', 'datetimeutc', 'd034'))
+    finally:
+        if lock is not None:
+            lock.release()
+
+
 def get_time(camera: Camera) -> str:
     """ Returns the current time of the selected camera
 
@@ -2853,162 +3018,115 @@ def get_time(camera: Camera) -> str:
 
     Returns: Current time of the camera
     """
-
-    # For virtual/non-gphoto cameras return host time quickly
-    if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
-        return datetime.now().isoformat(' ')
-
-    # get configuration tree
-    try:
-        config = camera.get_config()
-    except gphoto2.GPhoto2Error as e:
-        logging.warning('gphoto2 error reading camera time for %s: %s', getattr(camera, 'name', str(camera)), e)
-        error_str = str(e).lower()
-        if any(x in error_str for x in ['-110', 'i/o in progress']):
-            logging.warning(f"Seems like camera is busy, unable to get the time, trying again")
-            time.sleep(0.1)
-            return get_time(camera)
-        else:
-            # Attempt reinitialisation and retry once
-            try:
-                if hasattr(camera, 'name'):
-                    logging.info('Reinitialising camera %s to retry time query', camera.name)
-                    new_cam = get_camera(camera.name)
-                    config = new_cam.get_config()
-            except Exception:
-                logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-                # If retry failed, propagate the original error so the caller can handle it
-                raise
-    except Exception:
-        # If any other error, fall back to host time
-        return datetime.now().isoformat(' ')
-    # find the date/time setting config item and get it
-    # name varies with camera driver
-    #   Canon EOS - 'datetime'
-    #   PTP - 'd034'
-    for name, fmt in (('datetime', '%Y-%m-%d %H:%M:%S'),
-                      ('d034', None)):
-        now = datetime.now()
-        ok, datetime_config = gp.gp_widget_get_child_by_name(config, name)
-        if ok >= gp.GP_OK:
-            widget_type = datetime_config.get_type()
-            raw_value = datetime_config.get_value()
-            if widget_type == gp.GP_WIDGET_DATE:
-                camera_time = datetime.fromtimestamp(raw_value)
-            else:
-                if fmt:
-                    camera_time = datetime.strptime(raw_value, fmt)
-                else:
-                    camera_time = datetime.utcfromtimestamp(float(raw_value))
-            logging.info('Camera clock:  ', camera_time.isoformat(' '))
-            logging.info('Computer clock:', now.isoformat(' '))
-            err = now - camera_time
-            if err.days < 0:
-                err = -err
-                lead_lag = 'ahead'
-                logging.info('Camera clock is ahead by', )
-            else:
-                lead_lag = 'behind'
-            logging.warning('Camera clock is %s by %d days and %d seconds' % (
-                lead_lag, err.days, err.seconds))
-            break
-    else:
+    reading = read_camera_clock(camera)
+    if reading is None:
         logging.warning('Unknown date/time config item')
         return "Unknown date/time config item"
+    if not reading.readable:
+        return str(reading.raw)
+    logging.info('%s: camera clock %s, %+.1f s from the computer clock',
+                 getattr(camera, 'name', camera), reading.camera_time.isoformat(' '), reading.error_s)
+    return reading.camera_time.isoformat(' ')
 
-    return camera_time.isoformat(' ')
+
+def set_time(camera: Camera) -> bool:
+    """ Set the computer time on the selected camera, and check that the camera took it.
+
+    The clock is only written when its current value can be read, and it is read
+    back afterwards.  If it did not take the computer time, the previous value is
+    restored, the problem is reported to the user, and the clock of this camera is
+    not touched again in this session.
+
+    Args:
+        - camera: Camera object
+
+    Returns: True if the camera clock now matches the computer clock.
+    """
+    # Virtual or non-gphoto cameras have no clock to set.
+    if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
+        return True
+
+    name = getattr(camera, 'name', str(camera))
+    if name in _clock_sync_disabled:
+        logging.info('%s: clock not set (setting it failed earlier in this session)', name)
+        return False
+
+    lock = getattr(camera, '_usb_lock', None)
+    if lock is not None and not lock.acquire(timeout=_CLOCK_LOCK_WAIT_S):
+        logging.warning('%s: camera busy, clock not set this time', name)
+        return False
+    try:
+        for attempt in range(2):
+            try:
+                return _set_time_verified(camera, name)
+            except gphoto2.GPhoto2Error as e:
+                if attempt == 0 and any(x in str(e).lower() for x in ('-110', 'i/o in progress')):
+                    time.sleep(0.1)
+                    continue
+                logging.warning('%s: could not set the camera clock: %s', name, e)
+                return False
+        return False
+    finally:
+        if lock is not None:
+            camera._last_usb_activity = time.monotonic()
+            lock.release()
 
 
-def set_time(camera: Camera) -> None:
-    """ Set the computer time on the selected camera """
-    # For physical gphoto cameras we set the camera clock; for virtual or
-    # non-gphoto cameras this is a no-op.
+def _set_time_verified(camera, name: str) -> bool:
+    from solareclipseworkbench import hardware_problems
+
+    config = camera.get_config()
+    before = _read_clock(config)
+    if before is None:
+        logging.warning('%s: camera does not expose its clock; date and time not set', name)
+        return False
+    if not before.readable:
+        _clock_sync_disabled.add(name)
+        hardware_problems.report(
+            name,
+            f'The camera clock reads "{before.raw}", which SEW does not understand, so SEW does not set it.  '
+            'Set the date and time on the camera by hand.',
+            severity="warning",
+        )
+        return False
+    if abs(before.error_s) <= _CLOCK_IN_SYNC_S:
+        logging.info('%s: camera clock already in sync (%+.1f s)', name, before.error_s)
+        return True
+
+    method = _write_clock(config, before)
+    camera.set_config(config)
+
+    after = None
+    for delay in (0.2, 0.5, 1.0):
+        time.sleep(delay)
+        after = _read_clock(camera.get_config(), (before.widget,))
+        if after is not None and after.readable and abs(after.error_s) <= CLOCK_TOLERANCE_S:
+            logging.info('%s: camera clock set via %s (was %+.1f s, now %+.1f s)',
+                         name, method, before.error_s, after.error_s)
+            return True
+
+    # The camera did not take the time: put back what was there.
+    restored = False
     try:
         config = camera.get_config()
-    except gphoto2.GPhoto2Error as e:
-        logging.debug('gphoto2 error getting time from %s: %s', getattr(camera, 'name', str(camera)), e)
-        error_str = str(e).lower()
-        if any(x in error_str for x in ['-110', 'i/o in progress']):
-            logging.warning(f"Seems like camera is busy, unable to set the time, trying again")
-            time.sleep(0.1)
-            return set_time(camera)
-        else:
-            # Attempt reinitialisation and retry once
-            try:
-                if hasattr(camera, 'name'):
-                    logging.info('Reinitialising camera %s to retry set_time', camera.name)
-                    new_cam = get_camera(camera.name)
-                    config = new_cam.get_config()
-            except Exception:
-                logging.exception('Reinitialisation attempt failed for %s', getattr(camera, 'name', str(camera)))
-                # If retry failed, propagate the original error so the caller can handle it
-                raise
-    except Exception:
-        # VirtualCamera or other adapters may not expose get_config(); skip
-        return
+        config.get_child_by_name(before.widget).set_value(before.raw)
+        camera.set_config(config)
+        restored = True
+    except Exception as e:
+        logging.warning('%s: could not restore the previous clock value: %s', name, e)
 
-    if __set_datetime(config):
-        # apply the changed config
-        try:
-            camera.set_config(config)
-        except Exception:
-            logging.error('Could not apply date & time to camera')
-    else:
-        logging.warning('Could not set date & time (unsupported operation?)')
-
-
-def __set_datetime(config) -> bool:
-    """ Private method to set the date and time of the camera. """
-    # Try gphoto widget API first
-    try:
-        ok, date_config = gp.gp_widget_get_child_by_name(config, 'datetimeutc')
-        if ok == -2:
-            ok, date_config = gp.gp_widget_get_child_by_name(config, 'datetime')
-
-        if ok >= gp.GP_OK:
-            widget_type = date_config.get_type()
-            if widget_type == gp.GP_WIDGET_DATE:
-                now = int(time.time())
-                date_config.set_value(now)
-            else:
-                now = time.strftime('%Y-%m-%d %H:%M:%S')
-                date_config.set_value(now)
-            return True
-    except Exception:
-        # fall back to stub config API
-        pass
-
-    # Fallback for VirtualCamera._ConfigStub or other non-gphoto configs
-    try:
-        if hasattr(config, 'get_child_by_name'):
-            for name in ('datetimeutc', 'datetime', 'd034'):
-                try:
-                    widget = config.get_child_by_name(name)
-                except Exception:
-                    widget = None
-                if not widget:
-                    continue
-                try:
-                    widget_type = widget.get_type()
-                except Exception:
-                    widget_type = None
-
-                if widget_type == gp.GP_WIDGET_DATE:
-                    now = int(time.time())
-                    if hasattr(widget, 'set_value'):
-                        widget.set_value(now)
-                    else:
-                        setattr(widget, '_value', now)
-                else:
-                    now = time.strftime('%Y-%m-%d %H:%M:%S')
-                    if hasattr(widget, 'set_value'):
-                        widget.set_value(now)
-                    else:
-                        setattr(widget, '_value', now)
-                return True
-    except Exception:
-        pass
-
+    _clock_sync_disabled.add(name)
+    shown = after.camera_time.strftime('%Y-%m-%d %H:%M:%S') if after is not None and after.camera_time else (
+        after.raw if after is not None else 'nothing')
+    hardware_problems.report(
+        name,
+        f'Setting the camera clock failed: it read back as {shown} instead of the computer time.  '
+        + ('The previous date and time were restored.  ' if restored else
+           'The previous date and time could not be restored.  ')
+        + 'SEW will not set the clock of this camera again; set the date and time on the camera by hand.',
+        detail=f'via {method}; before: {before.raw!r}, after: {after.raw if after is not None else None!r}',
+        severity="warning",
+    )
     return False
 
 

@@ -474,7 +474,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
   - Battery level (in percentage);
   - Free memory (both in percentage and in GB).
 - Apart from updating the camera information in the UI, the following is done for all cameras:
-  - Syncing the time with the time of the computer the camera is connected to;
+  - Syncing the time with the time of the computer the camera is connected to.  The camera clock is only changed when its current value can be read, and it is read back afterwards.  If the camera did not take the new time (some older cameras fall back to a default date such as 1980), the previous date and time are restored, a warning is shown, and SEW does not touch the clock of that camera again until it is restarted: set the date and time on the camera by hand in that case.  The `sync_cameras` script command works the same way;
   - Checking whether for the focus mode and the shooting mode are set to "Manual".  If this is not the case, a warning message is logged in the Console where the UI was started.
 
 #### Simulation mode
