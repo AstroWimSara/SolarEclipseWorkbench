@@ -3580,6 +3580,11 @@ class JobsTableModel(QAbstractTableModel, Observable):
 
                     job_string = f"take_bracket(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {step})"
 
+                elif job.func.__name__ == "prepare_camera":
+                    camera_settings: CameraSettings = job.args[1]
+                    job_string = (f"prepare_camera(\"{camera_settings.camera_name}\", {camera_settings.shutter_speed}, "
+                                  f"{camera_settings.aperture}, {camera_settings.iso}, {job.args[2]})")
+
                 elif job.func.__name__ == "take_hdr":
                     camera_settings: CameraSettings = job.args[1]
                     camera_name = camera_settings.camera_name

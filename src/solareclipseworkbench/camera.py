@@ -2153,6 +2153,73 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         simulated_bracketing()
 
 
+PREPARE_MODES = ("single", "burst")
+
+
+def parse_prepare_mode(mode: str) -> str:
+    """Check the drive mode of a prepare_camera: 'single', 'burst' or a bracket ('1 5', a Sony mode name).
+
+    Returns the mode with quotes and spaces around it removed.  Raises ValueError for an invalid bracket.
+    """
+    mode = (mode or "").strip().strip('"').strip()
+    if mode.lower() in PREPARE_MODES:
+        return mode.lower()
+    parse_bracket(mode)
+    return mode
+
+
+@_serialised_on_camera
+def prepare_camera(camera: Camera, camera_settings: CameraSettings, mode: str) -> None:
+    """ Set the camera up for the next command, without taking a picture.
+
+    Sets the exposure and, on a Sony, the capture mode of the command that
+    follows: single pictures, a continuous burst, or a bracketing mode.  A Sony
+    takes several seconds to change its capture mode and to step its shutter
+    speed, which would otherwise delay the first shot of the C2 or C3 sequence
+    (discussion #192).  The command that follows then finds nothing to change
+    (see _set_widget_if_changed) and shoots right away.  Canon and Nikon change
+    drive mode quickly, so for them only the exposure is set.
+
+    Args:
+        - camera: Camera object
+        - camera_settings: Exposure of the command that follows (shutter speed, f, iso)
+        - mode: 'single', 'burst' or a bracket, as for take_bracket
+    """
+    log = camera_log(camera)
+    mode = parse_prepare_mode(mode)
+    context, config = __adapt_camera_settings(camera, camera_settings)
+    if context is None:
+        return
+    if getattr(camera, 'vendor', None) != 'Sony':
+        log.info('prepared exposure %s, f/%s, ISO %s for %s',
+                 camera_settings.shutter_speed, camera_settings.aperture, camera_settings.iso, mode)
+        return
+
+    try:
+        capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+    except gphoto2.GPhoto2Error as e:
+        log.warning("prepare_camera: 'capturemode' is not supported (%s)", e)
+        return
+    if mode == "single":
+        choice = _find_capturemode_choice(capture_mode, want_continuous=False)
+    elif mode == "burst":
+        choice = _find_capturemode_choice(capture_mode, want_continuous=True,
+                                          custom_keyword=configuration.SONY_CONTINUOUS_MODE)
+    else:
+        spec = parse_bracket(mode)
+        choice = spec.mode_name or match_sony_mode(_widget_choices(capture_mode), spec)
+    if choice is None:
+        log.warning('prepare_camera: no capture mode for %s, the next command will set it', mode)
+        return
+    try:
+        if _set_widget_if_changed(capture_mode, choice):
+            _set_gp_config(camera, config, context)
+        log.info('prepared capturemode "%s", %s, f/%s, ISO %s', choice,
+                 camera_settings.shutter_speed, camera_settings.aperture, camera_settings.iso)
+    except gphoto2.GPhoto2Error as e:
+        log.warning('prepare_camera: could not set capturemode to "%s": %s', choice, e)
+
+
 def _canon_shutter_speed(target, context) -> Optional[str]:
     """The shutter speed the camera reports now (read fresh: the config of the
     command still holds the value that was set)."""

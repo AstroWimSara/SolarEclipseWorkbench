@@ -42,7 +42,7 @@ from solareclipseworkbench.command_timing import (
 
 OK, INFO, WARNING, ERROR = "ok", "info", "warning", "error"
 
-CAMERA_COMMANDS = ("take_picture", "take_burst", "take_bracket", "take_hdr")
+CAMERA_COMMANDS = ("take_picture", "take_burst", "take_bracket", "take_hdr", "prepare_camera")
 
 # Assumed size of one RAW file, to estimate the card space a script needs.
 RAW_FILE_MB = 40
@@ -222,6 +222,8 @@ def estimate_frames(commands: List[ScriptCommand], vendor: Optional[str]) -> int
                 frames += parse_bracket(cmd.args[4]).frames
             except (IndexError, ValueError):
                 frames += DEFAULT_FRAMES
+        elif cmd.func == "prepare_camera":
+            continue  # takes no picture
         else:
             frames += 1
     return frames
@@ -968,7 +970,8 @@ def adapt_script_lines(lines: List[str], camera_name: str, profile: CameraProfil
             continue
         # take_hdr and take_bracket step through shutter speeds from their start
         # value, so only that value is fitted.
-        vary = parts[0] in ("take_picture", "take_burst")
+        # prepare_camera is fitted like the burst it prepares, so both end up on the same exposure.
+        vary = parts[0] in ("take_picture", "take_burst", "prepare_camera")
         fitted = fit_exposure(parts[5], iso, parts[6], profile, limits, vary_iso_aperture=vary)
         note = fitted.note
         if not note:

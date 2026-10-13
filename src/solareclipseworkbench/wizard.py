@@ -2129,10 +2129,10 @@ class SummaryPage(QWizardPage):
         if contact_bursts:
             chromosphere_before_c3 = max(chromosphere_before_c3,
                                          math.ceil((picture_duration_s(chromosphere_shutter, timing)
-                                                    + single_among_corona_s - c3_beads_start) * 10) / 10)
+                                                    + single_among_corona_s - plan.c3_first_start) * 10) / 10)
         # Seconds before C3 by which the corona sequence has finished
         totality_end_buffer = max(10, math.ceil(chromosphere_before_c3) if wizard.field('chromosphere') else 0,
-                                  math.ceil(-c3_beads_start) if contact_bursts else 0)
+                                  math.ceil(-plan.c3_first_start) if contact_bursts else 0)
 
         hdr_sequence = HDR_ONE_WAY if wizard.field('hdr_one_way') else HDR_ROUND_TRIP
 
@@ -2538,12 +2538,13 @@ class SummaryPage(QWizardPage):
                 lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the diamond ring")
                 lines.append(f"# burst starts at {_relative('C2', -c2_diamond_start)} and the beads burst at "
                              f"{_relative('C2', -c2_beads_start)}.")
-                if plan.switch_s:
-                    lines.append(f"# The diamond ring burst also gets ~{plan.switch_s:.0f}s for the camera to switch "
-                                 f"from single pictures to continuous shooting.")
                 beads_shutter = get_shutter('bailys_beads_c2', '1/500')
                 diamond_shutter = get_shutter('diamond_ring_c2', '1/250')
 
+                if plan.c2_prepare_start is not None:
+                    lines.append(f"# The camera needs ~{plan.switch_s:.0f}s to switch from single pictures to continuous "
+                                 f"shooting, so it is set up at {_relative('C2', -plan.c2_prepare_start)}.")
+                    lines.append(f'prepare_camera, {_contact_offset("C2", -plan.c2_prepare_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, burst, "Prepare for C2 diamond ring"')
                 lines.append(f'take_burst, {_contact_offset("C2", -c2_diamond_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 diamond ring"')
                 lines.append(f'take_burst, {_contact_offset("C2", -c2_beads_start)}, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 beads"')
                 lines.append("")
@@ -2855,12 +2856,13 @@ class SummaryPage(QWizardPage):
                 lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the beads burst")
                 lines.append(f"# starts at {_relative('C3', c3_beads_start)} and the diamond ring burst at "
                              f"{_relative('C3', c3_diamond_start)}.")
-                if plan.switch_s:
-                    lines.append(f"# The beads burst starts ~{plan.switch_s:.0f}s earlier, the time the camera needs "
-                                 f"to switch to continuous shooting after the totality shots.")
                 diamond_c3_shutter = get_shutter('diamond_ring_c3', '1/250')
                 beads_c3_shutter = get_shutter('bailys_beads_c3', '1/500')
 
+                if plan.c3_prepare_start is not None:
+                    lines.append(f"# The camera needs ~{plan.switch_s:.0f}s to switch to continuous shooting after the "
+                                 f"totality shots, so it is set up at {_relative('C3', plan.c3_prepare_start)}.")
+                    lines.append(f'prepare_camera, {_contact_offset("C3", plan.c3_prepare_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, burst, "Prepare for C3 beads"')
                 lines.append(f'take_burst, {_contact_offset("C3", c3_beads_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 beads"')
                 lines.append(f'take_burst, {_contact_offset("C3", c3_diamond_start)}, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 diamond ring"')
                 lines.append("# REPLACE SOLAR FILTER after C3!")

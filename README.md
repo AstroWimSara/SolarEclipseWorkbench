@@ -769,6 +769,14 @@ This command will take a picture 1 minutes and 2 seconds before first contact (C
 
   Arguments: camera name, starting shutter speed (fastest in the sequence), aperture, ISO, number of stops to ramp down.
 
+- **prepare_camera** - Set the camera up for the command that follows, without taking a picture: its shutter speed, aperture and ISO and, on a Sony, its drive mode: `single`, `burst`, or a bracket as in `take_bracket`.  A Sony takes about 4 seconds to change between single pictures, continuous shooting and a bracketing mode; without `prepare_camera` the first burst or bracket after such a change starts that much later than scheduled.  Put it a few seconds before the first shot of a sequence, e.g. before the diamond ring at C2 and before the Baily's beads at C3, at a moment no other shot is due.  The command that follows then finds the camera ready and shoots right away.  Canon and Nikon change drive mode quickly, so for them only the exposure is set.  The wizard adds these lines for a Sony.
+
+```prepare_camera, C2, -, 0:00:14.5, Sony ILCE-7RM3A, 1/400, 5.6, 400, burst, "Prepare for C2 diamond ring"```
+
+```prepare_camera, C2, -, 0:00:30.0, Sony ILCE-7RM3A, 1/30, 8, 400, "Bracketing C 3.0 Steps 5 Pictures", "Prepare for the C2 brackets"```
+
+  Arguments: camera name, shutter speed, aperture, ISO, drive mode.
+
 - **voice_prompt** - Play a sound file.
 
 ```voice_prompt, C4, -, 00:00:03, C4_IN_3_SECONDS, "3 seconds before C4 voice prompt"```
@@ -846,7 +854,7 @@ Every start of `sew` (and of `sew_wizard`) writes a new log file in `~/.SolarEcl
 
 ## Commands that are too close together
 
-A camera can only execute one command at a time, and a command keeps the camera busy for considerably longer than its exposure time: settings are sent over USB before the picture is taken, and after a `take_burst` the camera has to write its buffer to the card.  A command that has to wait more than 1.5 seconds for its camera is skipped rather than executed late.  When a script is loaded, Solar Eclipse Workbench estimates how long each command keeps its camera busy and warns about every command that will probably be skipped, so the script can be corrected before the eclipse.  As a rule of thumb, allow about 2 seconds plus the exposure time for `take_picture`, and about 6 seconds plus the burst duration for `take_burst`.
+A camera can only execute one command at a time, and a command keeps the camera busy for considerably longer than its exposure time: settings are sent over USB before the picture is taken, and after a `take_burst` the camera has to write its buffer to the card.  A command that has to wait more than 1.5 seconds for its camera is skipped rather than executed late.  When a script is loaded, Solar Eclipse Workbench estimates how long each command keeps its camera busy and warns about every command that will probably be skipped, so the script can be corrected before the eclipse.  As a rule of thumb, allow about 2 seconds plus the exposure time for `take_picture`, and about 6 seconds plus the burst duration for `take_burst`.  A Sony bracket takes about 4.5 seconds on top of its exposures, and on a Sony the first command after a change of drive mode (single pictures, burst, a bracketing mode) takes about 4 seconds longer; a `prepare_camera` ahead of time takes that change out of the sequence.
 
 ## Handling camera(s) disconnect(s)
 

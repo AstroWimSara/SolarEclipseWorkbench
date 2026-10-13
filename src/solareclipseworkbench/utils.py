@@ -7,9 +7,9 @@ from typing import List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
-from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, sync_cameras, scripts, execute_command
+from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, prepare_camera, sync_cameras, scripts, execute_command
 from solareclipseworkbench import hardware_problems
-from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S
+from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S, parse_prepare_mode
 from solareclipseworkbench.command_timing import (
     vendor_from_name, picture_duration_s, burst_duration_s, hdr_duration_s, bracket_duration_s,
     drive_mode, mode_switch_s, TimingProfile, DEFAULT_PROFILE,
@@ -25,6 +25,7 @@ COMMANDS = {
     'take_burst': take_burst,
     'take_bracket': take_bracket,
     'take_hdr': take_hdr,
+    'prepare_camera': prepare_camera,
     'sync_cameras': sync_cameras,
     'command': execute_command
 }
@@ -82,6 +83,9 @@ def estimate_busy_s(func_name: str, script_args: list, camera=None,
         if func_name == "take_bracket":
             vendor = getattr(camera, "vendor", None) or vendor_from_name(script_args[0])
             return bracket_duration_s(shutter, profile, script_args[4], vendor)
+        if func_name == "prepare_camera":
+            # Configuration round-trips only; changing drive mode is added by find_camera_conflicts
+            return profile.picture_overhead_s
     except (IndexError, ValueError):
         pass
     return None
@@ -101,7 +105,7 @@ def camera_busy_window(start: datetime, func_name: str, script_args: list, descr
         return None
     camera_name = script_args[0].strip()
     vendor = getattr(camera, "vendor", None) or vendor_from_name(camera_name)
-    bracket = script_args[4] if func_name == "take_bracket" else None
+    bracket = script_args[4] if func_name in ("take_bracket", "prepare_camera") else None
     return CameraBusyWindow(camera_name, start, busy_s, description,
                             drive_mode(func_name, bracket), mode_switch_s(vendor))
 
@@ -361,6 +365,19 @@ def _bracket_is_valid(args: list, cmd_str: str) -> bool:
     return False
 
 
+def _prepare_mode_is_valid(args: list, cmd_str: str) -> bool:
+    """Check the drive mode of a prepare_camera now, so a typo shows up when the script is loaded."""
+    try:
+        parse_prepare_mode(args[4])
+        return True
+    except IndexError:
+        problem = "prepare_camera has no drive mode: give single, burst or a bracket, e.g. \"1 3\""
+    except ValueError as e:
+        problem = f"prepare_camera needs single, burst or a bracket: {e}"
+    hardware_problems.report("Script", f"{problem}.  The camera will not be prepared.", detail=cmd_str.strip())
+    return False
+
+
 def _hdr_is_valid(args: list, cmd_str: str) -> bool:
     """Check the stops and sequence of a take_hdr now, so a typo shows up when the script is loaded."""
     try:
@@ -538,6 +555,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
             return
         if func_name == "take_hdr" and not _hdr_is_valid(args, cmd_str):
             return
+        if func_name == "prepare_camera" and not _prepare_mode_is_valid(args, cmd_str):
+            return
         if cameras is not None:
             try:
                 if func_name != "sync_cameras":
@@ -554,6 +573,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                     settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
                     new_args = [cameras[args[0].strip()], settings, str(args[4].strip())]
                     args = new_args
+                elif func_name == "prepare_camera":
+                    settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
+                    args = [cameras[args[0].strip()], settings, parse_prepare_mode(args[4])]
                 elif func_name == "take_hdr":
                     settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
                     new_args = [cameras[args[0].strip()], settings, int(args[4].strip()),

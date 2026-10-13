@@ -92,6 +92,8 @@ def mode_switch_s(vendor: Optional[str]) -> float:
 def drive_mode(func_name: str, bracket: Optional[str] = None) -> Optional[str]:
     """The drive mode a camera command puts the camera in, or None for non-camera commands.
 
+    ``bracket`` is the bracket of a take_bracket, or the mode of a prepare_camera.
+
     Two commands with a different drive mode make the camera switch modes in
     between (see MODE_SWITCH_S).  Each bracket is its own mode, as a Sony has a
     separate capture mode per EV step and number of frames.
@@ -102,6 +104,12 @@ def drive_mode(func_name: str, bracket: Optional[str] = None) -> Optional[str]:
         return "burst"
     if func_name == "take_bracket":
         return "bracket " + (bracket or "").strip().strip('"')
+    if func_name == "prepare_camera":
+        # Prepares the mode of the command that follows: 'single', 'burst' or a bracket
+        mode = (bracket or "").strip().strip('"').strip()
+        if mode.lower() in ("single", "burst"):
+            return mode.lower()
+        return "bracket " + mode
     return None
 
 
@@ -207,7 +215,21 @@ class ContactBurstPlan:
     c3_buffer: int               # partial shots start at least this long after C3
     totality_first_shot: int     # seconds after C2 of the first totality shot
     beads_timed: bool = False    # whether the beads bursts are aimed at the Baily's beads windows
-    switch_s: float = 0.0        # extra time of the first command after a change of drive mode
+    switch_s: float = 0.0        # time the camera needs to change drive mode (see MODE_SWITCH_S)
+    # A prepare_camera before the C2 diamond ring burst and before the C3 beads burst
+    # changes the drive mode ahead of them; None when the camera changes mode quickly.
+    c2_prepare_start: Optional[float] = None    # seconds before C2
+    c3_prepare_start: Optional[float] = None    # seconds after C3 (negative: before C3)
+
+    @property
+    def c3_first_start(self) -> float:
+        """Seconds after C3 (negative: before C3) of the first command of the C3 sequence."""
+        return self.c3_prepare_start if self.c3_prepare_start is not None else self.c3_beads_start
+
+
+def prepare_duration_s(switch_s: float, profile: TimingProfile = DEFAULT_PROFILE) -> float:
+    """Busy time of a prepare_camera that changes the drive mode: the configuration plus the change."""
+    return profile.picture_overhead_s + switch_s
 
 
 def beads_burst_start(window: Tuple[float, float], shooting_s: float) -> float:
@@ -239,34 +261,41 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
                               without both, the bursts start at C2-4 s and C3+1 s.
 
     The C2 diamond ring burst follows the partial-phase pictures and the C3 beads
-    burst follows the totality shots, so on a camera that is slow to change drive
-    mode (see MODE_SWITCH_S) both take longer.  The C3 beads burst then starts
-    that much earlier, so it still shoots the beads.
+    burst follows the totality shots, so both start in another drive mode than
+    the shot before.  On a camera that is slow to change drive mode (see
+    MODE_SWITCH_S), a prepare_camera changes the mode before each of them, so
+    the bursts shoot at the planned time however long the change takes.
     """
     # Nikon: number of frames.  Canon and Sony: seconds the shutter is held.
     burst_param = 30 if vendor == "Nikon" else 2
     burst_s = burst_duration_s(vendor, burst_param, profile)
     burst_whole_s = math.ceil(burst_s)
     switch_s = mode_switch_s(vendor) if bursts_enabled else 0.0
-    # A whole number of seconds from the start of the first burst after a mode change to the next burst
-    first_burst_whole_s = math.ceil(burst_s + switch_s)
 
     beads_timed = beads_c2 is not None and beads_c3 is not None
     if beads_timed:
         shooting_s = burst_shooting_s(vendor, burst_param, profile)
         c2_beads_start = -beads_burst_start(beads_c2, shooting_s)
-        c3_beads_start = round(beads_burst_start(beads_c3, shooting_s) - switch_s, 1)
+        c3_beads_start = beads_burst_start(beads_c3, shooting_s)
     else:
         c2_beads_start = C2_BEADS_START_S
-        c3_beads_start = round(C3_BEADS_START_S - switch_s, 1)
-    c2_diamond_start = round(c2_beads_start + first_burst_whole_s, 1)
-    c3_diamond_start = round(c3_beads_start + first_burst_whole_s, 1)
+        c3_beads_start = C3_BEADS_START_S
+    c2_diamond_start = round(c2_beads_start + burst_whole_s, 1)
+    c3_diamond_start = round(c3_beads_start + burst_whole_s, 1)
+
+    c2_prepare_start = c3_prepare_start = None
+    if switch_s > 0:
+        # A prepare_camera writes the configuration and changes the drive mode
+        prepare_whole_s = math.ceil(prepare_duration_s(switch_s, profile))
+        c2_prepare_start = round(c2_diamond_start + prepare_whole_s, 1)
+        c3_prepare_start = round(c3_beads_start - prepare_whole_s, 1)
 
     if bursts_enabled:
         # Room for the last partial shot (at most 1/30 s) to finish before the
-        # diamond ring burst starts, and for the C3 diamond ring burst to finish
+        # C2 sequence starts, and for the C3 diamond ring burst to finish
         # before the first partial shot after C3.
-        c2_buffer = max(CONTACT_BUFFER_S, math.ceil(c2_diamond_start + picture_duration_s("1/30", profile)))
+        c2_first_start = c2_prepare_start if c2_prepare_start is not None else c2_diamond_start
+        c2_buffer = max(CONTACT_BUFFER_S, math.ceil(c2_first_start + picture_duration_s("1/30", profile)))
         c3_buffer = max(CONTACT_BUFFER_S, math.ceil(c3_diamond_start + burst_whole_s))
         # Totality starts with the camera still busy with the beads burst.
         totality_first_shot = max(3, math.ceil(burst_s - c2_beads_start))
@@ -277,4 +306,4 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
 
     return ContactBurstPlan(burst_param, burst_s, c2_diamond_start, c2_beads_start, c3_beads_start,
                             c3_diamond_start, c2_buffer, c3_buffer, totality_first_shot,
-                            beads_timed and bursts_enabled, switch_s)
+                            beads_timed and bursts_enabled, switch_s, c2_prepare_start, c3_prepare_start)
