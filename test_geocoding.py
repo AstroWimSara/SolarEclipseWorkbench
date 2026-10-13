@@ -18,7 +18,7 @@ def test_geocoding():
         return False
     
     # Create QApplication (required for QThread)
-    app = QCoreApplication(sys.argv)
+    app = QCoreApplication.instance() or QCoreApplication(sys.argv)
     
     # Test address
     test_address = "Carbondale, Illinois, USA"
