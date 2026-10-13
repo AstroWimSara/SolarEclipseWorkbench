@@ -18,14 +18,15 @@ from solareclipseworkbench import utils
 from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 from solareclipseworkbench.utils import TOTALITY_OVERRUN_MARGIN_S, warn_if_script_outlasts_totality
 
-C2 = datetime(2026, 8, 12, 18, 29, 13, tzinfo=timezone.utc)
+# In the future, so the running scheduler keeps the jobs instead of firing them
+C2 = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
 TOTALITY_S = 100
 
 
 @pytest.fixture
 def scheduler():
     # Running, because a job only gets its next_run_time when the scheduler
-    # takes it; the jobs below sit in 2026 and never fire during the test.
+    # takes it; the jobs below sit a day or more ahead and never fire during the test.
     scheduler = BackgroundScheduler()
     scheduler.start()
     yield scheduler
@@ -87,7 +88,8 @@ def test_a_shot_written_against_third_contact_is_not_an_overrun(scheduler, momen
 
 
 def test_simulated_and_gps_corrected_jobs_are_compared_on_the_eclipse_time_scale(scheduler, moments):
-    shift = timedelta(days=30, seconds=1.5)
+    # Simulated a month early, and the computer clock 1.5 s slow
+    shift = -timedelta(days=30, seconds=1.5)
     _job_at(scheduler, TOTALITY_S - 4.4, "take_bracket", shift=shift)
     _job_at(scheduler, TOTALITY_S - TOTALITY_OVERRUN_MARGIN_S - 1, "take_bracket", shift=shift)
 
