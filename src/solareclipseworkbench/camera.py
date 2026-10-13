@@ -17,7 +17,9 @@ from typing import Any, Tuple, Optional
 from solareclipseworkbench import configuration
 from solareclipseworkbench.logging_setup import camera_log
 from solareclipseworkbench.bracketing import (
-    bracket_exposures, format_ev, match_ev_choice, match_sony_mode, nearest_shutter_choices, parse_bracket,
+    HDR_ONE_WAY, HDR_ROUND_TRIP, bracket_exposures, format_ev, hdr_native_bracket, hdr_offsets, hdr_speeds,
+    match_ev_choice,
+    match_sony_mode, native_brackets, nearest_shutter_choices, parse_bracket, parse_hdr_sequence,
 )
 
 
@@ -2174,19 +2176,23 @@ def _get_shutter_speed_choices(config) -> list:
 
 
 @_serialised_on_camera
-def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> None:
-    """Take an HDR sequence by ramping shutter speed from the starting speed down by
-    *stops* full stops and back up, using gp_camera_trigger_capture for maximum
+def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int, sequence: str = HDR_ROUND_TRIP) -> None:
+    """Take an HDR sequence by ramping the exposure from the starting speed up by
+    *stops* full stops (1 EV per frame), using gp_camera_trigger_capture for maximum
     throughput.
 
     The camera configuration is read once and only the shutterspeed widget is changed
     between shots, avoiding repeated round-trips for ISO and aperture. The shutter speed
-    choices are queried directly from the camera body at runtime so the sequence always
-    stays within the actual speeds the body supports. The sequence is:
+    choices are queried directly from the camera body at runtime, and each frame uses
+    the speed closest in EV to its exposure, so the sequence is right whether the camera
+    uses 1/3 or 1/2 EV steps. The sequence is:
 
-        start_speed → (stops steps slower) → start_speed
+        round-trip: start_speed → (stops slower) → start_speed   (2 * stops + 1 shots)
+        one-way:    start_speed → (stops slower)                 (stops + 1 shots)
 
-    Total shots: 2 * stops + 1 (the slowest exposure appears once at the midpoint).
+    The longest exposure is taken once.  A Sony takes a one-way sequence with its own
+    continuous bracketing when it has a 1 EV mode with that many frames (it changes
+    shutter speed slowly).
 
     Camera-model support:
         - Canon EOS: uses gp_camera_trigger_capture; USB events are drained afterwards.
@@ -2198,13 +2204,15 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
         - camera_settings: Base settings. shutter_speed is the fastest (shortest)
                            exposure in the sequence (e.g. "1/2000"). aperture and iso
                            are fixed for the entire sequence.
-        - stops: Number of full stops to ramp down. Total shots = 2 * stops + 1.
+        - stops: Number of full stops to ramp up.
+        - sequence: 'round-trip' (default) or 'one-way'.
 
     Raises:
         CameraError: If the requested starting shutter speed is not supported by the camera.
     """
     vendor = getattr(camera, 'vendor', None)
     log = camera_log(camera)
+    sequence = parse_hdr_sequence(sequence)
 
     # Canon EOS R live-view / trigger_capture mode conflict (same as take_picture).
     if (getattr(camera, 'vendor', None) == 'Canon'
@@ -2218,8 +2226,7 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
     # Virtual camera path: just fire repeated captures
     if context is None:
         try:
-            n_shots = 2 * stops + 1
-            for _ in range(n_shots):
+            for _ in hdr_offsets(stops, sequence):
                 camera.capture()
             return
         except Exception:
@@ -2227,6 +2234,26 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             raise
 
     target = camera._camera if hasattr(camera, '_camera') else camera
+
+    # Sony changes shutter speed slowly: a one-way sequence that matches one of its
+    # continuous bracketing modes is taken as that bracket, around the middle exposure.
+    if vendor == 'Sony' and sequence == HDR_ONE_WAY:
+        try:
+            mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+            bracket = hdr_native_bracket(stops, sequence,
+                                         native_brackets('Sony', {'capturemode': _widget_choices(mode_widget)}))
+        except gphoto2.GPhoto2Error:
+            bracket = None
+        start_s = _parse_shutter_speed_seconds(camera_settings.shutter_speed)
+        if bracket is not None and start_s > 0:
+            middle = nearest_shutter_choices(_get_shutter_speed_choices(config), [start_s * 2 ** (stops / 2)],
+                                             _parse_shutter_speed_seconds)[0]
+            log.info('take_hdr: %d stops one-way taken as camera bracket "%s" around %s', stops, bracket, middle)
+            take_bracket.__wrapped__(
+                camera, CameraSettings(camera_settings.camera_name, middle, camera_settings.aperture,
+                                       camera_settings.iso),
+                bracket)
+            return
 
     # For Nikon cameras, defensively ensure single-frame mode is active before
     # taking a single picture, in case a previous take_burst left the camera in
@@ -2275,29 +2302,19 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
     start_speed = camera_settings.shutter_speed.strip()
     if start_speed not in choices:
         start_speed = _find_closest_shutter_choice(ss_widget, start_speed)
+    start_s = _parse_shutter_speed_seconds(start_speed or '')
+    if start_s <= 0:
+        raise CameraError(f"take_hdr: starting shutter speed '{camera_settings.shutter_speed}' is not supported")
 
-    start_idx = choices.index(start_speed)
-    # Defining here a multipler, so we can make full stops.
-    # We assume that exposure step is already set to 0.3EV on the camera!
-    full_stop_multiplier=3
-    end_idx = min(start_idx + stops * full_stop_multiplier, len(choices) - 1)
-    end_idx = start_idx + ((end_idx - start_idx) // full_stop_multiplier) * full_stop_multiplier
-    actual_stops = end_idx - start_idx
-    if actual_stops < stops:
+    # Stops are counted in EV, so the sequence is right with 1/3 and 1/2 EV steps.
+    speeds, available = hdr_speeds(choices, start_s, stops, sequence, _parse_shutter_speed_seconds)
+    if available < stops:
         log.warning(
             'take_hdr: requested %d stops but camera only supports %d stops slower than %s; '
             'clamping sequence to %d stops.',
-            stops, actual_stops, start_speed, actual_stops
+            stops, available, start_speed, available
         )
-
-    # Symmetric sequence: ramp down (faster→slower) then back up (duplicate peak excluded)
-    down = list(range(start_idx, end_idx + 1, full_stop_multiplier))
-    up = list(range(end_idx - full_stop_multiplier, start_idx - 1, -full_stop_multiplier))
-    indices = down + up
-    log.info('take_hdr will take %d shots, with these speeds: %s',
-             len(indices),
-             [choices[i] for i in indices]
-    )
+    log.info('take_hdr will take %d shots (%s), with these speeds: %s', len(speeds), sequence, speeds)
 
     # Ensure that no lingering events are left before proceeding.
     # Sony in PC mode must be skipped, to avoid disrupting Background Downloader.
@@ -2306,8 +2323,7 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             and camera._bg_downloader.is_alive()):
         _drain_camera_events(target, context)
 
-    for idx in indices:
-        speed = choices[idx]
+    for speed in speeds:
         try:
             gp.gp_widget_set_value(ss_widget, speed)
             gp.gp_camera_set_config(target, config, context)
@@ -2342,7 +2358,7 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int) -> Non
             _wait_for_capture_complete(target, context, timeout_ms = timeout_ms)
             _drain_camera_events(target, context)
 
-    log.debug('take_hdr has completed HDR sequence (%d shots)', len(indices))
+    log.debug('take_hdr has completed HDR sequence (%d shots)', len(speeds))
 
 
 def mirror_lock(camera: Camera, camera_settings: CameraSettings) -> None:

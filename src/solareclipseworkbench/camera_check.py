@@ -28,7 +28,9 @@ from datetime import timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from solareclipseworkbench import scripts
-from solareclipseworkbench.bracketing import DEFAULT_FRAMES, is_native, native_brackets, parse_bracket
+from solareclipseworkbench.bracketing import (
+    DEFAULT_FRAMES, hdr_offsets, is_native, native_brackets, parse_bracket, parse_hdr_sequence,
+)
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     TimingProfile,
@@ -210,7 +212,8 @@ def estimate_frames(commands: List[ScriptCommand], vendor: Optional[str]) -> int
             frames += int(param) if vendor == "Nikon" else int(math.ceil(param * BURST_FPS))
         elif cmd.func == "take_hdr":
             try:
-                frames += 2 * int(cmd.args[4]) + 1
+                frames += len(hdr_offsets(int(cmd.args[4]),
+                                          parse_hdr_sequence(cmd.args[5] if len(cmd.args) > 5 else None)))
             except (IndexError, ValueError):
                 frames += 15
         elif cmd.func == "take_bracket":

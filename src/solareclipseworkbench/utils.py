@@ -15,7 +15,7 @@ from solareclipseworkbench.command_timing import (
     TimingProfile, DEFAULT_PROFILE,
 )
 from solareclipseworkbench.notifications import check_notification
-from solareclipseworkbench.bracketing import parse_bracket
+from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
@@ -71,7 +71,8 @@ def estimate_busy_s(func_name: str, script_args: list, camera=None,
             vendor = getattr(camera, "vendor", None) or vendor_from_name(script_args[0])
             return burst_duration_s(vendor, float(script_args[4]), profile)
         if func_name == "take_hdr":
-            return hdr_duration_s(shutter, int(script_args[4]))
+            return hdr_duration_s(shutter, int(script_args[4]), parse_hdr_sequence(
+                script_args[5] if len(script_args) > 5 else None))
         if func_name == "take_bracket":
             return bracket_duration_s(shutter, profile, script_args[4])
     except (IndexError, ValueError):
@@ -311,6 +312,23 @@ def _bracket_is_valid(args: list, cmd_str: str) -> bool:
     return False
 
 
+def _hdr_is_valid(args: list, cmd_str: str) -> bool:
+    """Check the stops and sequence of a take_hdr now, so a typo shows up when the script is loaded."""
+    try:
+        if int(args[4]) < 1:
+            raise ValueError
+    except (IndexError, ValueError):
+        problem = "take_hdr needs a whole number of stops of at least 1"
+    else:
+        try:
+            parse_hdr_sequence(args[5] if len(args) > 5 else None)
+            return True
+        except ValueError as e:
+            problem = str(e)
+    hardware_problems.report("Script", f"{problem}.  This HDR sequence will not be taken.", detail=cmd_str.strip())
+    return False
+
+
 def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
                      controller: SolarEclipseController, reference_moment_for_simulation: str,
                      simulated_start: datetime,
@@ -373,6 +391,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     elif func_name != "command":
         if func_name == "take_bracket" and not _bracket_is_valid(args, cmd_str):
             return
+        if func_name == "take_hdr" and not _hdr_is_valid(args, cmd_str):
+            return
         if cameras is not None:
             try:
                 if func_name != "sync_cameras":
@@ -391,7 +411,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                     args = new_args
                 elif func_name == "take_hdr":
                     settings = CameraSettings(args[0].strip(), args[1].strip(), args[2].strip(), int(args[3].strip()))
-                    new_args = [cameras[args[0].strip()], settings, int(args[4].strip())]
+                    new_args = [cameras[args[0].strip()], settings, int(args[4].strip()),
+                                parse_hdr_sequence(args[5] if len(args) > 5 else None)]
                     args = new_args
                 elif func_name == "sync_cameras":
                     args = [controller]

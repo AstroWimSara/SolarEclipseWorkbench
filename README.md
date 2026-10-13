@@ -742,11 +742,17 @@ This command will take a picture 1 minutes and 2 seconds before first contact (C
 
 ```take_bracket, C1, +, 0:00:08.0, Canon EOS 80D, 1/2000, 5.6, 400, "1 2/3 5", "Bracket test"```
 
-- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card. The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports. Total shots fired: 2 × stops + 1 (the slowest exposure appears once at the midpoint). An important warning for Sony cameras - if the camera is in `PC` mode, the total number of taken shots must not exceed the size of camera's buffer! Otherwise, the entire sequence will be lost. You can find the buffer size of some of the Sony cameras [here](https://capturetheuniverse.com/#buffer-size-usb-speed).
+- **take_hdr** - Take an HDR sequence by ramping the shutter speed from a starting (fastest) speed down by the given number of full stops and back up again, while keeping aperture and ISO fixed.  Uses `gp_camera_trigger_capture` for maximum speed so successive shots are fired without waiting for each file to be written to the card. The shutter speed choices available on the connected camera are queried at runtime, so the sequence always stays within the actual speeds the body supports. Each frame is 1 EV longer than the previous one, using the camera speed closest to that exposure, so the sequence is right whether the camera is set to 1/3 or 1/2 EV steps.  An optional sequence field before the description chooses how the sequence runs:
+  - `round-trip` (the default when the field is left out): up to the longest exposure and back down again, 2 × stops + 1 shots.
+  - `one-way`: up to the longest exposure only, stops + 1 shots, which is faster in a short totality.  A Sony takes it with its own continuous bracketing when it has a 1 EV mode with that number of frames (e.g. `Bracketing C 1.0 Steps 5 Pictures` for 4 stops), which is much faster than changing the shutter speed for every frame.
 
-  The sequence for `stops=4` starting at `1/2000` would be: `1/2000 → 1/1000 → 1/500 → 1/250 → 1/125 → 1/250 → 1/500 → 1/1000 → 1/2000` (9 shots).
+  The longest exposure is always taken once.  An unknown sequence, or fewer than 1 stop, is reported when the script is loaded.  An important warning for Sony cameras - if the camera is in `PC` mode, the total number of taken shots must not exceed the size of camera's buffer! Otherwise, the entire sequence will be lost. You can find the buffer size of some of the Sony cameras [here](https://capturetheuniverse.com/#buffer-size-usb-speed).
+
+  The sequence for `stops=4` starting at `1/2000` would be: `1/2000 → 1/1000 → 1/500 → 1/250 → 1/125 → 1/250 → 1/500 → 1/1000 → 1/2000` (9 shots) as a round trip, and `1/2000 → 1/1000 → 1/500 → 1/250 → 1/125` (5 shots) one way.
 
 ```take_hdr, MAX, -, 0:00:10.0, Canon EOS R, 1/2000, 5.6, 100, 14, "HDR at mid-totality"```
+
+```take_hdr, MAX, -, 0:00:05.0, Sony ILCE-7RM3A, 1/2000, 5.6, 100, 4, one-way, "HDR at mid-totality"```
 
   Arguments: camera name, starting shutter speed (fastest in the sequence), aperture, ISO, number of stops to ramp down.
 

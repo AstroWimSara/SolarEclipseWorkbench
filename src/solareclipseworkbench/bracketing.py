@@ -236,3 +236,72 @@ def is_native(bracket: str, native: Sequence[str]) -> bool:
         if other.frames == spec.frames and abs(other.ev_step - spec.ev_step) < 0.02:
             return True
     return False
+
+
+# --- take_hdr sequences ---------------------------------------------------------
+# A take_hdr ramps the exposure from its start (shortest) exposure up by a number of
+# full stops, 1 EV per frame.  'round-trip' comes back down again (the longest exposure
+# is taken once), 'one-way' stops at the longest exposure.
+
+HDR_ROUND_TRIP = "round-trip"
+HDR_ONE_WAY = "one-way"
+HDR_SEQUENCES = (HDR_ROUND_TRIP, HDR_ONE_WAY)
+_HDR_ALIASES = {"down-up-down": HDR_ROUND_TRIP, "down-up": HDR_ONE_WAY}
+
+
+def parse_hdr_sequence(text: Optional[str]) -> str:
+    """The take_hdr sequence: 'round-trip' (also when not given) or 'one-way'.
+
+    Raises:
+        ValueError: With a message that can be shown to the user as is.
+    """
+    s = (text or "").strip().strip('"').strip().lower()
+    if not s:
+        return HDR_ROUND_TRIP
+    s = _HDR_ALIASES.get(s, s)
+    if s not in HDR_SEQUENCES:
+        raise ValueError(f"HDR sequence \"{text}\" is not understood: use \"{HDR_ROUND_TRIP}\" or \"{HDR_ONE_WAY}\"")
+    return s
+
+
+def hdr_offsets(stops: int, sequence: str = HDR_ROUND_TRIP) -> List[int]:
+    """EV offset of each frame from the start exposure, in the order they are taken."""
+    up = list(range(stops + 1))
+    if sequence == HDR_ONE_WAY:
+        return up
+    return up + up[-2::-1]
+
+
+def hdr_native_bracket(stops: int, sequence: str, native: Sequence[str]) -> Optional[str]:
+    """The camera bracket ('1 <frames>') that takes a one-way HDR in one go, or None.
+
+    Only a one-way sequence with an even number of stops is a bracket centred on its
+    middle exposure; a round trip takes exposures twice, which a bracket cannot.
+    """
+    if sequence != HDR_ONE_WAY or stops % 2 or not MIN_FRAMES <= stops + 1 <= MAX_FRAMES:
+        return None
+    bracket = bracket_text(1.0, stops + 1)
+    return bracket if is_native(bracket, native) else None
+
+
+def hdr_speeds(choices: Sequence[str], start_s: float, stops: int, sequence: str, seconds):
+    """Camera shutter speeds of a take_hdr, in the order they are taken.
+
+    Stops are counted in EV, not in positions of the shutter speed list, so the
+    sequence is right whatever exposure step (1/3 or 1/2 EV) the camera uses.
+
+    Args:
+        choices: Shutter speed choices of the camera.
+        start_s: Start (shortest) exposure in seconds.
+        stops: Number of full stops wanted.
+        sequence: HDR_ROUND_TRIP or HDR_ONE_WAY.
+        seconds: Function parsing a choice to seconds (<= 0 for 'bulb' and the like).
+
+    Returns:
+        The speeds, and the number of stops used: fewer than wanted when the camera
+        has no speed that many stops longer than the start.
+    """
+    slowest_s = max(seconds(c) for c in choices)
+    stops = min(stops, max(0, int(math.floor(math.log2(slowest_s / start_s) + 0.1))))
+    offsets = hdr_offsets(stops, sequence)
+    return nearest_shutter_choices(choices, [start_s * 2 ** k for k in offsets], seconds), stops

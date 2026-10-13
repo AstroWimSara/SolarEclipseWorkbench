@@ -42,7 +42,9 @@ from solareclipseworkbench.exposure_calculator import (
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only
 from solareclipseworkbench.camera_check import ExposureLimits, adapt_script_lines
-from solareclipseworkbench.bracketing import STANDARD_FRAMES, STANDARD_STEPS, format_ev, parse_bracket
+from solareclipseworkbench.bracketing import (
+    HDR_ONE_WAY, HDR_ROUND_TRIP, STANDARD_FRAMES, STANDARD_STEPS, format_ev, hdr_offsets, parse_bracket,
+)
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     CONTACT_BUFFER_S,
@@ -1202,6 +1204,28 @@ class PhenomenaPage(QWizardPage):
         hdr_stops_widget.setLayout(hdr_stops_layout)
         phenomena_layout.addWidget(hdr_stops_widget)
 
+        # HDR sequence: up and back down again, or only up (fewer shots)
+        hdr_sequence_widget = QWidget()
+        hdr_sequence_layout = QHBoxLayout()
+        hdr_sequence_layout.setContentsMargins(20, 0, 0, 0)
+        hdr_sequence_layout.addWidget(QLabel("Sequence:"))
+        self.hdr_round_trip_radio = QRadioButton("Round trip (short → long → short)")
+        self.hdr_one_way_radio = QRadioButton("One way (short → long, fewer shots)")
+        self.hdr_round_trip_radio.setToolTip("2 × stops + 1 shots; the longest exposure is taken once")
+        self.hdr_one_way_radio.setToolTip("stops + 1 shots, faster for a short totality.  A Sony takes it with its "
+                                          "own bracketing when it has a 1 EV mode with that many frames.")
+        self.hdr_round_trip_radio.setChecked(True)
+        self.hdr_round_trip_radio.setEnabled(False)
+        self.hdr_one_way_radio.setEnabled(False)
+        self.hdr_sequence_button_group = QButtonGroup(self)
+        self.hdr_sequence_button_group.addButton(self.hdr_round_trip_radio)
+        self.hdr_sequence_button_group.addButton(self.hdr_one_way_radio)
+        hdr_sequence_layout.addWidget(self.hdr_round_trip_radio)
+        hdr_sequence_layout.addWidget(self.hdr_one_way_radio)
+        hdr_sequence_layout.addStretch()
+        hdr_sequence_widget.setLayout(hdr_sequence_layout)
+        phenomena_layout.addWidget(hdr_sequence_widget)
+
         # HDR starting shutter speed (auto-calculate or manual)
         hdr_start_widget = QWidget()
         hdr_start_layout = QHBoxLayout()
@@ -1383,6 +1407,7 @@ class PhenomenaPage(QWizardPage):
         self.registerField("voice_basic", self.voice_basic_radio)
         self.registerField("hdr_burst", self.hdr_check)
         self.registerField("hdr_stops", self.hdr_stops_spin, "value")
+        self.registerField("hdr_one_way", self.hdr_one_way_radio)
         self.registerField("hdr_start_auto", self.hdr_start_auto_radio)
         self.registerField("hdr_start_speed", self.hdr_start_speed_combo, "currentText")
         self.registerField("hdr_iso_auto", self.hdr_iso_auto_radio)
@@ -1477,6 +1502,8 @@ class PhenomenaPage(QWizardPage):
         """Enable/disable HDR stops, starting-speed, and ISO controls."""
         enabled = state == Qt.CheckState.Checked.value
         self.hdr_stops_spin.setEnabled(enabled)
+        self.hdr_round_trip_radio.setEnabled(enabled)
+        self.hdr_one_way_radio.setEnabled(enabled)
         self.hdr_start_auto_radio.setEnabled(enabled)
         self.hdr_start_manual_radio.setEnabled(enabled)
         self.hdr_start_speed_combo.setEnabled(enabled and self.hdr_start_manual_radio.isChecked())
@@ -1597,6 +1624,10 @@ class SummaryPage(QWizardPage):
         if filter_val == "Manual":
             filter_val = f"{wizard.field('filter_manual')}"
         summary.append(f"Solar Filter ND: {filter_val}")
+
+        if wizard.field('hdr_burst'):
+            summary.append(f"HDR: {wizard.field('hdr_stops')} stops, "
+                           f"{'one way' if wizard.field('hdr_one_way') else 'round trip'}")
 
         if wizard.field('corona') and wizard.field('corona_bracket'):
             summary.append(f"Corona Bracket: {wizard.field('bracket_frames')} frames, "
@@ -2045,6 +2076,8 @@ class SummaryPage(QWizardPage):
         def _offset_str(seconds):
             seconds = int(seconds)
             return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}.0"
+
+        hdr_sequence = HDR_ONE_WAY if wizard.field('hdr_one_way') else HDR_ROUND_TRIP
 
         # Bracket of every corona exposure ('<EV step> <frames>'), or None for single pictures
         corona_bracket = None
@@ -2546,7 +2579,7 @@ class SummaryPage(QWizardPage):
                             else:
                                 hdr_excl_speed_str = wizard.field('hdr_start_speed')
                             # Shutter-open times of the ramp down and back up, plus USB overhead
-                            hdr_duration = hdr_duration_s(hdr_excl_speed_str, hdr_stops_val)
+                            hdr_duration = hdr_duration_s(hdr_excl_speed_str, hdr_stops_val, hdr_sequence)
                             # Same start as the take_hdr line written below
                             hdr_start = hdr_start_after_c2(hdr_duration)
                             if hdr_start is None:
@@ -2723,20 +2756,25 @@ class SummaryPage(QWizardPage):
                     hdr_start_speed = wizard.field('hdr_start_speed')
                     hdr_iso_auto = preferred_iso
                 hdr_iso = int(wizard.field('hdr_iso_manual')) if not wizard.field('hdr_iso_auto') else hdr_iso_auto
-                n_shots = 2 * hdr_stops + 1
-                hdr_duration = hdr_duration_s(hdr_start_speed, hdr_stops)
+                n_shots = len(hdr_offsets(hdr_stops, hdr_sequence))
+                hdr_duration = hdr_duration_s(hdr_start_speed, hdr_stops, hdr_sequence)
+                # The default round trip is left out, so the line reads as before
+                hdr_sequence_field = f" {hdr_sequence}," if hdr_sequence == HDR_ONE_WAY else ""
                 lines.append("# HDR burst at maximum eclipse")
-                lines.append(f"# Fires {n_shots} shots ({hdr_stops} stops down and back from {hdr_start_speed})")
+                if hdr_sequence == HDR_ONE_WAY:
+                    lines.append(f"# Fires {n_shots} shots ({hdr_stops} stops longer than {hdr_start_speed}, one way)")
+                else:
+                    lines.append(f"# Fires {n_shots} shots ({hdr_stops} stops longer than {hdr_start_speed} and back)")
                 hdr_start = hdr_start_after_c2(hdr_duration)
                 if hdr_start is not None:
                     # Relative to C2, so it lines up exactly with the other totality shots
                     lines.append(f"# Estimated duration: {hdr_duration:.1f}s, starting at C2+{hdr_start}s "
                                  "(centred on MAX, after the first earthshine shot)")
-                    lines.append(f'take_hdr, C2, +, {_offset_str(hdr_start)}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops}, "HDR at maximum eclipse"')
+                    lines.append(f'take_hdr, C2, +, {_offset_str(hdr_start)}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops},{hdr_sequence_field} "HDR at maximum eclipse"')
                 else:
                     offset_s = math.ceil(hdr_duration / 2)
                     lines.append(f"# Estimated duration: {hdr_duration:.1f}s, starting at MAX-{offset_s}s")
-                    lines.append(f'take_hdr, MAX, -, {_offset_str(offset_s)}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops}, "HDR at maximum eclipse"')
+                    lines.append(f'take_hdr, MAX, -, {_offset_str(offset_s)}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops},{hdr_sequence_field} "HDR at maximum eclipse"')
                 lines.append("")
 
             # C3 - Diamond ring and Baily's beads

@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from solareclipseworkbench.bracketing import bracket_exposures, parse_bracket
+from solareclipseworkbench.bracketing import HDR_ROUND_TRIP, bracket_exposures, hdr_offsets, parse_bracket
 from solareclipseworkbench.exposure_calculator import parse_shutter_speed
 
 # get_config/set_config + trigger_capture + wait for capture complete.  Matches
@@ -98,13 +98,11 @@ def burst_duration_s(vendor: Optional[str], burst_param: float, profile: TimingP
     return burst_shooting_s(vendor, burst_param, profile) + profile.burst_overhead_s
 
 
-def hdr_duration_s(start_shutter_speed: str, stops: int) -> float:
-    """Busy time of a take_hdr: ramp down to the slowest speed and back up."""
+def hdr_duration_s(start_shutter_speed: str, stops: int, sequence: str = HDR_ROUND_TRIP) -> float:
+    """Busy time of a take_hdr: ramp up to the longest exposure (and back down for a round trip)."""
     start_s = _exposure_s(start_shutter_speed)
-    ramp_down = sum(start_s * (2 ** k) for k in range(stops + 1))
-    ramp_up = sum(start_s * (2 ** k) for k in range(stops - 1, -1, -1))
-    n_shots = 2 * stops + 1
-    return ramp_down + ramp_up + n_shots * HDR_SHOT_OVERHEAD_S + HDR_FIXED_OVERHEAD_S
+    offsets = hdr_offsets(stops, sequence)
+    return sum(start_s * 2 ** k for k in offsets) + len(offsets) * HDR_SHOT_OVERHEAD_S + HDR_FIXED_OVERHEAD_S
 
 
 def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROFILE,

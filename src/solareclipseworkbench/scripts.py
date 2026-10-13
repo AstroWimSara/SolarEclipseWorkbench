@@ -42,7 +42,9 @@ def convert_command(line, ref_moment, sign, time_delta, extra_comment, output_fi
         command = "take_bracket"
     elif command_parts[0] == "take_hdr":
         camera_name, exposure, aperture, iso, stops = command_parts[4:9]
-        comment = command_parts[9] if len(command_parts) > 9 else ""
+        # Optional HDR sequence before the description (which is always last)
+        hdr_sequence = command_parts[9] if len(command_parts) > 10 else ""
+        comment = command_parts[-1] if len(command_parts) > 9 else ""
         command = "take_hdr"
     elif command_parts[0] == "sync_cameras":
         comment = command_parts[4] if len(command_parts) > 4 else ""
@@ -88,7 +90,9 @@ def convert_command(line, ref_moment, sign, time_delta, extra_comment, output_fi
             f"{command}, {ref_moment}, {sign}, {time_delta}, {camera_name.strip()}, {exposure.strip()}, {aperture.strip()}, {iso.strip()}, {bracket.strip()}, \"{comment.strip()+extra_comment}\"\n")
     elif command == "take_hdr":
         output_file.write(
-            f"{command}, {ref_moment}, {sign}, {time_delta}, {camera_name.strip()}, {exposure.strip()}, {aperture.strip()}, {iso.strip()}, {stops.strip()}, \"{comment.strip()+extra_comment}\"\n")
+            f"{command}, {ref_moment}, {sign}, {time_delta}, {camera_name.strip()}, {exposure.strip()}, {aperture.strip()}, {iso.strip()}, {stops.strip()}, "
+            + (f"{hdr_sequence.strip()}, " if hdr_sequence.strip() else "")
+            + f"\"{comment.strip()+extra_comment}\"\n")
     elif command == "sync_cameras":
         output_file.write(f"{command}, {ref_moment}, {sign}, {time_delta}, \"{comment.strip()+extra_comment}\"\n")
     elif command == "voice_prompt":
