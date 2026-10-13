@@ -29,7 +29,7 @@ def model(monkeypatch):
     monkeypatch.setattr(gui, "get_sony_image_quality", lambda cam: "JPEG")
 
     model = CameraOverviewTableModel()
-    model.view = SimpleNamespace(sony_banner_label=BannerNotification(), camera_overview=None)
+    model.view = SimpleNamespace(camera_banner=BannerNotification(), camera_overview=None)
     return model
 
 
@@ -43,11 +43,11 @@ def refresh(model, user_requested):
 def test_banner_is_shown_for_a_sony_with_bad_settings(model):
     refresh(model, user_requested=True)
 
-    assert not model.view.sony_banner_label.isHidden()
+    assert not model.view.camera_banner.isHidden()
 
 
 def test_closed_banner_stays_closed_on_sync_cameras(model):
-    banner = model.view.sony_banner_label
+    banner = model.view.camera_banner
     refresh(model, user_requested=True)
     banner.close_btn.click()
 
@@ -57,7 +57,7 @@ def test_closed_banner_stays_closed_on_sync_cameras(model):
 
 
 def test_camera_button_shows_a_closed_banner_again(model):
-    banner = model.view.sony_banner_label
+    banner = model.view.camera_banner
     refresh(model, user_requested=True)
     banner.close_btn.click()
     refresh(model, user_requested=False)
@@ -70,14 +70,14 @@ def test_camera_button_shows_a_closed_banner_again(model):
 def test_sync_cameras_still_shows_a_banner_that_was_never_closed(model):
     refresh(model, user_requested=False)
 
-    assert not model.view.sony_banner_label.isHidden()
+    assert not model.view.camera_banner.isHidden()
 
 
 def test_user_request_is_not_lost_when_sync_cameras_runs_before_the_data_arrives(model, monkeypatch):
     # Keep the worker from probing real cameras; only the flag bookkeeping matters here
     monkeypatch.setattr(gui.threading, "Thread", lambda *a, **kw: SimpleNamespace(start=lambda: None))
     monkeypatch.setattr(gui.QTimer, "singleShot", lambda *a, **kw: None)
-    banner = model.view.sony_banner_label
+    banner = model.view.camera_banner
     refresh(model, user_requested=True)
     banner.close_btn.click()
 

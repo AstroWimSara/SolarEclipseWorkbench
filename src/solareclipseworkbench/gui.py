@@ -130,6 +130,22 @@ class BannerNotification(QFrame):
         self.dismissed = True
         self.hide()
 
+    def show_message(self, text: str, user_requested: bool = False):
+        """ Show the given text, unless the user already closed the banner while it showed this same text.
+
+        Args:
+            - text: Text to show.  An empty text hides the banner.
+            - user_requested: Whether the user asked to see the camera state again (`Camera(s)` button), which
+                              also brings back a closed banner.
+        """
+        if not text:
+            self.setVisible(False)
+            return
+        if user_requested or text != self.label.text():
+            self.dismissed = False
+        self.setText(text)
+        self.setVisible(not self.dismissed)
+
 
 class SolarEclipseModel:
     """ Model for the Solar Eclipse Workbench UI in the MVC pattern. """
@@ -501,9 +517,9 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.jobs_table = QJobsTableView()
 
-        # One-line Sony banner (hidden by default; shown when a Sony camera is present)
-        self.sony_banner_label = BannerNotification()
-        self.sony_banner_label.setVisible(False)
+        # Banner with camera settings to check (hidden by default; shown for Sony and Nikon cameras)
+        self.camera_banner = BannerNotification()
+        self.camera_banner.setVisible(False)
 
         self.init_ui()
 
@@ -655,7 +671,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
-        global_layout.addWidget(self.sony_banner_label)
+        global_layout.addWidget(self.camera_banner)
         global_layout.addLayout(input_hbox)
 
         global_layout.addLayout(output_hbox)
@@ -1448,12 +1464,16 @@ class SolarEclipseController(Observer):
                 self._shutdown_scheduler()
 
             try:
-                from solareclipseworkbench.utils import observe_solar_eclipse
+                from solareclipseworkbench.utils import observe_solar_eclipse, get_continuous_mode_commands
                 self.scheduler: BackgroundScheduler \
                     = observe_solar_eclipse(self.model.reference_moments, filename,
                                             self.model.camera_overview.camera_overview_dict, self,
                                             self.sim_reference_moment, self.sim_offset_minutes,
                                             gps_time_offset=self.model.gps_time_offset)
+
+                # Remind Nikon users to set the release-mode dial for the bursts / brackets in this script
+                self.model.camera_overview.set_continuous_mode_commands(
+                    get_continuous_mode_commands(self.scheduler, self.model.camera_overview.camera_overview_dict))
 
                 self.jobs_model = JobsTableModel(self.scheduler, self)
                 self.view.jobs_table.setModel(self.jobs_model)
@@ -1805,6 +1825,7 @@ class SolarEclipseController(Observer):
                 self.jobs_model.clear_jobs_overview()
                 self.view.camera_action.setEnabled(True)
                 LOGGER.info("Scheduler stopped by user")
+                self.model.camera_overview.set_continuous_mode_commands(None)
         except SchedulerNotRunningError:
             pass  # already stopped
         except Exception:
@@ -2871,6 +2892,11 @@ class CameraOverviewTableModel(QAbstractTableModel):
         # Whether the pending update was requested by the user (`Camera(s)` button).  Only then does a closed
         # Sony banner reappear.
         self._user_requested = False
+        # Banner lines about the Sony settings, kept so that the banner can be rebuilt without probing the cameras
+        self._sony_banner_lines = []
+        # Per camera name, which of take_burst / take_bracket the loaded script uses for it (None when
+        # no script has been loaded).  Nikon cameras may need their release-mode dial set to Continuous for these.
+        self.continuous_mode_commands: Union[dict, None] = None
 
         self._data = pd.DataFrame(columns=[CameraOverviewTableColumnNames.CAMERA.value,
                                            CameraOverviewTableColumnNames.BATTERY_LEVEL.value,
@@ -3159,7 +3185,6 @@ class CameraOverviewTableModel(QAbstractTableModel):
             if pm:
                 seen = set()
                 banner_lines = []
-                sony_banner_label_visibility = False
 
                 for cam in pm.values():
                     camera_vendor = getattr(cam, 'vendor', None)
@@ -3188,7 +3213,6 @@ class CameraOverviewTableModel(QAbstractTableModel):
                                     camera_log(camera_model).warning('failed to start Background Downloader')
 
                                 banner_lines.append(text)
-                                sony_banner_label_visibility = True
 
                             elif dest == "card+sdram":
                                 text = (f"{camera_model}: currently in 'PC+Camera' mode. "
@@ -3203,13 +3227,11 @@ class CameraOverviewTableModel(QAbstractTableModel):
                                     pass
 
                                 banner_lines.append(text)
-                                sony_banner_label_visibility = True
 
                             elif dest == "card":
                                 if image_quality != "RAW":
                                     text = f"{camera_model}: 'File Format' is set to '{image_quality}'. Please set it to 'RAW'!"
                                     banner_lines.append(text)
-                                    sony_banner_label_visibility = True
                                 else:
                                     # No banner needed for good RAW + Card-only config
                                     try:
@@ -3221,7 +3243,6 @@ class CameraOverviewTableModel(QAbstractTableModel):
                                 if image_quality != "RAW":
                                     text = f"{camera_model}: 'Quality' is set to '{image_quality}'. Please set it to 'RAW'!"
                                     banner_lines.append(text)
-                                    sony_banner_label_visibility = True
                                 else:
                                     try:
                                         cam.start_background_downloader()
@@ -3232,28 +3253,13 @@ class CameraOverviewTableModel(QAbstractTableModel):
                         except Exception:
                             logging.debug('Error while checking Sony save destination for a camera', exc_info=True)
 
-                # === Build final banner text ===
-                if banner_lines:
-                    full_text = "\n".join(banner_lines)
-                    full_text += "\nIf this info is wrong or you changed settings - press 'Camera(s)' again!"
-
-                    if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
-                        banner = self.view.sony_banner_label
-                        if self._user_requested:
-                            banner.dismissed = False
-                        banner.setText(full_text)
-                        banner.setVisible(sony_banner_label_visibility and not banner.dismissed)
-                        logging.info("Sony banner updated to:\n%s", full_text)
-                else:
-                    # Hide banner if no messages
-                    if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
-                        self.view.sony_banner_label.setVisible(False)
+                self._sony_banner_lines = banner_lines
             else:
-                # Hide banner if no Sony cameras connected
-                if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
-                    self.view.sony_banner_label.setVisible(False)
+                self._sony_banner_lines = []
         except Exception:
-            logging.exception("Error updating Sony banner / background downloaders")
+            logging.exception("Error checking Sony settings / background downloaders")
+
+        self.update_camera_banner(user_requested=self._user_requested)
         self._user_requested = False
 
         # Notify controller that cameras are ready (fires sync_camera_time + check_camera_state)
@@ -3265,6 +3271,64 @@ class CameraOverviewTableModel(QAbstractTableModel):
                 logging.exception('on_ready_callback raised an exception')
             finally:
                 self.on_ready_callback = None
+
+    def _nikon_banner_lines(self) -> list:
+        """ Return the banner lines that remind to set the release-mode dial of the Nikon cameras to Continuous.
+
+        On Nikon bodies with a physical release-mode dial, the app cannot change the release mode, and take_burst
+        and take_bracket need a Continuous mode (take_picture and take_hdr work in any mode).  Once a script has been
+        loaded, only the Nikon cameras for which it uses one of these commands get a line.
+
+        Returns: List with one line per Nikon camera that needs the reminder.
+        """
+        lines = []
+        seen = set()
+        for name, cam in (self.camera_overview_dict or {}).items():
+            if cam is None or getattr(cam, 'vendor', None) != "Nikon" or id(cam) in seen:
+                continue
+            seen.add(id(cam))
+            camera_model = getattr(cam, 'name', name)
+
+            if self.continuous_mode_commands is None:
+                lines.append(f"{camera_model}: if you use take_burst or take_bracket and this camera has "
+                             f"a release-mode dial, set the dial to a Continuous mode.")
+            else:
+                commands = self.continuous_mode_commands.get(name)
+                if commands:
+                    lines.append(f"{camera_model}: the script uses {', '.join(sorted(commands))}.  If this camera "
+                                 f"has a release-mode dial, set the dial to a Continuous mode.")
+        return lines
+
+    def update_camera_banner(self, user_requested: bool = False):
+        """ Show the settings to check for the connected Sony and Nikon cameras in the banner (or hide it).
+
+        Args:
+            - user_requested: Whether the user asked to see the camera state again (`Camera(s)` button), which also
+                              brings back a closed banner.
+        """
+        banner = getattr(getattr(self, 'view', None), 'camera_banner', None)
+        if banner is None:
+            return
+
+        lines = list(self._sony_banner_lines)
+        if lines:
+            lines.append("If this info is wrong or you changed settings - press 'Camera(s)' again!")
+        lines += self._nikon_banner_lines()
+
+        full_text = "\n".join(lines)
+        banner.show_message(full_text, user_requested=user_requested)
+        if full_text:
+            logging.info("Camera banner updated to:\n%s", full_text)
+
+    def set_continuous_mode_commands(self, continuous_mode_commands: Union[dict, None]):
+        """ Remember which cameras the loaded script drives with take_burst / take_bracket.
+
+        Args:
+            - continuous_mode_commands: Per camera name, the set of these commands the script uses for it.  None
+                                        when no script is loaded.
+        """
+        self.continuous_mode_commands = continuous_mode_commands
+        self.update_camera_banner()
 
     def _try_apply_pending(self):
         """Poll for pending data written by the background worker and apply it on the GUI thread."""

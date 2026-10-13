@@ -269,6 +269,34 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
     report_camera_conflicts(busy_windows)
 
 
+# Commands that need the camera in a continuous release mode (Nikon bodies may set it with a physical dial)
+CONTINUOUS_MODE_COMMANDS = ('take_burst', 'take_bracket')
+
+
+def get_continuous_mode_commands(scheduler: BackgroundScheduler, cameras: dict) -> dict:
+    """ Find out which cameras the scheduled jobs drive with take_burst or take_bracket.
+
+    Args:
+        - scheduler: Scheduler with the jobs of the loaded script
+        - cameras: Dictionary of camera names and camera objects
+
+    Returns: Dictionary with, per camera name, the set of these commands that are scheduled for that camera.
+    """
+    command_names = {COMMANDS[name]: name for name in CONTINUOUS_MODE_COMMANDS}
+    camera_names = {}
+    for name, camera in (cameras or {}).items():
+        camera_names.setdefault(id(camera), []).append(name)
+
+    result = {}
+    for job in scheduler.get_jobs():
+        command_name = command_names.get(job.func)
+        if command_name is None or not job.args:
+            continue
+        for name in camera_names.get(id(job.args[0]), []):
+            result.setdefault(name, set()).add(command_name)
+    return result
+
+
 def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cmd_str: str, cameras: dict,
                      controller: SolarEclipseController, reference_moment_for_simulation: str,
                      simulated_start: datetime,
