@@ -324,6 +324,10 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
     return unknown
 
 
+# Camera commands that take the time they were scheduled for (see camera._shutter_release)
+TIMED_CAMERA_COMMANDS = ('take_picture', 'take_burst', 'take_bracket', 'take_hdr', 'prepare_camera')
+
+
 # Commands that need the camera in a continuous release mode (Nikon bodies may set it with a physical dial)
 CONTINUOUS_MODE_COMMANDS = ('take_burst', 'take_bracket')
 
@@ -646,7 +650,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
         trigger = DateTrigger(run_date=execution_time, timezone=pytz.utc)
 
-        job = scheduler.add_job(func, trigger=trigger, args=args, name=description)
+        # Camera commands log how long after this time they released the shutter
+        kwargs = {'scheduled_at': execution_time} if func_name in TIMED_CAMERA_COMMANDS else None
+        job = scheduler.add_job(func, trigger=trigger, args=args, kwargs=kwargs, name=description)
         JOB_COMMANDS[job.id] = func_name
         JOB_REFERENCES[job.id] = ref_moment
     except KeyError as missing:

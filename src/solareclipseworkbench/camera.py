@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import locale
 import logging
@@ -756,6 +757,39 @@ def _find_canon_continuous_drivemode(widget) -> Optional[str]:
 # the camera's own cycle time and accept the resulting timing drift.
 _MAX_LOCK_WAIT_S: float = 1.5
 
+# Timing of the camera command running on this thread: when it was scheduled,
+# when it started and whether its shutter has been released yet.  Set by
+# _serialised_on_camera, used by _shutter_release.
+_command_timing = threading.local()
+
+
+@contextlib.contextmanager
+def _shutter_release(camera):
+    """Wrap the call that releases the shutter, to log when the command really shot.
+
+    The time is taken before the trigger is sent and logged after it returns, so
+    the logging never delays the shot.  Only the first release of a command is
+    logged, with how long after the command started and after its scheduled time
+    it came (discussion #192: the setup before a shot can take seconds).  Nothing
+    is logged when the trigger fails.
+    """
+    released_at = datetime.now(timezone.utc)
+    yield
+    timing = getattr(_command_timing, 'state', None)
+    if timing is None or timing['released']:
+        return
+    timing['released'] = True
+    after_start = (released_at - timing['started']).total_seconds()
+    scheduled_at = timing['scheduled_at']
+    if scheduled_at is not None:
+        camera_log(camera).info('%s released the shutter at %s UTC: %.3f s after its scheduled time '
+                                '(%.3f s after the command started)', timing['command'],
+                                released_at.strftime('%H:%M:%S.%f')[:-3],
+                                (released_at - scheduled_at).total_seconds(), after_start)
+    else:
+        camera_log(camera).info('%s released the shutter at %s UTC, %.3f s after the command started',
+                                timing['command'], released_at.strftime('%H:%M:%S.%f')[:-3], after_start)
+
 
 def _serialised_on_camera(func):
     """Decorator that serialises access to the physical camera.
@@ -769,9 +803,13 @@ def _serialised_on_camera(func):
     this shot well past its scheduled time, undermining the timing accuracy
     that eclipse photography requires.
     functools.wraps preserves __name__ so GUI table formatting still works.
+
+    The scheduler passes the time the job was scheduled for as the keyword
+    scheduled_at, which is kept for _shutter_release and not passed on.
     """
     @functools.wraps(func)
-    def wrapper(camera, *args, **kwargs):
+    def wrapper(camera, *args, scheduled_at: Optional[datetime] = None, **kwargs):
+        started = datetime.now(timezone.utc)
         acquired = camera._usb_lock.acquire(timeout=_MAX_LOCK_WAIT_S)
         if not acquired:
             camera_log(camera).warning(
@@ -780,9 +818,12 @@ def _serialised_on_camera(func):
                 func.__name__, _MAX_LOCK_WAIT_S,
             )
             return
+        _command_timing.state = {'command': func.__name__, 'scheduled_at': scheduled_at,
+                                 'started': started, 'released': False}
         try:
             return func(camera, *args, **kwargs)
         finally:
+            _command_timing.state = None
             camera._last_usb_activity = time.monotonic()
             camera._usb_lock.release()
     return wrapper
@@ -1478,7 +1519,8 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # exit+re-entry overhead (~1-2 s).  This is handled by increasing
     # misfire_grace_time in the APScheduler so queued shots are not dropped.
     try:
-        gp.check_result(gp.gp_camera_trigger_capture(target, context))
+        with _shutter_release(camera):
+            gp.check_result(gp.gp_camera_trigger_capture(target, context))
         log.debug('take_picture fired trigger_capture')
         # For all cameras except Sony set in PC only mode - wait for
         # the image capture and flush the PTP events.
@@ -1496,7 +1538,8 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     except gphoto2.GPhoto2Error as e:
         log.warning('trigger_capture failed (%s), falling back to GP_CAPTURE_IMAGE', e)
         try:
-            camera.capture(gp.GP_CAPTURE_IMAGE, context)
+            with _shutter_release(camera):
+                camera.capture(gp.GP_CAPTURE_IMAGE, context)
         except Exception:
             log.debug('GP_CAPTURE_IMAGE fallback also failed')
             raise
@@ -1747,7 +1790,8 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
             press, release = _canon_remote_release_values(remote_release)
             gp.gp_widget_set_value(remote_release, press)
-            gp.check_result(_set_gp_config(camera, config, context))
+            with _shutter_release(camera):
+                gp.check_result(_set_gp_config(camera, config, context))
         except gphoto2.GPhoto2Error as e:
             # If 'eosremoterelease' is not supported (e.g. Canon 1000D), then
             # fallback to just take as number of shots equal to `burst_number`
@@ -1800,7 +1844,8 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             log.warning('Could not set Nikon burst number: %s', e)
 
         try:
-            camera.capture(gp.GP_CAPTURE_IMAGE, context)
+            with _shutter_release(camera):
+                camera.capture(gp.GP_CAPTURE_IMAGE, context)
         except Exception:
             log.exception('high-level capture failed, trying low-level gp capture')
             try:
@@ -1837,7 +1882,8 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         try:
             bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
             gp.gp_widget_set_value(bulb_mode, 1)
-            _set_gp_config(camera, config, context)
+            with _shutter_release(camera):
+                _set_gp_config(camera, config, context)
             log.debug('Set Sony bulb mode to 1')
             time.sleep(duration)
             gp.gp_widget_set_value(bulb_mode, 0)
@@ -1927,7 +1973,8 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             try:
                 gp.gp_widget_set_value(ss_widget, speed)
                 gp.gp_camera_set_config(target, config, context)
-                gp.check_result(gp.gp_camera_trigger_capture(target, context))
+                with _shutter_release(camera):
+                    gp.check_result(gp.gp_camera_trigger_capture(target, context))
                 log.info('take_bracket triggered capture at %s', speed)
             except gphoto2.GPhoto2Error as e:
                 log.warning('take_bracket capture failed at speed %s: %s', speed, e)
@@ -1999,7 +2046,8 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                                 "shots' on the camera to %d", br_shot, spec.frames, spec.frames)
                     break
                 try:
-                    camera.capture(gp.GP_CAPTURE_IMAGE, context)
+                    with _shutter_release(camera):
+                        camera.capture(gp.GP_CAPTURE_IMAGE, context)
                 except Exception:
                     log.exception('Bracket capture high-level failed, trying low-level gp capture')
                     try:
@@ -2079,7 +2127,8 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                 "failed to set 'burstnumber' to %d due to '%s'", num_pictures, e)
 
         try:
-            camera.capture(gp.GP_CAPTURE_IMAGE, context)
+            with _shutter_release(camera):
+                camera.capture(gp.GP_CAPTURE_IMAGE, context)
         except Exception:
             log.exception('high-level capture failed, trying low-level gp capture')
             try:
@@ -2134,7 +2183,8 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         try:
             bulb_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'bulb'))
             gp.gp_widget_set_value(bulb_mode, 1)
-            _set_gp_config(camera, config, context)
+            with _shutter_release(camera):
+                _set_gp_config(camera, config, context)
             log.debug('Set Sony bulb mode to 1')
             time.sleep(bracket_duration)
             gp.gp_widget_set_value(bulb_mode, 0)
@@ -2446,7 +2496,8 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int, sequen
         try:
             gp.gp_widget_set_value(ss_widget, speed)
             gp.gp_camera_set_config(target, config, context)
-            gp.check_result(gp.gp_camera_trigger_capture(target, context))
+            with _shutter_release(camera):
+                gp.check_result(gp.gp_camera_trigger_capture(target, context))
             # Sony requires this hack. It allows avoiding
             # wrong shutter speed values being set or
             # outright skipped frames in the sequence.
