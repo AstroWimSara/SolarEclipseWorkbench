@@ -12,7 +12,7 @@ from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S
 from solareclipseworkbench.command_timing import (
     vendor_from_name, picture_duration_s, burst_duration_s, hdr_duration_s, bracket_duration_s,
-    TimingProfile, DEFAULT_PROFILE,
+    drive_mode, mode_switch_s, TimingProfile, DEFAULT_PROFILE,
 )
 from solareclipseworkbench.notifications import check_notification
 from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
@@ -38,6 +38,10 @@ class CameraBusyWindow:
     start: datetime
     duration_s: float
     description: str
+    # Drive mode of the command (see command_timing.drive_mode), and the extra time
+    # it takes when the command before it on this camera used another mode.
+    mode: Optional[str] = None
+    switch_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,8 @@ class CameraConflict:
     blocked_by: CameraBusyWindow
     wait_s: float
     dropped: bool
+    # How long blocked_by keeps the camera busy, including a change of drive mode
+    blocker_busy_s: Optional[float] = None
 
 
 def estimate_busy_s(func_name: str, script_args: list, camera=None,
@@ -74,10 +80,30 @@ def estimate_busy_s(func_name: str, script_args: list, camera=None,
             return hdr_duration_s(shutter, int(script_args[4]), parse_hdr_sequence(
                 script_args[5] if len(script_args) > 5 else None))
         if func_name == "take_bracket":
-            return bracket_duration_s(shutter, profile, script_args[4])
+            vendor = getattr(camera, "vendor", None) or vendor_from_name(script_args[0])
+            return bracket_duration_s(shutter, profile, script_args[4], vendor)
     except (IndexError, ValueError):
         pass
     return None
+
+
+def camera_busy_window(start: datetime, func_name: str, script_args: list, description: str, camera=None,
+                       profile: TimingProfile = DEFAULT_PROFILE) -> Optional[CameraBusyWindow]:
+    """The time a script command keeps its camera busy, or None for commands that are not estimated.
+
+    Args:
+        - start: Execution time of the command
+        - func_name, script_args, camera, profile: As for estimate_busy_s
+        - description: Description of the command, for the warnings
+    """
+    busy_s = estimate_busy_s(func_name, script_args, camera, profile)
+    if busy_s is None:
+        return None
+    camera_name = script_args[0].strip()
+    vendor = getattr(camera, "vendor", None) or vendor_from_name(camera_name)
+    bracket = script_args[4] if func_name == "take_bracket" else None
+    return CameraBusyWindow(camera_name, start, busy_s, description,
+                            drive_mode(func_name, bracket), mode_switch_s(vendor))
 
 
 def find_camera_conflicts(windows: List[CameraBusyWindow],
@@ -87,6 +113,8 @@ def find_camera_conflicts(windows: List[CameraBusyWindow],
     A command that would have to wait for the camera longer than max_wait_s is
     dropped when it fires (see camera._serialised_on_camera) and does not keep
     the camera busy; one that waits less starts late and pushes the rest back.
+    A command in another drive mode than the one before it takes its switch_s
+    longer.
 
     Returns: The commands that will start late or be dropped, in time order.
     """
@@ -98,16 +126,26 @@ def find_camera_conflicts(windows: List[CameraBusyWindow],
     for camera_windows in by_camera.values():
         busy_until = None
         busy_with = None
+        busy_with_s = None
+        mode = None
         for window in sorted(camera_windows, key=lambda w: w.start):
             wait_s = (busy_until - window.start).total_seconds() if busy_until is not None else 0.0
             if wait_s > max_wait_s:
-                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=True))
+                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=True,
+                                                blocker_busy_s=busy_with_s))
                 continue
             if wait_s > 0:
-                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=False))
+                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=False,
+                                                blocker_busy_s=busy_with_s))
+            duration_s = window.duration_s
+            if window.mode is not None:
+                if mode is not None and window.mode != mode:
+                    duration_s += window.switch_s
+                mode = window.mode
             actual_start = max(window.start, busy_until) if busy_until is not None else window.start
-            busy_until = actual_start + timedelta(seconds=window.duration_s)
+            busy_until = actual_start + timedelta(seconds=duration_s)
             busy_with = window
+            busy_with_s = duration_s
 
     return sorted(conflicts, key=lambda c: c.window.start)
 
@@ -126,8 +164,9 @@ def report_camera_conflicts(windows: List[CameraBusyWindow]) -> List[CameraConfl
     conflicts = find_camera_conflicts(windows)
     for conflict in conflicts:
         blocker = conflict.blocked_by
+        busy_s = conflict.blocker_busy_s if conflict.blocker_busy_s is not None else blocker.duration_s
         detail = (f'"{blocker.description}" at {_hms(blocker.start)} UTC keeps {conflict.window.camera} '
-                  f'busy for about {blocker.duration_s:.0f} s; "{conflict.window.description}" at '
+                  f'busy for about {busy_s:.0f} s; "{conflict.window.description}" at '
                   f'{_hms(conflict.window.start)} UTC would have to wait {conflict.wait_s:.1f} s')
         if conflict.dropped:
             hardware_problems.report(
@@ -606,10 +645,7 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
     if camera_obj is None:
         return None
-    busy_s = estimate_busy_s(func_name, script_args, camera_obj)
-    if busy_s is None:
-        return None
-    return CameraBusyWindow(script_args[0].strip(), execution_time, busy_s, description)
+    return camera_busy_window(execution_time, func_name, script_args, description, camera_obj)
 
 # Main
 def main():

@@ -49,6 +49,7 @@ from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     CONTACT_BUFFER_S,
     contact_burst_plan,
+    mode_switch_s,
     vendor_from_name,
     picture_duration_s,
     hdr_duration_s,
@@ -2104,20 +2105,6 @@ class SummaryPage(QWizardPage):
             return (f"# Baily's beads window ({contact}): {_relative(contact, start)} to "
                     f"{_relative(contact, end)} ({end - start:.1f}s, from the lunar limb profile)")
 
-        # The chromosphere shot before C3 has to have released the camera when
-        # the beads burst starts, which can be before C3 with the beads timed
-        chromosphere_shutter = get_shutter('chromosphere_c3', '1/250')
-        chromosphere_before_c3 = 2.0
-        if contact_bursts:
-            chromosphere_before_c3 = max(chromosphere_before_c3,
-                                         math.ceil((picture_duration_s(chromosphere_shutter, timing)
-                                                    - c3_beads_start) * 10) / 10)
-        # Seconds before C3 by which the corona sequence has finished
-        totality_end_buffer = max(10, math.ceil(chromosphere_before_c3) if wizard.field('chromosphere') else 0,
-                                  math.ceil(-c3_beads_start) if contact_bursts else 0)
-
-        hdr_sequence = HDR_ONE_WAY if wizard.field('hdr_one_way') else HDR_ROUND_TRIP
-
         # Bracket of every corona exposure ('<EV step> <frames>'), or None for single pictures
         corona_bracket = None
         if wizard.field('corona_bracket'):
@@ -2126,6 +2113,29 @@ class SummaryPage(QWizardPage):
                 parse_bracket(corona_bracket)
             except ValueError:
                 corona_bracket = None
+
+        # A camera that is slow to change drive mode (Sony) takes this much longer
+        # for the first shot after one in another mode: single picture, burst, or
+        # bracket (see command_timing.MODE_SWITCH_S).
+        switch_s = mode_switch_s(vendor)
+        corona_mode = "bracket" if corona_bracket else "single"
+        # Extra time of a single picture taken among bracketed corona shots
+        single_among_corona_s = switch_s if wizard.field('corona') and corona_bracket else 0.0
+
+        # The chromosphere shot before C3 has to have released the camera when
+        # the beads burst starts, which can be before C3 with the beads timed
+        chromosphere_shutter = get_shutter('chromosphere_c3', '1/250')
+        chromosphere_before_c3 = 2.0
+        if contact_bursts:
+            chromosphere_before_c3 = max(chromosphere_before_c3,
+                                         math.ceil((picture_duration_s(chromosphere_shutter, timing)
+                                                    + single_among_corona_s - c3_beads_start) * 10) / 10)
+        # Seconds before C3 by which the corona sequence has finished
+        totality_end_buffer = max(10, math.ceil(chromosphere_before_c3) if wizard.field('chromosphere') else 0,
+                                  math.ceil(-c3_beads_start) if contact_bursts else 0)
+
+        hdr_sequence = HDR_ONE_WAY if wizard.field('hdr_one_way') else HDR_ROUND_TRIP
+
 
         def corona_shot_s(shutter):
             """Busy time of one corona exposure: a picture, or a bracket."""
@@ -2528,6 +2538,9 @@ class SummaryPage(QWizardPage):
                 lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the diamond ring")
                 lines.append(f"# burst starts at {_relative('C2', -c2_diamond_start)} and the beads burst at "
                              f"{_relative('C2', -c2_beads_start)}.")
+                if plan.switch_s:
+                    lines.append(f"# The diamond ring burst also gets ~{plan.switch_s:.0f}s for the camera to switch "
+                                 f"from single pictures to continuous shooting.")
                 beads_shutter = get_shutter('bailys_beads_c2', '1/500')
                 diamond_shutter = get_shutter('diamond_ring_c2', '1/250')
 
@@ -2564,16 +2577,24 @@ class SummaryPage(QWizardPage):
                         # Start: Prominences and inner corona (first ~10s), once
                         # the beads burst before C2 has released the camera
                         early_time = totality_first_shot
+                        # Drive mode of the shot before (the beads burst, or the last partial)
+                        mode_before = "burst" if contact_bursts else "single"
                         if wizard.field('prominences'):
                             prominences_shutter = get_shutter('prominences', '1/125')
                             lines.append(f'# Early totality - prominences and inner corona')
                             lines.append(f'take_picture, C2, +, {_offset_str(early_time)}, {camera_name}, {prominences_shutter}, {aperture}, {preferred_iso}, "Prominences"')
-                            early_time += max(3, math.ceil(picture_duration_s(prominences_shutter, timing)))
+                            prominences_s = picture_duration_s(prominences_shutter, timing)
+                            if mode_before != "single":
+                                prominences_s += switch_s
+                            early_time += max(3, math.ceil(prominences_s))
+                            mode_before = "single"
                         else:
                             lines.append(f'# Early totality - inner corona')
                         lines.append(corona_command('C2', '+', _offset_str(early_time), corona_lower[0], corona_lower[2],
                                                     corona_lower[1], "Corona inner"))
                         early_end = early_time + corona_shot_s(corona_lower[0])
+                        if mode_before != corona_mode:
+                            early_end += switch_s
                         lines.append("")
                         
                         # Determine corona coverage based on totality duration
@@ -2607,7 +2628,7 @@ class SummaryPage(QWizardPage):
                         if earthshine is not None:
                             # Earthshine shots at C2+30s and C3-30s, each keeping the camera busy
                             # for its exposure plus the time a picture takes
-                            earthshine_busy = earthshine[3]
+                            earthshine_busy = earthshine[3] + single_among_corona_s
                             earthshine_times = [
                                 (30.0, 30.0 + earthshine_busy),  # C2+30s shot
                                 (totality_duration - 30.0, totality_duration - 30.0 + earthshine_busy)  # C3-30s shot
@@ -2627,7 +2648,7 @@ class SummaryPage(QWizardPage):
                             hdr_start = hdr_start_after_c2(hdr_duration)
                             if hdr_start is None:
                                 hdr_start = totality_duration / 2 - hdr_duration / 2  # centre on MAX
-                            hdr_times = [(hdr_start, hdr_start + hdr_duration)]
+                            hdr_times = [(hdr_start, hdr_start + hdr_duration + single_among_corona_s)]
 
                         # Merge all blocked windows and sort by start time for conflict detection
                         blocked_windows = sorted(earthshine_times + hdr_times)
@@ -2654,6 +2675,8 @@ class SummaryPage(QWizardPage):
                             corona_shot_count = 0
                             current_time = start_offset  # Track cumulative time from C2
                             pattern_index = 0
+                            # A bracket after an earthshine or HDR picture switches drive mode
+                            after_blocked_window = False
                             
                             # Keep adding shots until we run out of time
                             while current_time < totality_duration - end_buffer:
@@ -2666,6 +2689,8 @@ class SummaryPage(QWizardPage):
                                 # end time (and the next shot) follow from the written start
                                 current_time = math.ceil(current_time)
                                 shot_end_time = current_time + corona_shot_s(shutter)
+                                if after_blocked_window:
+                                    shot_end_time += single_among_corona_s
                                 
                                 # Check if this shot would exceed totality
                                 if shot_end_time > totality_duration - end_buffer:
@@ -2699,10 +2724,12 @@ class SummaryPage(QWizardPage):
                                     
                                     # Move to next available time slot (after current shot completes)
                                     current_time = shot_end_time
+                                    after_blocked_window = False
                                 else:
                                     # Skip past the conflicting window
                                     if conflict_end is not None and conflict_end < totality_duration - end_buffer:
                                         current_time = conflict_end
+                                        after_blocked_window = True
                                     else:
                                         current_time += 2.0
                                 
@@ -2828,6 +2855,9 @@ class SummaryPage(QWizardPage):
                 lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the beads burst")
                 lines.append(f"# starts at {_relative('C3', c3_beads_start)} and the diamond ring burst at "
                              f"{_relative('C3', c3_diamond_start)}.")
+                if plan.switch_s:
+                    lines.append(f"# The beads burst starts ~{plan.switch_s:.0f}s earlier, the time the camera needs "
+                                 f"to switch to continuous shooting after the totality shots.")
                 diamond_c3_shutter = get_shutter('diamond_ring_c3', '1/250')
                 beads_c3_shutter = get_shutter('bailys_beads_c3', '1/500')
 

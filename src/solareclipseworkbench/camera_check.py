@@ -549,7 +549,7 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
 def check_timing(commands: List[ScriptCommand], reference_moments: dict, camera, report: TestReport,
                  profile: TimingProfile = DEFAULT_PROFILE, measured: bool = False) -> None:
     """Check that no command has to wait so long for the camera that it is skipped."""
-    from solareclipseworkbench.utils import CameraBusyWindow, estimate_busy_s, find_camera_conflicts
+    from solareclipseworkbench.utils import camera_busy_window, find_camera_conflicts
 
     windows = []
     last_time = None
@@ -564,9 +564,9 @@ def check_timing(commands: List[ScriptCommand], reference_moments: dict, camera,
             continue
         start = base + delta if cmd.sign == "+" else base - delta
         last_time = start
-        busy = estimate_busy_s(cmd.func, cmd.args, camera, profile)
-        if busy is not None:
-            windows.append(CameraBusyWindow(cmd.camera, start, busy, f'"{cmd.description}" at {cmd.when}'))
+        window = camera_busy_window(start, cmd.func, cmd.args, f'"{cmd.description}" at {cmd.when}', camera, profile)
+        if window is not None:
+            windows.append(window)
 
     basis = "the measured durations" if measured else "estimated durations"
     conflicts = find_camera_conflicts(windows)

@@ -52,6 +52,40 @@ def _set_gp_config(camera, config, context):
     return gp.gp_camera_set_config(target, config, context)
 
 
+def _set_widget_if_changed(widget, value, same=None) -> bool:
+    """Queue a new value on a widget only when the camera reports a different one.
+
+    Returns True when the value was queued, so the caller knows a set_config is
+    needed.  Each set_config is a USB round-trip, and around C2 and C3 every
+    round-trip delays the shot, so settings that are already right are not sent
+    again.  When the current value cannot be read, the value is queued anyway,
+    as before.
+
+    Args:
+        - widget: gphoto2 config widget
+        - value: The value the widget should have
+        - same: Optional function (current, value) -> bool that decides whether the
+                current value already matches, e.g. for 'f/8' versus '8'.
+    """
+    try:
+        current = gp.check_result(gp.gp_widget_get_value(widget))
+        unchanged = same(current, value) if same is not None else str(current) == str(value)
+    except Exception:
+        unchanged = False
+    if unchanged:
+        return False
+    gp.gp_widget_set_value(widget, value)
+    return True
+
+
+def _same_aperture(current, requested) -> bool:
+    """Whether two aperture values are the same f-number, e.g. 'f/8' and '8'."""
+    def _strip_f(v) -> str:
+        v = str(v)
+        return _normalise_aperture(v[2:] if v.startswith('f/') else v)
+    return _strip_f(current) == _strip_f(requested)
+
+
 def _normalise_aperture(value: str) -> str:
     """Normalise an aperture string to the format gphoto2 camera drivers expect.
 
@@ -1397,16 +1431,18 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # continuous/burst mode.
     # For Sony cameras, ensure single-frame capture mode is active before taking
     # a single picture (separate set_config call so a bad capturemode value can
-    # never poison the ISO/shutter batch).
+    # never poison the ISO/shutter batch).  The config read by
+    # __adapt_camera_settings still holds the camera's capture mode (only the
+    # widgets that changed are sent), so it is not read a second time, and
+    # nothing is sent when the camera is already in single-frame mode.
     if vendor in ('Nikon', 'Sony'):
         try:
-            cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
-            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(cfg2, 'capturemode'))
+            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
             single_choice = _find_capturemode_choice(capture_mode_widget, want_continuous=False)
             if single_choice is not None:
-                gp.gp_widget_set_value(capture_mode_widget, single_choice)
-                _set_gp_config(camera, cfg2, context)
-                log.debug('ensured capturemode="%s" before take_picture', single_choice)
+                if _set_widget_if_changed(capture_mode_widget, single_choice):
+                    _set_gp_config(camera, config, context)
+                    log.debug('ensured capturemode="%s" before take_picture', single_choice)
             else:
                 log.warning('no "single" choice found for capture mode, leaving as-is')
         except gphoto2.GPhoto2Error as exc:
@@ -1478,6 +1514,9 @@ def __adapt_camera_settings(camera, camera_settings):
 
     vendor = getattr(camera, 'vendor', None)
     log = camera_log(camera)
+    # Only values that differ from what the camera reports are queued, and the
+    # set_config round-trip is skipped when nothing differs (see _set_widget_if_changed).
+    changed = False
 
     # --- Step 1: mutate exposure mode in memory (no separate set_config) ---
     # The mode widget is included in the ISO+shutter batch below so that all
@@ -1485,14 +1524,14 @@ def __adapt_camera_settings(camera, camera_settings):
     if vendor == 'Nikon':
         try:
             exp_program = gp.check_result(gp.gp_widget_get_child_by_name(config, 'expprogram'))
-            gp.gp_widget_set_value(exp_program, "1")  # 1 = Manual
+            changed |= _set_widget_if_changed(exp_program, "1")  # 1 = Manual
             log.debug('Queued Nikon expprogram=Manual for next set_config')
         except gphoto2.GPhoto2Error as e:
             log.warning('Could not queue Nikon expprogram: %s', e)
     elif vendor == 'Canon':
         try:
             ae_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoexposuremodedial'))
-            gp.gp_widget_set_value(ae_mode, "Manual")
+            changed |= _set_widget_if_changed(ae_mode, "Manual")
             log.debug('Queued Canon autoexposuremodedial=Manual for next set_config')
         except gphoto2.GPhoto2Error as e:
             log.debug('Could not queue Canon autoexposuremodedial: %s', e)
@@ -1500,7 +1539,7 @@ def __adapt_camera_settings(camera, camera_settings):
         # exactly one shot even if the camera was left in continuous/burst mode.
         try:
             drive_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
-            gp.gp_widget_set_value(drive_w, 'Single')
+            changed |= _set_widget_if_changed(drive_w, 'Single')
             log.debug('Queued Canon drivemode=Single for next set_config')
         except gphoto2.GPhoto2Error:
             pass  # Not available on all bodies — safe to skip
@@ -1522,13 +1561,13 @@ def __adapt_camera_settings(camera, camera_settings):
     # together with the ISO widget so it costs no extra round-trip.
     if vendor == 'Nikon':
         try:
-            gp.gp_widget_set_value(
+            changed |= _set_widget_if_changed(
                 gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "Off")
         except gphoto2.GPhoto2Error as e:
             log.debug('Could not disable auto ISO: %s', e)
 
     try:
-        gp.gp_widget_set_value(
+        changed |= _set_widget_if_changed(
             gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso')), str(camera_settings.iso))
     except gphoto2.GPhoto2Error as e:
         log.warning('Could not set ISO to %s: %s', camera_settings.iso, e)
@@ -1537,13 +1576,13 @@ def __adapt_camera_settings(camera, camera_settings):
         ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
         closest = _find_closest_shutter_choice(ss_widget, camera_settings.shutter_speed)
         if closest is not None:
-            gp.gp_widget_set_value(ss_widget, closest)
+            changed |= _set_widget_if_changed(ss_widget, closest)
             log.info('Using closest shutter speed choice: %s', closest)
         else:
             ss2_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
             closest = _find_closest_shutter_choice(ss2_widget, camera_settings.shutter_speed)
             if closest is not None:
-                gp.gp_widget_set_value(ss2_widget, closest)
+                changed |= _set_widget_if_changed(ss2_widget, closest)
                 log.info('Using closest shutter speed choice: %s', closest)
             else:
                 log.warning('No suitable shutter speed choice found for %s',
@@ -1559,13 +1598,17 @@ def __adapt_camera_settings(camera, camera_settings):
         if not _is_sony_camera_instance(camera):
             capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
             card_value = _find_memory_card_choice(capture_target_w)
-            gp.gp_widget_set_value(capture_target_w, card_value)
+            changed |= _set_widget_if_changed(capture_target_w, card_value)
             log.debug('Asserted capturetarget="%s" before capture', card_value)
     except gphoto2.GPhoto2Error:
         pass  # Widget absent on some cameras — the init-time setting is sufficient
 
-    # Push ISO + shutter speed (+ capturetarget) together — one USB round-trip.
-    _set_gp_config(target, config, context)
+    # Push ISO + shutter speed (+ capturetarget) together — one USB round-trip,
+    # or none when the camera is already set up this way.
+    if changed:
+        _set_gp_config(target, config, context)
+    else:
+        log.debug('Exposure settings unchanged, no set_config needed')
 
     # --- Step 3: aperture in an isolated round-trip ---
     # Kept separate so that a failure here (e.g. telescope / fixed-aperture lens)
@@ -1576,8 +1619,8 @@ def __adapt_camera_settings(camera, camera_settings):
 
         if vendor == 'Canon':
             ap_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture'))
-            gp.gp_widget_set_value(ap_widget, ap_key)
-            _set_gp_config(camera, config, context)
+            if _set_widget_if_changed(ap_widget, ap_key, same=_same_aperture):
+                _set_gp_config(camera, config, context)
         elif vendor in ('Nikon', 'Sony'):
             try:
                 f_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number'))
@@ -1591,9 +1634,9 @@ def __adapt_camera_settings(camera, camera_settings):
                         sample = ''
                     if isinstance(sample, str) and sample.startswith('f/') and not ap_key.startswith('f/'):
                         ap_key = f'f/{ap_key}'
-                    gp.gp_widget_set_value(f_widget, ap_key)
-                    _set_gp_config(target, config, context)
-                    log.debug('Set aperture to %s', camera_settings.aperture)
+                    if _set_widget_if_changed(f_widget, ap_key, same=_same_aperture):
+                        _set_gp_config(target, config, context)
+                        log.debug('Set aperture to %s', camera_settings.aperture)
             except gphoto2.GPhoto2Error:
                 # f-number widget absent or not settable — ignore
                 raise
@@ -1783,9 +1826,9 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
             continuous_choice = _find_capturemode_choice(capture_mode, want_continuous=True, custom_keyword=configuration.SONY_CONTINUOUS_MODE)
             if continuous_choice is not None:
-                gp.gp_widget_set_value(capture_mode, continuous_choice)
-                _set_gp_config(camera, config, context)
-                log.info('set capturemode to "%s" for burst', continuous_choice)
+                if _set_widget_if_changed(capture_mode, continuous_choice):
+                    _set_gp_config(camera, config, context)
+                    log.info('set capturemode to "%s" for burst', continuous_choice)
             else:
                 log.debug('Sony capturemode: no "continuous" choice found, firing without mode change')
         except gphoto2.GPhoto2Error as e:
@@ -2080,9 +2123,11 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             simulated_bracketing()
             return
         try:
-            gp.gp_widget_set_value(capture_mode, mode)
-            _set_gp_config(camera, config, context)
-            log.info('set capturemode to "%s" for bracketing', mode)
+            if _set_widget_if_changed(capture_mode, mode):
+                _set_gp_config(camera, config, context)
+                log.info('set capturemode to "%s" for bracketing', mode)
+            else:
+                log.info('capturemode already "%s" for bracketing', mode)
         except gphoto2.GPhoto2Error as e:
             log.warning('Could not set Sony capturemode to "%s": %s', mode, e)
 
@@ -2265,16 +2310,18 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int, sequen
     # continuous/burst mode.
     # For Sony cameras, ensure single-frame capture mode is active before taking
     # a single picture (separate set_config call so a bad capturemode value can
-    # never poison the ISO/shutter batch).
+    # never poison the ISO/shutter batch).  The config read by
+    # __adapt_camera_settings still holds the camera's capture mode (only the
+    # widgets that changed are sent), so it is not read a second time, and
+    # nothing is sent when the camera is already in single-frame mode.
     if vendor in ('Nikon', 'Sony'):
         try:
-            cfg2 = gp.check_result(gp.gp_camera_get_config(target, context))
-            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(cfg2, 'capturemode'))
+            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
             single_choice = _find_capturemode_choice(capture_mode_widget, want_continuous=False)
             if single_choice is not None:
-                gp.gp_widget_set_value(capture_mode_widget, single_choice)
-                _set_gp_config(camera, cfg2, context)
-                log.debug('ensured capturemode="%s" before take_picture', single_choice)
+                if _set_widget_if_changed(capture_mode_widget, single_choice):
+                    _set_gp_config(camera, config, context)
+                    log.debug('ensured capturemode="%s" before take_picture', single_choice)
             else:
                 log.warning('no "single" choice found for capture mode, leaving as-is')
         except gphoto2.GPhoto2Error as exc:

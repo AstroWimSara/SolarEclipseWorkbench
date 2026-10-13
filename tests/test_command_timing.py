@@ -1,5 +1,6 @@
 """Tests for camera-busy estimates, load-time conflict detection and the C2/C3 burst spacing."""
 
+import math
 from datetime import datetime, timedelta
 
 import pytest
@@ -10,6 +11,7 @@ from solareclipseworkbench.command_timing import (
     burst_duration_s,
     burst_shooting_s,
     contact_burst_plan,
+    mode_switch_s,
     picture_duration_s,
 )
 from solareclipseworkbench.utils import (
@@ -22,8 +24,8 @@ C2 = datetime(2026, 8, 12, 18, 29, 37, tzinfo=pytz.utc)
 C3 = C2 + timedelta(seconds=98)
 
 
-def _window(camera, offset_s, duration_s, description, ref=C2):
-    return CameraBusyWindow(camera, ref + timedelta(seconds=offset_s), duration_s, description)
+def _window(camera, offset_s, duration_s, description, ref=C2, mode=None, switch_s=0.0):
+    return CameraBusyWindow(camera, ref + timedelta(seconds=offset_s), duration_s, description, mode, switch_s)
 
 
 def _canon_burst(camera, offset_s, description, ref=C2):
@@ -97,24 +99,33 @@ def test_estimate_uses_camera_vendor_over_name():
 
 @pytest.mark.parametrize("vendor", ["Canon", "Nikon", "Sony", None])
 def test_wizard_contact_plan_has_no_conflicts(vendor):
-    """Everything the wizard writes around C2 and C3 fits without dropping or delaying a command."""
+    """Everything the wizard writes around C2 and C3 fits without dropping or delaying a command,
+    including the time a Sony needs to change drive mode."""
     plan = contact_burst_plan(vendor)
     burst = plan.burst_s
     cam = "camera"
+    switch_s = mode_switch_s(vendor)
     last_partial = picture_duration_s("1/30")
     prominences = picture_duration_s("1/800")
+    chromosphere = picture_duration_s("1/1600")
+    # As in the wizard: the chromosphere shot has released the camera when the C3 beads burst starts
+    chromosphere_before_c3 = max(2.0, math.ceil((chromosphere - plan.c3_beads_start) * 10) / 10)
+
+    def window(offset_s, duration_s, description, mode, ref=C2):
+        return _window(cam, offset_s, duration_s, description, ref, mode, switch_s)
+
     windows = [
         # Latest possible partial before C2 (offsets are written in whole seconds,
         # rounded towards C2, so the partial is at least c2_buffer before C2).
-        _window(cam, -plan.c2_buffer, last_partial, "last partial"),
-        _window(cam, -plan.c2_diamond_start, burst, "C2 diamond ring"),
-        _window(cam, -plan.c2_beads_start, burst, "Pre-C2 beads"),
-        _window(cam, plan.totality_first_shot, prominences, "Prominences"),
+        window(-plan.c2_buffer, last_partial, "last partial", "single"),
+        window(-plan.c2_diamond_start, burst, "C2 diamond ring", "burst"),
+        window(-plan.c2_beads_start, burst, "Pre-C2 beads", "burst"),
+        window(plan.totality_first_shot, prominences, "Prominences", "single"),
         # Chromosphere before C3, then the C3 bursts and the first partial after C3.
-        _window(cam, -2, picture_duration_s("1/1600"), "Chromosphere", C3),
-        _window(cam, plan.c3_beads_start, burst, "Post-C3 beads", C3),
-        _window(cam, plan.c3_diamond_start, burst, "C3 diamond ring", C3),
-        _window(cam, plan.c3_buffer, last_partial, "first partial", C3),
+        window(-chromosphere_before_c3, chromosphere, "Chromosphere", "single", C3),
+        window(plan.c3_beads_start, burst, "Post-C3 beads", "burst", C3),
+        window(plan.c3_diamond_start, burst, "C3 diamond ring", "burst", C3),
+        window(plan.c3_buffer, last_partial, "first partial", "single", C3),
     ]
     late = [(c.window.description, round(c.wait_s, 3)) for c in find_camera_conflicts(windows)
             if c.wait_s > 0.01]
@@ -126,10 +137,12 @@ def test_wizard_contact_plan_follows_the_phenomena(vendor):
     """Before C2: diamond ring, then beads.  After C3: beads, then diamond ring."""
     plan = contact_burst_plan(vendor)
     assert plan.c2_diamond_start > plan.c2_beads_start > 0
-    assert 0 < plan.c3_beads_start < plan.c3_diamond_start
+    assert plan.c3_beads_start < plan.c3_diamond_start
     # Beads are photographed in the last seconds before C2 / first seconds after C3.
+    # The C3 beads burst starts earlier by the time the camera needs to change drive
+    # mode, so its shooting still starts after C3.
     assert plan.c2_beads_start <= 5
-    assert plan.c3_beads_start <= 2
+    assert 0 < plan.c3_beads_start + plan.switch_s <= 2
 
 
 def test_sony_burst_is_given_in_seconds():
@@ -152,8 +165,10 @@ def test_the_beads_bursts_are_centred_on_the_bead_windows(vendor):
     shooting = burst_shooting_s(vendor, plan.burst_param)
 
     assert plan.beads_timed
-    for start, window in ((-plan.c2_beads_start, beads_c2), (plan.c3_beads_start, beads_c3)):
-        shooting_centre = start + BURST_LEAD_S + shooting / 2
+    # The C3 beads burst is the first burst after the totality shots: it also changes drive mode
+    for start, switch_s, window in ((-plan.c2_beads_start, 0.0, beads_c2),
+                                    (plan.c3_beads_start, plan.switch_s, beads_c3)):
+        shooting_centre = start + BURST_LEAD_S + switch_s + shooting / 2
         assert shooting_centre == pytest.approx(sum(window) / 2, abs=0.05)
 
 

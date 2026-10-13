@@ -17,7 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
 
 from solareclipseworkbench import hardware_problems, limb_correction
-from solareclipseworkbench.command_timing import BURST_LEAD_S, burst_shooting_s, vendor_from_name
+from solareclipseworkbench.command_timing import BURST_LEAD_S, burst_shooting_s, mode_switch_s, vendor_from_name
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.utils import schedule_commands
 from solareclipseworkbench.wizard import SummaryPage
@@ -37,7 +37,7 @@ def moments():
     return result
 
 
-def _script(camera_name):
+def _script(camera_name, **extra_fields):
     fields = {
         'eclipse_name': '2026 Spain', 'eclipse_date': 'August 12, 2026', 'eclipse_type': 'Total',
         'location': 'Spain', 'latitude': str(LAT), 'longitude': str(LON), 'altitude': str(ALT),
@@ -47,6 +47,7 @@ def _script(camera_name):
         'diamond': True, 'bailys': True, 'corona': True, 'chromosphere': True, 'prominences': True,
         'sync_enabled': False, 'voice_enabled': False,
     }
+    fields.update(extra_fields)
     wizard = MagicMock()
     wizard.field.side_effect = fields.get
     page = SummaryPage()
@@ -75,17 +76,31 @@ def test_the_beads_bursts_are_centred_on_the_bead_windows(moments, camera_name):
         at, reference, fields = _command(script, f"{contact} beads")
         assert reference == contact
         shooting = burst_shooting_s(vendor, float(fields[-2]))
-        shooting_centre = moments[contact].time_utc + timedelta(seconds=at + BURST_LEAD_S + shooting / 2)
+        # The C3 beads burst follows the totality shots, so the camera first changes drive mode
+        lead = BURST_LEAD_S + (mode_switch_s(vendor) if contact == "C3" else 0.0)
+        shooting_centre = moments[contact].time_utc + timedelta(seconds=at + lead + shooting / 2)
         window_centre = moments[f"BEADS_{contact}"].time_utc
         assert abs((shooting_centre - window_centre).total_seconds()) <= 0.1, script
         assert f"# Baily's beads window ({contact}): " in script
 
 
+# Bracketed corona with earthshine and HDR pictures in between: on a Sony every
+# change between a bracket and a single picture costs extra time.
+ALL_TOTALITY_SHOTS = {
+    'corona_bracket': True, 'bracket_step': '1', 'bracket_frames': 5,
+    'earthshine': True, 'hdr_burst': True, 'hdr_stops': 4, 'hdr_start_auto': True, 'hdr_iso_auto': True,
+}
+
+
 @needs_limb_profile
+@pytest.mark.parametrize("extra_fields", [{}, ALL_TOTALITY_SHOTS], ids=["default", "bracketed"])
 @pytest.mark.parametrize("camera_name", ["Canon EOS R5", "Nikon Z8", "Sony ILCE-7RM3A"])
-def test_a_generated_script_loads_without_warnings(moments, camera_name, tmp_path):
+def test_a_generated_script_loads_without_warnings(moments, camera_name, extra_fields, tmp_path):
     path = tmp_path / "script.txt"
-    path.write_text(_script(camera_name))
+    script = _script(camera_name, **extra_fields)
+    if extra_fields:
+        assert "take_bracket" in script and "Earthshine" in script and "take_hdr" in script
+    path.write_text(script)
 
     # Move the eclipse into the future, so the scheduler keeps every job
     shift = datetime.now(timezone.utc) + timedelta(hours=3) - moments["C2"].time_utc

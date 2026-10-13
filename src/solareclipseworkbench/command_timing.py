@@ -44,6 +44,21 @@ BURST_OVERHEAD_S = 6.0
 # body and the drive mode set on its dial; this is a middle-of-the-road guess.
 NIKON_BURST_FPS = 10.0
 
+# A Sony bracket is a continuous bracketing mode with the shutter held for the
+# exposures of all frames; the configuration writes, bulb on/off and emptying
+# the events add this much.  Calibrated on the 2026-08-12 eclipse (discussion
+# #192): back-to-back "Bracketing C 3.0 Steps 5 Pictures" at 1/30 on a Sony
+# A7R IIIA (2.4 s of exposures) kept the camera busy for about 7 s each.
+SONY_BRACKET_OVERHEAD_S = 4.5
+
+# Extra time taken by the first command after the camera changes drive mode
+# (single picture, continuous burst, a bracketing mode).  Sony changes its
+# capture mode slowly and steps the shutter speed one notch at a time.  On the
+# 2026-08-12 eclipse, the first bracket after the partial-phase pictures took
+# about 4 s longer than the ones after it, and the next bracket was dropped
+# (discussion #192).  Other brands have not shown a measurable delay.
+MODE_SWITCH_S = {"Sony": 4.0}
+
 
 @dataclass(frozen=True)
 class TimingProfile:
@@ -66,6 +81,27 @@ def vendor_from_name(camera_name: str) -> Optional[str]:
     for vendor in ("Canon", "Nikon", "Sony"):
         if vendor.lower() in name:
             return vendor
+    return None
+
+
+def mode_switch_s(vendor: Optional[str]) -> float:
+    """Extra busy time of the first command after a change of drive mode (see MODE_SWITCH_S)."""
+    return MODE_SWITCH_S.get(vendor, 0.0)
+
+
+def drive_mode(func_name: str, bracket: Optional[str] = None) -> Optional[str]:
+    """The drive mode a camera command puts the camera in, or None for non-camera commands.
+
+    Two commands with a different drive mode make the camera switch modes in
+    between (see MODE_SWITCH_S).  Each bracket is its own mode, as a Sony has a
+    separate capture mode per EV step and number of frames.
+    """
+    if func_name in ("take_picture", "take_hdr"):
+        return "single"
+    if func_name == "take_burst":
+        return "burst"
+    if func_name == "take_bracket":
+        return "bracket " + (bracket or "").strip().strip('"')
     return None
 
 
@@ -106,12 +142,13 @@ def hdr_duration_s(start_shutter_speed: str, stops: int, sequence: str = HDR_ROU
 
 
 def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROFILE,
-                       bracket: Optional[str] = None) -> float:
+                       bracket: Optional[str] = None, vendor: Optional[str] = None) -> float:
     """Lower bound for a take_bracket: the exposures of all frames plus one picture overhead.
 
     Canon and the software bracket pay the overhead per frame, Nikon and Sony
     shoot the frames as one burst; counting it once can miss a conflict but
-    never invents one.  Without a readable bracket, a single frame is counted.
+    never invents one.  A Sony bracket has a measured overhead of its own
+    (SONY_BRACKET_OVERHEAD_S).  Without a readable bracket, a single frame is counted.
     """
     try:
         spec = parse_bracket(bracket) if bracket is not None else None
@@ -119,7 +156,8 @@ def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROF
         spec = None
     if spec is None:
         return picture_duration_s(shutter_speed, profile)
-    return sum(bracket_exposures(_exposure_s(shutter_speed), spec)) + profile.picture_overhead_s
+    overhead = SONY_BRACKET_OVERHEAD_S if vendor == "Sony" else profile.picture_overhead_s
+    return sum(bracket_exposures(_exposure_s(shutter_speed), spec)) + overhead
 
 
 def bracket_planning_s(shutter_speed: str, bracket: str, profile: TimingProfile = DEFAULT_PROFILE) -> float:
@@ -169,6 +207,7 @@ class ContactBurstPlan:
     c3_buffer: int               # partial shots start at least this long after C3
     totality_first_shot: int     # seconds after C2 of the first totality shot
     beads_timed: bool = False    # whether the beads bursts are aimed at the Baily's beads windows
+    switch_s: float = 0.0        # extra time of the first command after a change of drive mode
 
 
 def beads_burst_start(window: Tuple[float, float], shooting_s: float) -> float:
@@ -198,22 +237,30 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
         - beads_c2, beads_c3: Baily's beads window around C2 and C3 (BEADS_C2_START/_END, ...), in
                               seconds relative to the contact.  The beads bursts are centred on them;
                               without both, the bursts start at C2-4 s and C3+1 s.
+
+    The C2 diamond ring burst follows the partial-phase pictures and the C3 beads
+    burst follows the totality shots, so on a camera that is slow to change drive
+    mode (see MODE_SWITCH_S) both take longer.  The C3 beads burst then starts
+    that much earlier, so it still shoots the beads.
     """
     # Nikon: number of frames.  Canon and Sony: seconds the shutter is held.
     burst_param = 30 if vendor == "Nikon" else 2
     burst_s = burst_duration_s(vendor, burst_param, profile)
     burst_whole_s = math.ceil(burst_s)
+    switch_s = mode_switch_s(vendor) if bursts_enabled else 0.0
+    # A whole number of seconds from the start of the first burst after a mode change to the next burst
+    first_burst_whole_s = math.ceil(burst_s + switch_s)
 
     beads_timed = beads_c2 is not None and beads_c3 is not None
     if beads_timed:
         shooting_s = burst_shooting_s(vendor, burst_param, profile)
         c2_beads_start = -beads_burst_start(beads_c2, shooting_s)
-        c3_beads_start = beads_burst_start(beads_c3, shooting_s)
+        c3_beads_start = round(beads_burst_start(beads_c3, shooting_s) - switch_s, 1)
     else:
         c2_beads_start = C2_BEADS_START_S
-        c3_beads_start = C3_BEADS_START_S
-    c2_diamond_start = round(c2_beads_start + burst_whole_s, 1)
-    c3_diamond_start = round(c3_beads_start + burst_whole_s, 1)
+        c3_beads_start = round(C3_BEADS_START_S - switch_s, 1)
+    c2_diamond_start = round(c2_beads_start + first_burst_whole_s, 1)
+    c3_diamond_start = round(c3_beads_start + first_burst_whole_s, 1)
 
     if bursts_enabled:
         # Room for the last partial shot (at most 1/30 s) to finish before the
@@ -230,4 +277,4 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
 
     return ContactBurstPlan(burst_param, burst_s, c2_diamond_start, c2_beads_start, c3_beads_start,
                             c3_diamond_start, c2_buffer, c3_buffer, totality_first_shot,
-                            beads_timed and bursts_enabled)
+                            beads_timed and bursts_enabled, switch_s)
