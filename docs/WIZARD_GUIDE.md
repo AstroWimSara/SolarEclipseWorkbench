@@ -104,6 +104,19 @@ Configure your camera specifications:
 
 **Save Camera Button**: Click to save your current camera configuration (name, lens specs, filter) for future wizard sessions. Saved cameras appear in the Camera Selection dropdown.
 
+#### Test Camera
+Connect the camera via USB with the lens (or telescope) you will use, close Solar Eclipse Workbench if it is running, and click **Test Camera...**.  Best do this before generating the script: the script is then fitted to this camera.
+
+- **Check Settings** only reads from the camera: the shutter speeds, ISO values and apertures it offers with the mounted lens, whether it can shoot continuous bursts over USB, and its state (mode dial, focus, battery, card space, auto power off, clock).
+- **Full Test** also sets the camera clock and checks the result, and takes a test picture and a test burst (saved on the memory card) to measure how long the camera needs for them.
+
+The result is saved with the camera configuration (save the camera to keep it), so the test is only needed once per camera and lens; repeat it when you change the lens.  When the script is generated for a tested camera:
+
+- every exposure is fitted to the settings the camera really offers, keeping the brightness the same.  For example, 1/8000 s on a camera that stops at 1/4000 s becomes 1/4000 s at a lower ISO or with the lens stopped down one stop, within the ISO and aperture range set on this page.  An aperture the lens does not have is replaced by the nearest one.  When no allowed setting gives the planned exposure, the shot is marked "camera limit" in its description, with the number of stops it will be over- or underexposed;
+- the diamond ring, Baily's beads, contact, earthshine and HDR shots are spaced by the measured durations instead of the estimates.
+
+Without a test, the script uses standard shutter speeds and estimated durations, as before.
+
 #### Lens/Telescope Configuration
 Specify your optical equipment specifications:
 - **Focal Length**: Set the focal length in millimeters (10-5000mm range, default 400mm)
@@ -218,6 +231,11 @@ Displays the generated script content before saving.
 
 #### Save Location
 Choose where to save your generated script file. Default location is your home directory with an auto-generated filename.
+
+#### Verify with Camera
+A final check of the generated script with the camera connected (**Verify with Camera...**).  It checks that the camera name in the script matches the connected camera (otherwise SEW skips every command for it), that every ISO, shutter speed and aperture of the script is available, the camera state, and whether the commands follow each other slowly enough for this camera.  The full test also sets and verifies the clock and times a test picture and a test burst.  The result is shown as a list with a check mark, note, warning or cross per item, and is also written to the log file.
+
+The summary at the top of this page already shows whether the script was fitted to a tested camera, and the result of the timing check of the generated script.
 
 ## Generated Script Format
 

@@ -123,6 +123,23 @@ class ConfigManager:
                 return camera
         return None
 
+    def set_camera_profile(self, name: str, profile: Optional[Dict]) -> bool:
+        """Store the camera test result (camera_check.CameraProfile.to_dict()) with a saved camera.
+
+        Returns: False when no camera with this name has been saved.
+        """
+        camera = self.get_camera(name)
+        if camera is None:
+            return False
+        camera["profile"] = profile
+        self.save_config()
+        return True
+
+    def get_camera_profile(self, name: str) -> Optional[Dict]:
+        """Return the stored camera test result of a saved camera, or None."""
+        camera = self.get_camera(name)
+        return camera.get("profile") if camera else None
+
     def set_last_used_camera(self, name: str) -> None:
         """Record the most-recently used camera name."""
         self.config["last_used"]["camera"] = name

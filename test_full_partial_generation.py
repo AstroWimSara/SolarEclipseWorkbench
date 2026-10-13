@@ -14,8 +14,8 @@ from solareclipseworkbench.wizard import SummaryPage
 def test_full_partial_generation():
     """Test that generates all partial phase shots and includes sync_cameras."""
     
-    # Create QApplication (required for Qt widgets)
-    app = QApplication(sys.argv)
+    # Create QApplication (required for Qt widgets); reuse one if another test already made it
+    app = QApplication.instance() or QApplication(sys.argv)
     
     # Create a mock wizard with all necessary fields
     mock_wizard = MagicMock()
@@ -77,7 +77,8 @@ def test_full_partial_generation():
     lines = script.split('\n')
     take_picture_c1_c2 = [l for l in lines if 'take_picture' in l and 'Partial C1-C2' in l]
     take_picture_c3_c4 = [l for l in lines if 'take_picture' in l and 'Partial C3-C4' in l]
-    sync_cameras_c1_c2 = [l for l in lines if 'sync_cameras, C1, +' in l]
+    # Total eclipses anchor C1-C2 syncs to C2 (counting back), partial eclipses to C1
+    sync_cameras_c1_c2 = [l for l in lines if 'sync_cameras, C2, -' in l or 'sync_cameras, C1, +' in l]
     sync_cameras_c3_c4 = [l for l in lines if 'sync_cameras, C3, +' in l]
     voice_prompts = [l for l in lines if 'voice_prompt,' in l]
     

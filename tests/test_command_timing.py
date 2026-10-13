@@ -1,4 +1,4 @@
-"""Tests for camera-busy estimates and load-time conflict detection."""
+"""Tests for camera-busy estimates, load-time conflict detection and the C2/C3 burst spacing."""
 
 from datetime import datetime, timedelta
 
@@ -7,6 +7,7 @@ import pytz
 
 from solareclipseworkbench.command_timing import (
     burst_duration_s,
+    contact_burst_plan,
     picture_duration_s,
 )
 from solareclipseworkbench.utils import (
@@ -90,3 +91,51 @@ def test_estimate_uses_camera_vendor_over_name():
     canon = estimate_busy_s("take_burst", ["Canon EOS R", "1/1000", "8", "100", "2"])
     assert canon == pytest.approx(burst_duration_s("Canon", 2))
     assert estimate_busy_s("voice_prompt", ["C2"]) is None
+
+
+@pytest.mark.parametrize("vendor", ["Canon", "Nikon", "Sony", None])
+def test_wizard_contact_plan_has_no_conflicts(vendor):
+    """Everything the wizard writes around C2 and C3 fits without dropping or delaying a command."""
+    plan = contact_burst_plan(vendor)
+    burst = plan.burst_s
+    cam = "camera"
+    last_partial = picture_duration_s("1/30")
+    prominences = picture_duration_s("1/800")
+    windows = [
+        # Latest possible partial before C2 (offsets are written in whole seconds,
+        # rounded towards C2, so the partial is at least c2_buffer before C2).
+        _window(cam, -plan.c2_buffer, last_partial, "last partial"),
+        _window(cam, -plan.c2_diamond_start, burst, "C2 diamond ring"),
+        _window(cam, -plan.c2_beads_start, burst, "Pre-C2 beads"),
+        _window(cam, plan.totality_first_shot, prominences, "Prominences"),
+        # Chromosphere before C3, then the C3 bursts and the first partial after C3.
+        _window(cam, -2, picture_duration_s("1/1600"), "Chromosphere", C3),
+        _window(cam, plan.c3_beads_start, burst, "Post-C3 beads", C3),
+        _window(cam, plan.c3_diamond_start, burst, "C3 diamond ring", C3),
+        _window(cam, plan.c3_buffer, last_partial, "first partial", C3),
+    ]
+    late = [(c.window.description, round(c.wait_s, 3)) for c in find_camera_conflicts(windows)
+            if c.wait_s > 0.01]
+    assert late == []
+
+
+@pytest.mark.parametrize("vendor", ["Canon", "Nikon", "Sony", None])
+def test_wizard_contact_plan_follows_the_phenomena(vendor):
+    """Before C2: diamond ring, then beads.  After C3: beads, then diamond ring."""
+    plan = contact_burst_plan(vendor)
+    assert plan.c2_diamond_start > plan.c2_beads_start > 0
+    assert 0 < plan.c3_beads_start < plan.c3_diamond_start
+    # Beads are photographed in the last seconds before C2 / first seconds after C3.
+    assert plan.c2_beads_start <= 5
+    assert plan.c3_beads_start <= 2
+
+
+def test_sony_burst_is_given_in_seconds():
+    """Sony's take_burst holds the shutter for N seconds: 30 would shoot through early totality."""
+    assert contact_burst_plan("Sony").burst_param == 2
+    assert contact_burst_plan("Nikon").burst_param == 30
+
+
+def test_without_bursts_neighbouring_shots_keep_their_usual_distance():
+    plan = contact_burst_plan("Canon", bursts_enabled=False)
+    assert (plan.c2_buffer, plan.c3_buffer, plan.totality_first_shot) == (10, 10, 3)

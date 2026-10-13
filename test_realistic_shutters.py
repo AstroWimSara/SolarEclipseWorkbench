@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
+from PyQt6.QtWidgets import QApplication
+
 from solareclipseworkbench.wizard import SummaryPage
 from solareclipseworkbench.exposure_calculator import round_to_camera_shutter_speed
 
@@ -41,6 +43,9 @@ def test_realistic_shutter_speeds():
 
 def test_no_overlapping_commands():
     """Test that commands don't overlap in time."""
+    
+    # Create QApplication (required for Qt widgets); reuse one if another test already made it
+    app = QApplication.instance() or QApplication(sys.argv)
     
     # Create a mock wizard
     mock_wizard = MagicMock()
@@ -160,9 +165,6 @@ def test_no_overlapping_commands():
 
 
 if __name__ == '__main__':
-    from PyQt6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    
     test_realistic_shutter_speeds()
     test_no_overlapping_commands()
     

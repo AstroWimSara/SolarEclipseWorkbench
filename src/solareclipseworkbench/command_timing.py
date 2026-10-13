@@ -20,6 +20,7 @@ started at C2-8s was still busy at C2-0.5s and the C2 diamond ring burst
 queued behind it was dropped.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -112,3 +113,70 @@ def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROF
     single frame is counted: this can miss a conflict but never invents one.
     """
     return picture_duration_s(shutter_speed, profile)
+
+
+# Partial-phase shots stay at least this far from C1, C2, C3 and C4.
+CONTACT_BUFFER_S = 10
+
+# The beads burst before C2 starts this many seconds before C2: shooting begins
+# about a second later, so it covers the last ~3 s before C2.
+C2_BEADS_START_S = 4
+# The beads burst after C3 starts this many seconds after C3.
+C3_BEADS_START_S = 1
+
+
+@dataclass(frozen=True)
+class ContactBurstPlan:
+    """When the diamond ring and Baily's beads bursts around C2 and C3 start.
+
+    The bursts follow the order of the phenomena: before C2 the diamond ring is
+    followed by the beads, after C3 the beads are followed by the diamond ring.
+    Everything is in whole seconds, as the wizard writes it.
+    """
+
+    burst_param: float           # script parameter: frames for Nikon, seconds for Canon/Sony
+    burst_s: float               # estimated time a burst keeps the camera busy
+    c2_diamond_start: int        # seconds before C2
+    c2_beads_start: int          # seconds before C2
+    c3_beads_start: int          # seconds after C3
+    c3_diamond_start: int        # seconds after C3
+    c2_buffer: int               # partial shots end at least this long before C2
+    c3_buffer: int               # partial shots start at least this long after C3
+    totality_first_shot: int     # seconds after C2 of the first totality shot
+
+
+def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
+                       profile: TimingProfile = DEFAULT_PROFILE) -> ContactBurstPlan:
+    """Space the C2/C3 bursts, and the shots next to them, by the estimated burst duration.
+
+    Args:
+        - vendor: 'Canon', 'Nikon', 'Sony' or None
+        - bursts_enabled: False when the script has no diamond ring/beads bursts; the
+                          neighbouring shots then keep their usual distance from C2/C3.
+        - profile: Overheads to plan with (defaults, or measured on the camera)
+    """
+    # Nikon: number of frames.  Canon and Sony: seconds the shutter is held.
+    burst_param = 30 if vendor == "Nikon" else 2
+    burst_s = burst_duration_s(vendor, burst_param, profile)
+    burst_whole_s = math.ceil(burst_s)
+
+    c2_beads_start = C2_BEADS_START_S
+    c2_diamond_start = c2_beads_start + burst_whole_s
+    c3_beads_start = C3_BEADS_START_S
+    c3_diamond_start = c3_beads_start + burst_whole_s
+
+    if bursts_enabled:
+        # Room for the last partial shot (at most 1/30 s) to finish before the
+        # diamond ring burst starts, and for the C3 diamond ring burst to finish
+        # before the first partial shot after C3.
+        c2_buffer = max(CONTACT_BUFFER_S, c2_diamond_start + math.ceil(picture_duration_s("1/30", profile)))
+        c3_buffer = max(CONTACT_BUFFER_S, c3_diamond_start + burst_whole_s)
+        # Totality starts with the camera still busy with the beads burst.
+        totality_first_shot = max(3, math.ceil(burst_s - c2_beads_start))
+    else:
+        c2_buffer = CONTACT_BUFFER_S
+        c3_buffer = CONTACT_BUFFER_S
+        totality_first_shot = 3
+
+    return ContactBurstPlan(burst_param, burst_s, c2_diamond_start, c2_beads_start, c3_beads_start,
+                            c3_diamond_start, c2_buffer, c3_buffer, totality_first_shot)

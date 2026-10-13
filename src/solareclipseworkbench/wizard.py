@@ -8,6 +8,7 @@ import math
 import json
 import time
 import requests
+import logging
 import threading
 import queue
 from importlib.metadata import version, PackageNotFoundError
@@ -40,6 +41,15 @@ from solareclipseworkbench.exposure_calculator import (
 )
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only
+from solareclipseworkbench.camera_check import ExposureLimits, adapt_script_lines
+from solareclipseworkbench.command_timing import (
+    DEFAULT_PROFILE,
+    CONTACT_BUFFER_S,
+    contact_burst_plan,
+    vendor_from_name,
+    picture_duration_s,
+    hdr_duration_s,
+)
 from datetime import timedelta
 
 
@@ -52,6 +62,119 @@ PAGE_SUMMARY = 4
 
 
 # ConfigManager, GeocodingWorker, and LocationWidget are imported from location_ui.
+
+
+
+def camera_profile_for(wizard, config_manager, camera_name):
+    """The camera test result for camera_name: from this session, else the saved one, else None."""
+    from solareclipseworkbench.camera_check import CameraProfile
+    profiles = getattr(wizard, 'camera_profiles', None) or {}
+    if camera_name in profiles:
+        return profiles[camera_name]
+    if config_manager is not None:
+        return CameraProfile.from_dict(config_manager.get_camera_profile(camera_name))
+    return None
+
+
+def store_camera_profile(wizard, config_manager, camera_name, profile):
+    """Keep a camera test result for this session, and with the saved camera if there is one."""
+    if wizard is not None:
+        if getattr(wizard, 'camera_profiles', None) is None:
+            wizard.camera_profiles = {}
+        wizard.camera_profiles[camera_name] = profile
+    if config_manager is not None:
+        config_manager.set_camera_profile(camera_name, profile.to_dict())
+
+
+def run_with_progress(parent, title, text, func):
+    """Run func in a background thread behind a modal progress dialog; return its result or raise."""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+    dialog_layout = QVBoxLayout(dialog)
+    bar = QProgressBar()
+    bar.setRange(0, 0)
+    dialog_layout.addWidget(bar)
+    dialog_layout.addWidget(QLabel(text))
+
+    result = {}
+
+    def worker():
+        try:
+            result['value'] = func()
+        except Exception as e:
+            logging.exception("%s failed", title)
+            result['error'] = e
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    timer = QTimer(dialog)
+    timer.timeout.connect(lambda: dialog.accept() if not thread.is_alive() else None)
+    timer.start(100)
+    dialog.exec()
+    thread.join()
+    if 'error' in result:
+        raise result['error']
+    return result.get('value')
+
+
+def show_test_report(parent, title, report, footer=None):
+    """Show a camera test report (camera_check.TestReport) as a list with a mark per item."""
+    from html import escape
+    symbols = {
+        'ok': ('&#10004;', '#2e7d32'),
+        'info': ('&#8505;', '#1565c0'),
+        'warning': ('&#9888;', '#ef6c00'),
+        'error': ('&#10006;', '#c62828'),
+    }
+    headline = {
+        'ok': "Everything is in order.",
+        'info': "Everything is in order; see the notes below.",
+        'warning': "Check the warnings below.",
+        'error': "Problems found: fix the items marked with a cross before the eclipse.",
+    }[report.worst]
+    rows = []
+    for item in report.items:
+        symbol, colour = symbols.get(item.status, ('&#8226;', '#000000'))
+        detail = f"<br><span style='font-size:small'>{escape(item.detail)}</span>" if item.detail else ""
+        rows.append(f"<tr><td style='color:{colour}; font-size:large; padding-right:8px' valign='top'>"
+                    f"{symbol}</td><td><b>{escape(item.title)}</b>{detail}</td></tr>")
+    if footer:
+        rows.append(f"<tr><td></td><td><i>{escape(footer)}</i></td></tr>")
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.resize(640, 560)
+    dialog_layout = QVBoxLayout(dialog)
+    browser = QTextEdit()
+    browser.setReadOnly(True)
+    browser.setHtml(f"<p><b>{escape(headline)}</b></p><table cellspacing='4'>{''.join(rows)}</table>")
+    dialog_layout.addWidget(browser)
+    close_button = QPushButton("Close")
+    close_button.clicked.connect(dialog.accept)
+    dialog_layout.addWidget(close_button)
+    dialog.exec()
+
+
+def ask_test_level(parent, title, text, full_text):
+    """Ask whether to only read the settings or run the full test.  Returns None (cancel), False or True."""
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(text)
+    box.setInformativeText(
+        "Check Settings: reads the camera settings.  Nothing is changed on the camera.\n\n"
+        "Full Test: " + full_text + "  The test pictures are saved on the memory card.")
+    settings_button = box.addButton("Check Settings", QMessageBox.ButtonRole.AcceptRole)
+    full_button = box.addButton("Full Test", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(full_button)
+    box.exec()
+    if box.clickedButton() is full_button:
+        return True
+    if box.clickedButton() is settings_button:
+        return False
+    return None
 
 
 class IntroPage(QWizardPage):
@@ -366,6 +489,23 @@ class EquipmentPage(QWizardPage):
         detect_id_layout.addWidget(self.camera_id_label, 1)
         camera_details_layout.addLayout(detect_id_layout)
 
+        # Camera test: what the camera offers and how fast it is, used to fit the script
+        test_layout = QHBoxLayout()
+        self.test_camera_btn = QPushButton("Test Camera...")
+        self.test_camera_btn.setToolTip(
+            "Connect the camera (with the lens you will use) via USB and click this button.\n\n"
+            "The wizard reads the shutter speeds, ISO values and apertures the camera offers and, in the "
+            "full test, measures how long a picture and a burst take and checks that the camera clock can "
+            "be set.  The generated script is then fitted to this camera.  The result is saved with the "
+            "camera configuration, so this is only needed once per camera and lens."
+        )
+        self.test_camera_btn.clicked.connect(self._test_camera)
+        test_layout.addWidget(self.test_camera_btn)
+        self.camera_test_label = QLabel("")
+        self.camera_test_label.setWordWrap(True)
+        test_layout.addWidget(self.camera_test_label, 1)
+        camera_details_layout.addLayout(test_layout)
+
         camera_details_group.setLayout(camera_details_layout)
         layout.addWidget(camera_details_group)
         
@@ -580,8 +720,9 @@ class EquipmentPage(QWizardPage):
                 self.camera_name_edit.setReadOnly(True)
                 self.camera_name_edit.setStyleSheet("QLineEdit:read-only { background-color: #f0f0f0; }")
         
-        # Refresh camera-ID status label
+        # Refresh camera-ID and camera test status labels
         self._refresh_camera_id_label(self.camera_name_edit.text().strip())
+        self._refresh_camera_test_label(self.camera_name_edit.text().strip())
         # Emit signal to re-validate page completeness
         self.completeChanged.emit()
     
@@ -609,6 +750,11 @@ class EquipmentPage(QWizardPage):
             self.camera_select_combo.addItem(camera_name)
             self.camera_select_combo.setCurrentText(camera_name)
         
+        # Keep a camera test result that was obtained before the camera was saved
+        profile = camera_profile_for(self.wizard(), self.config_manager, camera_name)
+        if profile is not None:
+            self.config_manager.set_camera_profile(camera_name, profile.to_dict())
+
         # Set as last used
         self.config_manager.set_last_used_camera(camera_name)
         
@@ -644,6 +790,99 @@ class EquipmentPage(QWizardPage):
     def _on_camera_name_changed(self, text: str):
         """Update the camera-ID status label whenever the camera name changes."""
         self._refresh_camera_id_label(text.strip())
+        self._refresh_camera_test_label(text.strip())
+
+    def _refresh_camera_test_label(self, camera_name: str):
+        """Show whether the camera has been tested, and what the test found."""
+        profile = camera_profile_for(self.wizard(), self.config_manager, camera_name) if camera_name else None
+        if profile is None:
+            self.camera_test_label.setText(
+                "Not tested: the script will use standard shutter speeds and estimated timing.  "
+                "Connect the camera and click 'Test Camera...' to fit the script to it.")
+            self.camera_test_label.setStyleSheet("QLabel { color: #888; font-size: 9pt; font-style: italic; }")
+        else:
+            self.camera_test_label.setText(f"Tested ✓ on {profile.summary()}")
+            self.camera_test_label.setStyleSheet("QLabel { color: #4a8; font-size: 9pt; }")
+
+    def _test_camera(self):
+        """Test the connected camera and keep the result for generating the script."""
+        from solareclipseworkbench.camera_check import WARNING, check_camera
+
+        try:
+            from solareclipseworkbench.camera import get_cameras, get_camera_by_port
+            detected = get_cameras()
+        except Exception as exc:
+            QMessageBox.critical(self, "Detection Failed", f"Could not detect cameras via gphoto2:\n{exc}")
+            return
+        if not detected:
+            QMessageBox.information(self, "No Camera Found",
+                                    "No camera was detected.  Connect the camera via USB, switch it on and try "
+                                    "again.  Close Solar Eclipse Workbench if it is running.")
+            return
+        if len(detected) > 1:
+            model_list = "\n".join(f"  • {m} ({p})" for m, p in detected)
+            QMessageBox.warning(self, "Multiple Cameras Connected",
+                                f"More than one camera was detected:\n{model_list}\n\n"
+                                "Disconnect all cameras except the one to test, then try again.")
+            return
+        model_name, port = detected[0]
+        camera_name = self.camera_name_edit.text().strip() or model_name
+
+        full = ask_test_level(
+            self, "Test Camera",
+            f"Test the connected {model_name} for '{camera_name}'?  Mount the lens you will use: "
+            "the available apertures depend on it.",
+            "also sets the camera clock and checks the result, and takes one test picture and one test "
+            "burst to measure how long the camera needs for them.")
+        if full is None:
+            return
+
+        def run():
+            cam = get_camera_by_port(model_name, port)
+            try:
+                return check_camera(cam, full=full)
+            finally:
+                try:
+                    cam.disconnect()
+                except Exception:
+                    pass
+
+        self.test_camera_btn.setEnabled(False)
+        try:
+            report, profile = run_with_progress(
+                self, "Testing Camera",
+                "Running the full test (test picture and burst)..." if full else "Reading the camera settings...",
+                run)
+        except Exception as e:
+            QMessageBox.critical(self, "Camera Test Failed",
+                                 f"The camera could not be tested:\n{e}\n\nCheck that it is switched on and that "
+                                 "no other program (such as Solar Eclipse Workbench) is using it.")
+            return
+        finally:
+            self.test_camera_btn.setEnabled(True)
+
+        # Compare the limits entered on this page with what the camera and lens offer.
+        if profile.apertures:
+            low, high = profile.apertures[0], profile.apertures[-1]
+            if self.aperture_min_spin.value() < low - 0.05 or self.aperture_max_spin.value() > high + 0.05:
+                report.add(WARNING, "The aperture range on this page is outside the lens range",
+                           f"This page says f/{self.aperture_min_spin.value():g}–f/{self.aperture_max_spin.value():g}, "
+                           f"the lens offers f/{low:g}–f/{high:g}.  The script uses the nearest available aperture.")
+        if profile.isos:
+            iso_min, iso_max = int(self.iso_min_combo.currentText()), int(self.iso_max_combo.currentText())
+            if iso_min < min(profile.isos) or iso_max > max(profile.isos):
+                report.add(WARNING, "The ISO range on this page is outside the camera range",
+                           f"This page says ISO {iso_min}–{iso_max}, the camera offers ISO "
+                           f"{min(profile.isos)}–{max(profile.isos)}.")
+
+        if not self.camera_name_edit.text().strip():
+            self.camera_name_edit.setText(camera_name)
+        store_camera_profile(self.wizard(), self.config_manager, camera_name, profile)
+        self._refresh_camera_test_label(camera_name)
+        footer = ("The script will be fitted to this camera.  Save the camera to keep this result."
+                  if self.config_manager.get_camera(camera_name) is None
+                  else "The script will be fitted to this camera; the result is saved with the camera.")
+        show_test_report(self, f"Camera Test: {camera_name}", report, footer)
 
     def _refresh_camera_id_label(self, camera_name: str):
         """Show whether *camera_name* already has a serial number mapped to it."""
@@ -1176,6 +1415,17 @@ class SummaryPage(QWizardPage):
         self.browse_button.clicked.connect(self._browse_save_location)
         save_layout.addWidget(self.browse_button)
         layout.addLayout(save_layout)
+
+        # Camera test
+        test_layout = QHBoxLayout()
+        self.test_camera_button = QPushButton("Verify with Camera...")
+        self.test_camera_button.setToolTip(
+            "Connect the camera of this script and check that it can run the script: settings, "
+            "camera state, clock and timing")
+        self.test_camera_button.clicked.connect(self._test_with_camera)
+        test_layout.addWidget(self.test_camera_button)
+        test_layout.addStretch()
+        layout.addLayout(test_layout)
         
         self.setLayout(layout)
         
@@ -1239,6 +1489,7 @@ class SummaryPage(QWizardPage):
         # Generate script preview
         script = self._generate_script()
         self.script_preview.setPlainText(script)
+        self.summary_text.append(self._script_check_text(script))
         
         # Set default save path
         if not self.save_path_edit.text():
@@ -1256,6 +1507,91 @@ class SummaryPage(QWizardPage):
         )
         if filename:
             self.save_path_edit.setText(filename)
+
+    def _script_check_text(self, script):
+        """Summary lines on the camera fitting and the timing of the generated script."""
+        from solareclipseworkbench.camera_check import ERROR, TestReport, check_timing, load_commands
+        lines = []
+        profile = getattr(self, '_camera_profile', None)
+        adaptation = getattr(self, '_adaptation', None)
+        if profile is None:
+            lines.append("Camera test: not tested (use 'Test Camera...' on the Equipment page to fit the script)")
+        else:
+            lines.append(f"Camera test: {profile.summary()}")
+            if adaptation is not None:
+                text = f"Fitted to the camera: {adaptation.changed} commands adjusted"
+                if adaptation.off_limit:
+                    text += f", {len(adaptation.off_limit)} cannot be exposed as planned (camera limit)"
+                lines.append(text)
+        timings = getattr(self, '_last_timings', None)
+        if timings:
+            try:
+                report = TestReport()
+                camera_name = self.wizard().field('camera_name')
+                commands = [c for c in load_commands(script, timings) if c.camera == camera_name]
+                check_timing(commands, timings, None, report,
+                             profile.timing_profile() if profile else DEFAULT_PROFILE, measured=bool(
+                                 profile and profile.full_test))
+                worst = next((i for i in report.items if i.status == ERROR), None) or report.items[-1]
+                lines.append(f"Timing check: {worst.title}")
+            except Exception as e:
+                logging.warning("Timing check of the generated script failed: %s", e)
+        return "\n".join(lines)
+
+    def _test_with_camera(self):
+        """Check the generated script against the connected camera and show a report."""
+        wizard = self.wizard()
+        if not wizard:
+            return
+        camera_name = wizard.field('camera_name')
+        script = self.script_preview.toPlainText()
+        timings = getattr(self, '_last_timings', None)
+        if not timings:
+            QMessageBox.warning(
+                self, "Camera Test",
+                "The contact times for this location could not be calculated, so the script cannot be tested.")
+            return
+
+        full = ask_test_level(
+            self, "Verify with Camera",
+            f"Connect '{camera_name}' with USB and switch it on.  Close Solar Eclipse Workbench "
+            "if it is running: only one program can use the camera.",
+            "also sets the camera clock and checks the result, and takes one test picture and one test burst "
+            "with the settings of the script to measure how long they take.")
+        if full is None:
+            return
+
+        def run():
+            from solareclipseworkbench.camera import get_camera_dict
+            from solareclipseworkbench.camera_check import check_script_with_cameras
+            config_manager = getattr(wizard, 'config_manager', None) or ConfigManager()
+            cameras = get_camera_dict(alias_map=config_manager.get_camera_aliases() or None)
+            try:
+                return check_script_with_cameras(script, timings, cameras, camera_name, full=full)
+            finally:
+                for cam in {id(c): c for c in cameras.values()}.values():
+                    try:
+                        cam.disconnect()
+                    except Exception:
+                        pass
+
+        self.test_camera_button.setEnabled(False)
+        try:
+            report = run_with_progress(self, "Testing Camera",
+                                             "Running the full test (test picture and burst)..." if full
+                                             else "Reading the camera settings...", run)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Camera Test Failed",
+                f"The camera could not be tested:\n{e}\n\n"
+                "Check that the camera is connected and switched on, and that no other program "
+                "(such as Solar Eclipse Workbench) is using it.")
+            return
+        finally:
+            self.test_camera_button.setEnabled(True)
+        show_test_report(self, f"Camera Test: {camera_name}", report,
+                         None if full else "The clock and the timing with this camera were not tested: "
+                                           "run the full test for that.")
 
     def _calculate_reference_moments_with_progress(self, longitude, latitude, altitude, eclipse_time):
         """Run calculate_reference_moments in a background thread and show a modal dialog
@@ -1351,6 +1687,7 @@ class SummaryPage(QWizardPage):
         if not wizard:
             return "# Error: Could not access wizard"
         lines = []
+        timings = None
         
         # Header
         lines.append(f"# Solar Eclipse Photography Script")
@@ -1554,7 +1891,54 @@ class SummaryPage(QWizardPage):
             final_shutter = format_shutter_speed(exposure_seconds)
             
             return (final_shutter, adjusted_iso, adjusted_aperture)
-        
+
+        # Timing of the diamond ring and Baily's beads bursts around C2 and C3,
+        # and of the partial and totality shots next to them.  A burst keeps the
+        # camera busy far longer than the shutter is held, and a command that
+        # has to wait more than 1.5 s for the camera is dropped, so everything
+        # is spaced by the estimated burst duration (see command_timing).
+        contact_bursts = bool(wizard.field('diamond') or wizard.field('bailys'))
+        # A tested camera brings its own shutter speeds, ISO values, apertures
+        # and measured durations; otherwise standard values and estimates are used.
+        camera_profile = camera_profile_for(wizard, getattr(wizard, 'config_manager', None), camera_name)
+        timing = camera_profile.timing_profile() if camera_profile else DEFAULT_PROFILE
+        vendor = (camera_profile.vendor if camera_profile else None) or vendor_from_name(camera_name)
+        plan = contact_burst_plan(vendor, contact_bursts, timing)
+        contact_burst_param = plan.burst_param
+        contact_burst_s = plan.burst_s
+        c2_diamond_start, c2_beads_start = plan.c2_diamond_start, plan.c2_beads_start
+        c3_beads_start, c3_diamond_start = plan.c3_beads_start, plan.c3_diamond_start
+        c2_buffer, c3_buffer = plan.c2_buffer, plan.c3_buffer
+        totality_first_shot = plan.totality_first_shot
+        buffer_seconds = CONTACT_BUFFER_S
+
+        def _offset_str(seconds):
+            seconds = int(seconds)
+            return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}.0"
+
+        def earthshine_plan():
+            """(shutter, iso, aperture, busy seconds) of the earthshine shots at C2+30 s and C3-30 s,
+            or None when they are not taken (not selected, or totality too short for them)."""
+            if not wizard.field('earthshine') or not timings or 'C2' not in timings or 'C3' not in timings:
+                return None
+            es_shutter, es_iso, es_aperture = get_adjusted_exposure(
+                'earthshine', '7', preferred_iso, aperture, max_iso=iso_max, min_aperture=aperture)
+            duration = (timings['C3'].time_utc - timings['C2'].time_utc).total_seconds()
+            if duration < 60 + 2 * parse_shutter_speed(es_shutter) + 20:
+                return None
+            return es_shutter, es_iso, es_aperture, picture_duration_s(es_shutter, timing)
+
+        def hdr_start_after_c2(hdr_duration):
+            """Start of take_hdr in whole seconds after C2: centred on MAX, but not before the first
+            earthshine shot is done.  None when the contact times are unknown."""
+            if not timings or 'C2' not in timings or 'MAX' not in timings:
+                return None
+            start = (timings['MAX'].time_utc - timings['C2'].time_utc).total_seconds() - hdr_duration / 2
+            earthshine = earthshine_plan()
+            if earthshine is not None:
+                start = max(start, 30 + earthshine[3])
+            return math.ceil(start)
+
         # C1 and C4 contacts
         if wizard.field('c1_c4'):
             # Check if sun is above horizon at C1
@@ -1571,9 +1955,11 @@ class SummaryPage(QWizardPage):
                     if c1_sun_alt >= 0:
                         lines.append("# First contact (C1) - with solar filter")
                         c1_shutter = get_shutter('partial_c1', '1/800')
-                        lines.append(f'take_picture, C1, -, 0:00:02.0, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1-2s)"')
+                        # Spaced by the time a picture takes on this camera (2 s by default)
+                        step = max(2, math.ceil(picture_duration_s(c1_shutter, timing)))
+                        lines.append(f'take_picture, C1, -, {_offset_str(step)}, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1-{step}s)"')
                         lines.append(f'take_picture, C1, +, 0:00:00.0, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1)"')
-                        lines.append(f'take_picture, C1, +, 0:00:02.0, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1+2s)"')
+                        lines.append(f'take_picture, C1, +, {_offset_str(step)}, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1+{step}s)"')
                         lines.append("")
                     else:
                         lines.append(f"# First contact (C1) skipped - sun below horizon (altitude: {c1_sun_alt:.1f}°)")
@@ -1610,10 +1996,10 @@ class SummaryPage(QWizardPage):
                     
                     # Calculate interval in seconds for C1-C2 phase
                     # Add buffer times to avoid conflicts with contact pictures
-                    buffer_seconds = 10  # Buffer after C1 and before C2
-                    c1_c2_duration = (c2_time - c1_time).total_seconds() - 2 * buffer_seconds
+                    # (c2_buffer leaves room for the bursts before C2)
+                    c1_c2_duration = (c2_time - c1_time).total_seconds() - buffer_seconds - c2_buffer
                     c1_start_time = c1_time + timedelta(seconds=buffer_seconds)
-                    c2_end_time = c2_time - timedelta(seconds=buffer_seconds)
+                    c2_end_time = c2_time - timedelta(seconds=c2_buffer)
                     
                     if wizard.field('partial_magnitude'):
                         # For magnitude-based, we'll use time intervals
@@ -1705,8 +2091,9 @@ class SummaryPage(QWizardPage):
                     lines.append("# REMEMBER TO REPLACE SOLAR FILTER after C3!")
                     lines.append("#")
                     
-                    c3_c4_duration = (c4_time - c3_time).total_seconds() - 2 * buffer_seconds
-                    c3_start_time = c3_time + timedelta(seconds=buffer_seconds)
+                    # c3_buffer leaves room for the bursts after C3
+                    c3_c4_duration = (c4_time - c3_time).total_seconds() - c3_buffer - buffer_seconds
+                    c3_start_time = c3_time + timedelta(seconds=c3_buffer)
                     c4_end_time = c4_time - timedelta(seconds=buffer_seconds)
                     
                     if wizard.field('partial_magnitude'):
@@ -1894,18 +2281,13 @@ class SummaryPage(QWizardPage):
         if has_totality:
             if wizard.field('diamond') or wizard.field('bailys'):
                 lines.append("# Diamond ring and Baily's beads (C2) - REMOVE SOLAR FILTER!")
+                lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the diamond ring")
+                lines.append(f"# burst starts at C2-{c2_diamond_start}s and the beads burst at C2-{c2_beads_start}s.")
                 beads_shutter = get_shutter('bailys_beads_c2', '1/500')
                 diamond_shutter = get_shutter('diamond_ring_c2', '1/250')
-                
-                # Determine burst parameter based on camera brand:
-                # Sony and Nikon use number of frames; Canon uses duration in seconds.
-                is_nikon_or_sony = 'nikon' in camera_name.lower() or 'sony' in camera_name.lower()
-                beads_burst_param = 30 if is_nikon_or_sony else 2  # Nikon/Sony: 30 pictures, Canon: 2 seconds
-                diamond_burst_param = 30 if is_nikon_or_sony else 2
-                
-                # Start beads burst 1s earlier, diamond ring 1s later to avoid overlap (each burst ~2s + 3s gap)
-                lines.append(f'take_burst, C2, -, 0:00:08.0, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {beads_burst_param}, "Pre-C2 beads"')
-                lines.append(f'take_burst, C2, -, 0:00:02.0, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {diamond_burst_param}, "C2 diamond ring"')
+
+                lines.append(f'take_burst, C2, -, {_offset_str(c2_diamond_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 diamond ring"')
+                lines.append(f'take_burst, C2, -, {_offset_str(c2_beads_start)}, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "Pre-C2 beads"')
                 lines.append("")
             
             # Totality/Annularity - Corona
@@ -1934,15 +2316,18 @@ class SummaryPage(QWizardPage):
                         corona_outer_4r = get_adjusted_exposure('corona_outer_4R', '4', preferred_iso, aperture, max_iso=iso_max, min_aperture=aperture)
                         corona_outer_8r = get_adjusted_exposure('corona_outer_8R', '68', preferred_iso, aperture, max_iso=iso_max, min_aperture=aperture)
                         
-                        # Start: Prominences and inner corona (first 10s)
+                        # Start: Prominences and inner corona (first ~10s), once
+                        # the beads burst before C2 has released the camera
+                        early_time = totality_first_shot
                         if wizard.field('prominences'):
                             prominences_shutter = get_shutter('prominences', '1/125')
                             lines.append(f'# Early totality - prominences and inner corona')
-                            lines.append(f'take_picture, C2, +, 0:00:03.0, {camera_name}, {prominences_shutter}, {aperture}, {preferred_iso}, "Prominences"')
-                            lines.append(f'take_picture, C2, +, 0:00:06.0, {camera_name}, {corona_lower[0]}, {corona_lower[2]}, {corona_lower[1]}, "Corona inner"')
+                            lines.append(f'take_picture, C2, +, {_offset_str(early_time)}, {camera_name}, {prominences_shutter}, {aperture}, {preferred_iso}, "Prominences"')
+                            early_time += max(3, math.ceil(picture_duration_s(prominences_shutter, timing)))
                         else:
                             lines.append(f'# Early totality - inner corona')
-                            lines.append(f'take_picture, C2, +, 0:00:03.0, {camera_name}, {corona_lower[0]}, {corona_lower[2]}, {corona_lower[1]}, "Corona inner"')
+                        lines.append(f'take_picture, C2, +, {_offset_str(early_time)}, {camera_name}, {corona_lower[0]}, {corona_lower[2]}, {corona_lower[1]}, "Corona inner"')
+                        early_end = early_time + picture_duration_s(corona_lower[0], timing)
                         lines.append("")
                         
                         # Determine corona coverage based on totality duration
@@ -1970,14 +2355,14 @@ class SummaryPage(QWizardPage):
                         
                         # Calculate earthshine shot times if earthshine is enabled
                         earthshine_times = []
-                        if wizard.field('earthshine'):
-                            earthshine_shutter, earthshine_iso, earthshine_aperture = get_adjusted_exposure('earthshine', '7', preferred_iso, aperture, max_iso=iso_max, min_aperture=aperture)
-                            earthshine_exposure = parse_shutter_speed(earthshine_shutter)
-                            # Earthshine shots at C2+30s and C3-30s
-                            # Each occupies: start_time to start_time + exposure + 2s buffer
+                        earthshine = earthshine_plan()
+                        if earthshine is not None:
+                            # Earthshine shots at C2+30s and C3-30s, each keeping the camera busy
+                            # for its exposure plus the time a picture takes
+                            earthshine_busy = earthshine[3]
                             earthshine_times = [
-                                (30.0, 30.0 + earthshine_exposure + 2.0),  # C2+30s shot
-                                (totality_duration - 30.0, totality_duration - 30.0 + earthshine_exposure + 2.0)  # C3-30s shot
+                                (30.0, 30.0 + earthshine_busy),  # C2+30s shot
+                                (totality_duration - 30.0, totality_duration - 30.0 + earthshine_busy)  # C3-30s shot
                             ]
 
                         # Calculate HDR burst exclusion window if HDR is enabled (fired at MAX-10s)
@@ -1988,21 +2373,20 @@ class SummaryPage(QWizardPage):
                                 hdr_excl_speed_str = corona_lower[0]
                             else:
                                 hdr_excl_speed_str = wizard.field('hdr_start_speed')
-                            hdr_start_speed_s = parse_shutter_speed(hdr_excl_speed_str)
-                            # Sum actual shutter-open times: ramp down (start→slowest) then up
-                            ramp_down = sum(hdr_start_speed_s * (2 ** k) for k in range(hdr_stops_val + 1))
-                            ramp_up = sum(hdr_start_speed_s * (2 ** k) for k in range(hdr_stops_val - 1, -1, -1))
-                            n_shots = 2 * hdr_stops_val + 1
-                            # Per-shot USB overhead ~1.5 s (set_config + trigger + wait_capture_complete)
-                            hdr_duration = ramp_down + ramp_up + n_shots * 1.5 + 2.0
-                            hdr_start = totality_duration / 2 - hdr_duration / 2  # centre on MAX
+                            # Shutter-open times of the ramp down and back up, plus USB overhead
+                            hdr_duration = hdr_duration_s(hdr_excl_speed_str, hdr_stops_val)
+                            # Same start as the take_hdr line written below
+                            hdr_start = hdr_start_after_c2(hdr_duration)
+                            if hdr_start is None:
+                                hdr_start = totality_duration / 2 - hdr_duration / 2  # centre on MAX
                             hdr_times = [(hdr_start, hdr_start + hdr_duration)]
 
                         # Merge all blocked windows and sort by start time for conflict detection
                         blocked_windows = sorted(earthshine_times + hdr_times)
                         
-                        # Generate shots from C2+10s to C3-10s, tracking cumulative time to avoid overlaps
-                        start_offset = 10
+                        # Generate shots from C2+10s (or later, after the early totality
+                        # shots) to C3-10s, tracking cumulative time to avoid overlaps
+                        start_offset = max(10, early_end)
                         end_buffer = 10
                         usable_duration = totality_duration - start_offset - end_buffer
                         
@@ -2030,8 +2414,10 @@ class SummaryPage(QWizardPage):
                                 exposure_tuple, layer_desc = layer_map[layer_type]
                                 shutter, iso, ap = exposure_tuple
                                 
-                                corona_exposure = parse_shutter_speed(shutter)
-                                shot_end_time = current_time + corona_exposure + 2.0  # +2s buffer
+                                # Offsets are written in whole seconds: round up first, so the
+                                # end time (and the next shot) follow from the written start
+                                current_time = math.ceil(current_time)
+                                shot_end_time = current_time + picture_duration_s(shutter, timing)
                                 
                                 # Check if this shot would exceed totality
                                 if shot_end_time > totality_duration - end_buffer:
@@ -2196,34 +2582,32 @@ class SummaryPage(QWizardPage):
                     hdr_start_speed = wizard.field('hdr_start_speed')
                     hdr_iso_auto = preferred_iso
                 hdr_iso = int(wizard.field('hdr_iso_manual')) if not wizard.field('hdr_iso_auto') else hdr_iso_auto
-                hdr_start_speed_s = parse_shutter_speed(hdr_start_speed)
-                ramp_down = sum(hdr_start_speed_s * (2 ** k) for k in range(hdr_stops + 1))
-                ramp_up = sum(hdr_start_speed_s * (2 ** k) for k in range(hdr_stops - 1, -1, -1))
                 n_shots = 2 * hdr_stops + 1
-                hdr_duration = ramp_down + ramp_up + n_shots * 1.5 + 2.0
-                offset_s = math.ceil(hdr_duration / 2)
-                offset_str = f"0:{int(offset_s // 60):02d}:{int(offset_s % 60):02d}.0"
+                hdr_duration = hdr_duration_s(hdr_start_speed, hdr_stops)
                 lines.append("# HDR burst at maximum eclipse")
                 lines.append(f"# Fires {n_shots} shots ({hdr_stops} stops down and back from {hdr_start_speed})")
-                lines.append(f"# Estimated duration: {hdr_duration:.1f}s, starting at MAX-{offset_s}s")
-                lines.append(f'take_hdr, MAX, -, {offset_str}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops}, "HDR at maximum eclipse"')
+                hdr_start = hdr_start_after_c2(hdr_duration)
+                if hdr_start is not None:
+                    # Relative to C2, so it lines up exactly with the other totality shots
+                    lines.append(f"# Estimated duration: {hdr_duration:.1f}s, starting at C2+{hdr_start}s "
+                                 "(centred on MAX, after the first earthshine shot)")
+                    lines.append(f'take_hdr, C2, +, {_offset_str(hdr_start)}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops}, "HDR at maximum eclipse"')
+                else:
+                    offset_s = math.ceil(hdr_duration / 2)
+                    lines.append(f"# Estimated duration: {hdr_duration:.1f}s, starting at MAX-{offset_s}s")
+                    lines.append(f'take_hdr, MAX, -, {_offset_str(offset_s)}, {camera_name}, {hdr_start_speed}, {aperture}, {hdr_iso}, {hdr_stops}, "HDR at maximum eclipse"')
                 lines.append("")
 
             # C3 - Diamond ring and Baily's beads
             if wizard.field('diamond') or wizard.field('bailys'):
                 lines.append("# Diamond ring and Baily's beads (C3)")
+                lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the beads burst")
+                lines.append(f"# starts at C3+{c3_beads_start}s and the diamond ring burst at C3+{c3_diamond_start}s.")
                 diamond_c3_shutter = get_shutter('diamond_ring_c3', '1/250')
                 beads_c3_shutter = get_shutter('bailys_beads_c3', '1/500')
-                
-                # Determine burst parameter based on camera brand:
-                # Sony and Nikon use number of frames; Canon uses duration in seconds.
-                is_nikon_or_sony = 'nikon' in camera_name.lower() or 'sony' in camera_name.lower()
-                diamond_burst_param = 30 if is_nikon_or_sony else 2  # Nikon/Sony: 30 pictures, Canon: 2 seconds
-                beads_burst_param = 30 if is_nikon_or_sony else 2
-                
-                # Start diamond ring 1s earlier, beads burst 1s later to avoid overlap (each burst ~2s + 3s gap)
-                lines.append(f'take_burst, C3, +, 0:00:01.0, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {diamond_burst_param}, "C3 diamond ring"')
-                lines.append(f'take_burst, C3, +, 0:00:08.0, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {beads_burst_param}, "Post-C3 beads"')
+
+                lines.append(f'take_burst, C3, +, {_offset_str(c3_beads_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "Post-C3 beads"')
+                lines.append(f'take_burst, C3, +, {_offset_str(c3_diamond_start)}, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 diamond ring"')
                 lines.append("# REPLACE SOLAR FILTER after C3!")
                 lines.append("")
         
@@ -2243,9 +2627,10 @@ class SummaryPage(QWizardPage):
                     if c4_sun_alt >= 0:
                         lines.append("# Fourth contact (C4) - with solar filter")
                         c4_shutter = get_shutter('partial_c4', '1/800')
-                        lines.append(f'take_picture, C4, -, 0:00:02.0, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4-2s)"')
+                        step = max(2, math.ceil(picture_duration_s(c4_shutter, timing)))
+                        lines.append(f'take_picture, C4, -, {_offset_str(step)}, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4-{step}s)"')
                         lines.append(f'take_picture, C4, +, 0:00:00.0, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4)"')
-                        lines.append(f'take_picture, C4, +, 0:00:02.0, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4+2s)"')
+                        lines.append(f'take_picture, C4, +, {_offset_str(step)}, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4+{step}s)"')
                         lines.append("")
                     else:
                         lines.append(f"# Fourth contact (C4) skipped - sun below horizon (altitude: {c4_sun_alt:.1f}°)")
@@ -2256,7 +2641,24 @@ class SummaryPage(QWizardPage):
                 lines.append("")
         
         lines.append("# End of script")
-        
+
+        # Fit every exposure to the settings the tested camera really offers.
+        header_end = lines.index("") if "" in lines else len(lines)
+        separator = [] if header_end and lines[header_end - 1] == "#" else ["#"]
+        self._adaptation = None
+        if camera_profile is not None and camera_profile.shutter_speeds:
+            limits = ExposureLimits(int(wizard.field('iso_min')), int(wizard.field('iso_max')),
+                                    float(wizard.field('aperture_min')), float(wizard.field('aperture_max')))
+            lines, self._adaptation = adapt_script_lines(lines, camera_name, camera_profile, limits)
+            lines[header_end:header_end] = separator + self._adaptation.header_lines(camera_profile)
+        else:
+            lines[header_end:header_end] = separator + [
+                "# Camera not tested: standard shutter speeds and estimated timing are used.",
+                "# Use 'Test Camera...' in the wizard to fit the script to the camera."]
+
+        # Kept for the camera test, which needs the contact times.
+        self._last_timings = timings
+        self._camera_profile = camera_profile
         return "\n".join(lines)
     
     def validatePage(self):
@@ -2304,6 +2706,8 @@ class SEWConfigWizard(QWizard):
         
         # Initialize configuration manager
         self.config_manager = ConfigManager()
+        # Camera test results of this session (camera name -> camera_check.CameraProfile)
+        self.camera_profiles = {}
         
         # Apply modern styling
         self._apply_modern_style()
