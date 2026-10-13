@@ -24,10 +24,11 @@ import pandas as pd
 import pytz
 from PyQt6.QtCore import (QTimer, QRect, Qt, QAbstractTableModel, QModelIndex,
                          QSettings, QSignalBlocker, pyqtSignal)
-from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor
+from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor, \
+    QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -46,9 +47,11 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
     MIN_AUTO_POWER_OFF_S
 from solareclipseworkbench import hardware_problems
+from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
-                                                   set_enabled as set_limb_correction_enabled)
+                                                   set_enabled as set_limb_correction_enabled,
+                                                   ensure_limb_profile)
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
@@ -434,6 +437,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.datetime_format_action = QAction("Datetime format", self)
         self.save_action = QAction("Save", self)
         self.live_view_action = QAction("Live View", self)
+        self.beads_action = QAction("Baily's beads", self)
 
         self.place_time_frame = QFrame()
 
@@ -446,9 +450,9 @@ class SolarEclipseView(QMainWindow, Observable):
         # A contact burst is aimed at the bead window rather than at the contact,
         # so the window is worth reading directly.
         self.beads_c2_label = QLabel()
-        self.beads_c2_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.beads_c2_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.beads_c3_label = QLabel()
-        self.beads_c3_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.beads_c3_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.limb_correction_checkbox = QCheckBox(
             "Apply the lunar limb correction to the contact times")
@@ -729,15 +733,27 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(QLabel("Fourth contact (C4)"), 5, 0)
         reference_moments_grid_layout.addWidget(QLabel("Sunrise"), 6, 0)
         reference_moments_grid_layout.addWidget(QLabel("Sunset"), 7, 0)
+        # The bead window spans all value columns: over the two time columns
+        # alone it is wider than they are, and widens them at the expense of the
+        # row titles
         reference_moments_grid_layout.addWidget(QLabel("Baily's beads (C2)"), 8, 0)
-        reference_moments_grid_layout.addWidget(self.beads_c2_label, 8, 1, 1, 2)
+        reference_moments_grid_layout.addWidget(self.beads_c2_label, 8, 1, 1, 5)
         reference_moments_grid_layout.addWidget(QLabel("Baily's beads (C3)"), 9, 0)
-        reference_moments_grid_layout.addWidget(self.beads_c3_label, 9, 1, 1, 2)
+        reference_moments_grid_layout.addWidget(self.beads_c3_label, 9, 1, 1, 5)
         # The switch sits with the times it changes: turning it off moves C2 and
         # C3 by seconds, which is more than a bead burst is long.
         reference_moments_grid_layout.addWidget(self.limb_correction_checkbox, 10, 0, 1, 6)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
-        reference_moments_group_box.setFixedWidth(600)
+        # At least 600 pixels, but wider when a larger font needs it, so the row
+        # titles are never cut off.  The countdown column is sized for its widest
+        # value, so the box does not change width while counting down.
+        countdown_width = QFontMetrics(self.c1_countdown_label.font()).horizontalAdvance("000d 00:00:00")
+        for countdown_label in (self.c1_countdown_label, self.c2_countdown_label, self.max_countdown_label,
+                                self.c3_countdown_label, self.c4_countdown_label, self.sunrise_countdown_label,
+                                self.sunset_countdown_label):
+            countdown_label.setMinimumWidth(countdown_width)
+        reference_moments_group_box.setMinimumWidth(600)
+        reference_moments_group_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         # noinspection SpellCheckingInspection
         input_hbox = QHBoxLayout()
@@ -853,6 +869,13 @@ class SolarEclipseView(QMainWindow, Observable):
         self.live_view_action.setIcon(QIcon(str(ICON_PATH / "live.png")))
         self.live_view_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.live_view_action)
+
+        # Baily's beads
+
+        self.beads_action.setStatusTip("Show the Baily's beads at second and third contact for this location")
+        self.beads_action.setIcon(beads_icon(32))
+        self.beads_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.beads_action)
 
         # Refresh Plot
         if self.low_cpu_mode:
@@ -1136,6 +1159,7 @@ class SolarEclipseController(Observer):
             self.visualization_timer.start()
 
         self._live_view_window: Union[LiveViewWindow, None] = None
+        self._beads_window: Union[BeadsPanel, None] = None
 
         # Keeps idle cameras from going to sleep before the script starts.
         # Started once the cameras are connected; update_time() pauses it
@@ -1176,6 +1200,8 @@ class SolarEclipseController(Observer):
 
         if self.model.is_location_set and self.model.is_eclipse_date_set:
             self.set_reference_moments()
+        if self._beads_window is not None:
+            self._beads_window.refresh()
 
     def _set_limb_correction_locked(self, locked: bool):
         """Keep contact settings immutable while absolute jobs are pending."""
@@ -1267,6 +1293,9 @@ class SolarEclipseController(Observer):
                 and (c2.time_utc - _MARGIN) <= reference_now <= (c3.time_utc + _MARGIN)
             )
             self._live_view_window.set_totality_paused(in_totality)
+
+        if self._beads_window is not None and self._beads_window.isVisible():
+            self._beads_window.set_current_time(reference_now)
 
         self._update_keep_alive_allowed(reference_now)
 
@@ -1442,6 +1471,10 @@ class SolarEclipseController(Observer):
                 self._live_view_window.close()
                 self._live_view_window = None
 
+            if self._beads_window is not None:
+                self._beads_window.close()
+                self._beads_window = None
+
             if self.model.camera_overview.camera_overview_dict:
                 cameras = self.model.camera_overview.camera_overview_dict.values()
 
@@ -1471,92 +1504,7 @@ class SolarEclipseController(Observer):
 
         elif text == "Reference moments":
             if self.model.is_location_set and self.model.is_eclipse_date_set:
-                # Run reference moments calculation in a background thread and show a
-                # modal dialog with progress and a live log view while ephemeris files
-                # (de440s/de421) are downloaded. Capture stdout/stderr into the dialog
-                # so the user sees progress in the GUI instead of the terminal.
-                dialog = QDialog(self.view)
-                dialog.setWindowTitle("Downloading")
-                dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-                dlg_layout = QVBoxLayout(dialog)
-
-                # Compact dialog: label + indeterminate progress bar
-                progress_bar = QProgressBar()
-                progress_bar.setRange(0, 0)  # indeterminate
-                dlg_layout.addWidget(progress_bar)
-
-                label = QLabel("Loading helper files...")
-                dlg_layout.addWidget(label)
-
-                dialog.setLayout(dlg_layout)
-
-                result_container = {}
-
-                class _DevNull:
-                    def write(self, s):
-                        return
-
-                    def flush(self):
-                        return
-
-                def worker():
-                    old_out = sys.stdout
-                    old_err = sys.stderr
-                    sys.stdout = _DevNull()
-                    sys.stderr = _DevNull()
-                    import logging
-                    root_logger = logging.getLogger()
-                    old_handlers = list(root_logger.handlers)
-                    old_level = root_logger.level
-                    try:
-                        root_logger.handlers = file_handlers_only(old_handlers)
-                        rm, mag, typ = self.model.get_reference_moments()
-                        result_container["result"] = (rm, mag, typ)
-                    except Exception:
-                        import traceback
-
-                        result_container["error"] = traceback.format_exc()
-                    finally:
-                        sys.stdout = old_out
-                        sys.stderr = old_err
-                        root_logger.handlers = old_handlers
-                        root_logger.setLevel(old_level)
-
-                th = threading.Thread(target=worker, daemon=True)
-
-                # Show dialog immediately so it is visible before downloads start.
-                try:
-                    dialog.show()
-                    QApplication.processEvents()
-                except Exception:
-                    pass
-
-                logging.getLogger(__name__).debug("Starting GUI reference-moments worker thread")
-
-                th.start()
-
-                timer = QTimer(dialog)
-
-                def pump_logs_and_check():
-                    if not th.is_alive():
-                        timer.stop()
-                        dialog.accept()
-
-                timer.timeout.connect(pump_logs_and_check)
-                timer.start(100)
-
-                dialog.exec()
-
-                if "error" in result_container:
-                    LOGGER.exception("Error while calculating reference moments")
-                    QMessageBox.critical(
-                        self.view,
-                        "Reference moments failed",
-                        f"Error calculating reference moments:\n{result_container['error']}"
-                    )
-                else:
-                    rm, mag, typ = result_container["result"]
-                    self.view.show_reference_moments(rm, mag, typ)
+                self.set_reference_moments()
 
         elif text == "Camera(s)":
             logging.debug('User requested Camera(s) update')
@@ -1639,6 +1587,9 @@ class SolarEclipseController(Observer):
 
                 n_jobs = len(self.scheduler.get_jobs())
                 self._set_limb_correction_locked(n_jobs > 0)
+                if n_jobs > 0 and self._beads_window is not None:
+                    # From now on, show what is happening rather than the last second scrubbed to
+                    self._beads_window.follow_live()
                 if n_jobs == 0:
                     cam_keys = list(
                         (self.model.camera_overview.camera_overview_dict or {}).keys()
@@ -1685,6 +1636,9 @@ class SolarEclipseController(Observer):
 
         elif text == "Live View":
             self._open_live_view()
+
+        elif text == "Baily's beads":
+            self._open_beads_window()
 
         elif text == "Refresh Plot":
             self.update_visualization()
@@ -1778,6 +1732,30 @@ class SolarEclipseController(Observer):
 
         self._live_view_window = LiveViewWindow(camera, parent=None)
         self._live_view_window.show()
+
+    def _open_beads_window(self):
+        """Open (or bring to front) the Baily's beads window."""
+        if self._beads_window is None:
+            self._beads_window = BeadsPanel()
+        self._refresh_beads_window()
+        self._beads_window.show()
+        self._beads_window.activateWindow()
+        self._beads_window.raise_()
+
+    def _refresh_beads_window(self):
+        """Point the Baily's beads window at the current location and eclipse, if both are set.
+
+        Solving the limb costs a couple of seconds, so the window only redoes it
+        when the place or the date actually changes.
+        """
+        if self._beads_window is None:
+            return
+        if not (self.model.is_location_set and self.model.is_eclipse_date_set):
+            self._beads_window.summary.setText("Set a location and an eclipse date first")
+            return
+        day = self.model.eclipse_date.datetime
+        date = f"{day.year:04d}-{day.month:02d}-{day.day:02d}"
+        self._beads_window.set_context(date, self.model.longitude, self.model.latitude, self.model.altitude)
 
     def load_settings(self):
         """ Load the UI settings.
@@ -1909,6 +1887,7 @@ class SolarEclipseController(Observer):
         dialog.setLayout(dlg_layout)
 
         result_container = {}
+        download_progress = {}
 
         class _DevNull:
             def write(self, s):
@@ -1930,6 +1909,10 @@ class SolarEclipseController(Observer):
                 # Prevent external libraries from printing to terminal while
                 # downloads happen.
                 root_logger.handlers = file_handlers_only(old_handlers)
+                if limb_correction_is_enabled():
+                    # The first time, the lunar limb profile is downloaded (72 MB)
+                    ensure_limb_profile(progress=lambda received, total: download_progress.update(
+                        received=received, total=total))
                 reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
                 result_container["result"] = (reference_moments, magnitude, eclipse_type)
             except Exception:
@@ -1961,6 +1944,12 @@ class SolarEclipseController(Observer):
             if not th.is_alive():
                 timer.stop()
                 dialog.accept()
+            elif download_progress:
+                received, total = download_progress["received"], download_progress["total"]
+                label.setText(f"Downloading the lunar limb profile "
+                              f"({received // 1_000_000} of {total // 1_000_000} MB)...")
+                progress_bar.setRange(0, total)
+                progress_bar.setValue(received)
 
         timer.timeout.connect(pump_and_close)
         timer.start(100)
@@ -1977,6 +1966,7 @@ class SolarEclipseController(Observer):
         else:
             reference_moments, magnitude, eclipse_type = result_container["result"]
             self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
+            self._refresh_beads_window()
 
     def _shutdown_scheduler(self):
         """Safely shut down the scheduler and update UI."""

@@ -33,8 +33,8 @@ ECLIPSE = Time("2026-08-12 00:00:00")
 # The limb blob is a 72 MB release asset rather than part of the checkout, so
 # everything that needs a real solve is skipped when it is not installed.
 needs_limb_profile = pytest.mark.skipif(
-    limb_correction.load_default_limb() is None,
-    reason=f"lunar limb profile not installed ({limb_correction.BAND_FILE})")
+    limb_correction.load_default_limb(download=False) is None,
+    reason=f"lunar limb profile not installed ({limb_correction.band_file()})")
 
 
 @pytest.fixture(scope="module")

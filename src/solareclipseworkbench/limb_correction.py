@@ -15,13 +15,16 @@ ICRF -- the difference is a few tenths of a degree, which is kilometres along
 the limb.
 """
 
+import hashlib
 import logging
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
+import requests
 from skyfield import framelib
 from skyfield.api import load, wgs84
 from skyfield.planetarylib import PlanetaryConstants
@@ -32,26 +35,38 @@ from solareclipseworkbench.lunar_limb import LimbBand
 EARTH_RADIUS_KM = EARTH_RADIUS / 1000.0
 
 # The two lunar orientation kernels come down from NAIF on first use, the way
-# the ephemeris already does; the limb blob is a 72 MB release asset, so
-# everything here degrades to None when it is absent and the caller falls back
-# to mean-limb contacts.
+# the ephemeris already does.  The limb blob is a 72 MB GitHub release asset,
+# downloaded once to the user's data directory; everything here degrades to
+# None when it is absent and the caller falls back to mean-limb contacts.
 BAND_FILE_NAME = "lunar_limb_band_v1.bin"
 FRAME_KERNEL_NAME = "moon_080317.tf"
 ORIENTATION_KERNEL_NAME = "moon_pa_de421_1900-2050.bpc"
 EPHEMERIS_NAME = "de440s.bsp"
 
+# The blob is never rebuilt in place: a new profile gets a new file name and a
+# new release, so the checksum pins exactly the file the code was validated on.
+BAND_URL = ("https://github.com/AstroWimSara/SolarEclipseWorkbench/releases/download/"
+            "lunar-limb-v1/" + BAND_FILE_NAME)
+BAND_SHA256 = "5e5ba2eda28494986872493a4d46276020e58073b38aafbc09e5fbc9acb40640"
+BAND_SIZE = 72260818
+
+# Set (to anything) to never download the blob, e.g. in the test suite.
+NO_DOWNLOAD_ENV = "SEW_NO_LIMB_DOWNLOAD"
+
 PACKAGE_DIRECTORY = Path(__file__).resolve().parent
 DATA_DIRECTORY = PACKAGE_DIRECTORY.parents[1] / "data"
+USER_DATA_DIRECTORY = Path.home() / ".SolarEclipseWorkbench"
 
 
 def data_path(name: str) -> Path:
     """Where a data file is.
 
-    A checkout keeps the downloaded kernels and the limb blob in data/, and the
-    ephemeris ships inside the package; anything still missing resolves to
-    skyfield's load path, which is where it gets downloaded to.
+    A checkout keeps the downloaded kernels and the limb blob in data/, the
+    ephemeris ships inside the package, and the downloaded limb blob lives in
+    the user's data directory; anything still missing resolves to skyfield's
+    load path, which is where it gets downloaded to.
     """
-    for directory in (DATA_DIRECTORY, PACKAGE_DIRECTORY):
+    for directory in (DATA_DIRECTORY, PACKAGE_DIRECTORY, USER_DATA_DIRECTORY):
         candidate = directory / name
         if candidate.exists():
             return candidate
@@ -66,7 +81,77 @@ def _open_kernel(name: str):
     return load(name)
 
 
-BAND_FILE = data_path(BAND_FILE_NAME)
+def band_file() -> Path:
+    """Where the limb blob is, or where it would be looked for when it is not installed."""
+    return data_path(BAND_FILE_NAME)
+
+
+# Only one download attempt per session: without a network every recalculation
+# would otherwise wait for the same timeout again.
+_download_attempted = False
+
+
+def download_limb_profile(progress=None) -> Path:
+    """Download the limb blob to the user's data directory and return its path.
+
+    The file is written next to its final name and only renamed into place once
+    its checksum is right, so an interrupted download never leaves a truncated
+    blob that would be taken for the real one.
+
+    Args:
+        - progress: Optional callable, called with (bytes received, total bytes) while downloading.
+
+    Raises: OSError (incl. requests.RequestException) or ValueError when the download fails or is corrupt.
+    """
+    target = USER_DATA_DIRECTORY / BAND_FILE_NAME
+    partial = target.with_name(target.name + ".part")
+    USER_DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+    logging.info("Downloading the lunar limb profile (%d MB) from %s", BAND_SIZE // 1_000_000, BAND_URL)
+    digest = hashlib.sha256()
+    received = 0
+    try:
+        with requests.get(BAND_URL, stream=True, timeout=(10, 60)) as response:
+            response.raise_for_status()
+            with open(partial, "wb") as out:
+                for chunk in response.iter_content(chunk_size=1 << 20):
+                    out.write(chunk)
+                    digest.update(chunk)
+                    received += len(chunk)
+                    if progress is not None:
+                        progress(received, BAND_SIZE)
+        if digest.hexdigest() != BAND_SHA256:
+            raise ValueError(f"the downloaded lunar limb profile is corrupt (SHA-256 {digest.hexdigest()})")
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
+
+    logging.info("Lunar limb profile saved to %s", target)
+    return target
+
+
+def ensure_limb_profile(progress=None) -> bool:
+    """Make sure the limb blob is installed, downloading it the first time.
+
+    Returns whether the blob is available.  A failed download is logged, not
+    raised: without the blob the contacts are simply the mean-limb ones.
+
+    Args:
+        - progress: Optional callable, called with (bytes received, total bytes) while downloading.
+    """
+    global _download_attempted
+    if band_file().exists():
+        return True
+    if _download_attempted or os.environ.get(NO_DOWNLOAD_ENV):
+        return False
+    _download_attempted = True
+    try:
+        download_limb_profile(progress)
+        return True
+    except (OSError, ValueError) as exc:
+        logging.warning("Could not download the lunar limb profile, contacts will use the mean limb: %s", exc)
+        return False
+
 
 # The reduced mean limb radius the l2 coefficients are built on.  Jubier charts
 # the same value as k2, and it is already the constant used when we generate
@@ -111,7 +196,7 @@ class LunarLimb:
     def __init__(self, band_path=None, frame_kernel_name=FRAME_KERNEL_NAME,
                  orientation_kernel_name=ORIENTATION_KERNEL_NAME,
                  ephemeris_name=EPHEMERIS_NAME):
-        self.band = LimbBand(Path(band_path) if band_path else BAND_FILE)
+        self.band = LimbBand(Path(band_path) if band_path else band_file())
         self.ephemeris = load(str(data_path(ephemeris_name)))
 
         constants = PlanetaryConstants()
@@ -376,17 +461,20 @@ def beads(elements, position_angles, heights_km):
             for start, end in zip(starts, ends)]
 
 
-def load_default_limb():
-    """The limb model, or None when the limb blob has not been installed.
+def load_default_limb(download=True):
+    """The limb model, or None when the limb blob is not installed.
 
-    Only the blob is checked for: it is a 72 MB release asset the user has to
-    fetch or build deliberately, whereas the kernels are small enough that
-    skyfield can download them on the spot.
+    The blob is downloaded the first time it is needed (see ensure_limb_profile);
+    the kernels are small enough that skyfield downloads them on the spot.
+
+    Args:
+        - download: Whether to download the blob when it is not installed yet.
     """
-    if not BAND_FILE.exists():
+    if not (ensure_limb_profile() if download else band_file().exists()):
         logging.info("Lunar limb profile unavailable, contacts will use the mean limb. "
-                     "Install %s (see tools/build_limb_blob.py) for limb-corrected "
-                     "contacts and bead windows.", BAND_FILE)
+                     "Install %s (downloaded automatically, or built with "
+                     "tools/build_limb_blob.py) for limb-corrected contacts and bead "
+                     "windows.", USER_DATA_DIRECTORY / BAND_FILE_NAME)
         return None
     try:
         return LunarLimb()
