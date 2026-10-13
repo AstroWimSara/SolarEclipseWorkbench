@@ -15,7 +15,7 @@ dependencies = [
     "astropy==8.0.0",
     "geopandas==1.1.3",
     "matplotlib==3.11.0",
-    "gphoto2==2.6.3",
+    "gphoto2==2.6.4",
     "apscheduler==3.11.2",
     "geodatasets==2026.5.1",
     "jplephem==2.24",

@@ -12,8 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Warning when pressing `Camera(s)` if a Canon's `Auto power off` or a Nikon's standby timer is shorter than 30 minutes (Sony does not expose this setting)
 - Each run writes its own log file in `~/.SolarEclipseWorkbench/logs/`, with UTC millisecond timestamps, the contact times, GPS offset and cameras of the run; log files are never overwritten
 
+### Changed
+
+- Back to the newest python-gphoto2 (2.6.4, with libgphoto2 2.5.34); `take_burst` on Canon now works with both the old and the new libgphoto2
+
 ### Fixed
 
+- `take_burst` on Canon took no picture with python-gphoto2 2.6.4 (Issue #131): libgphoto2 2.5.34 renamed the remote release values (`Press Full` became `Press Full MF`, and releasing is now `Release`).  The values are now taken from what the installed libgphoto2 offers
+- `take_burst` on Canon took only one picture on bodies without a plain `Continuous` drive mode, such as the EOS R10 (Issue #131).  The best continuous drive mode the camera offers is now used (`Continuous high speed` first)
+- Canon `take_burst` failures were silent: errors when setting the drive mode or pressing the shutter are now reported, a burst that cannot hold the shutter falls back to single pictures, and the shutter is always released
 - The log file in `/tmp` was overwritten at every start, so the log of an eclipse was lost as soon as the application was restarted; log messages from camera and scheduler threads were also dropped while the eclipse visualisation or contact times were being calculated
 
 ## [2.0.0rc5] - 2026-08-07

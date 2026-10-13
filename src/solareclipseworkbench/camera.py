@@ -648,6 +648,64 @@ def _find_capturemode_choice(
     return None
 
 
+def _widget_choices(widget) -> list[str]:
+    """Return all choice strings of a gphoto2 radio/menu widget (empty list on error)."""
+    try:
+        n = gp.check_result(gp.gp_widget_count_choices(widget))
+        return [gp.check_result(gp.gp_widget_get_choice(widget, i)) for i in range(n)]
+    except gphoto2.GPhoto2Error:
+        return []
+
+
+def _canon_remote_release_values(widget) -> tuple[str, str]:
+    """Return the (press, release) ``eosremoterelease`` values for a full manual-focus press.
+
+    libgphoto2 2.5.34 renamed these choices (python-gphoto2 2.6.4 bundles it):
+
+    ==================  ==================  ==========================
+    PTP call            libgphoto2 <= 2.5.33  libgphoto2 >= 2.5.34
+    ==================  ==================  ==========================
+    RemoteReleaseOn 3,1  "Press Full"        "Press Full MF"
+    RemoteReleaseOff 3   "Release Full"      "Release"
+    ==================  ==================  ==========================
+
+    In 2.5.34 "Release Full" still exists but sends RemoteReleaseOff(2), which
+    does not release a press that was started with RemoteReleaseOn(3).  Pick the
+    pair matching the installed libgphoto2 by inspecting the widget's choices.
+    """
+    choices = _widget_choices(widget)
+    if "Press Full MF" in choices:
+        return "Press Full MF", "Release"
+    return "Press Full", "Release Full"
+
+
+# Continuous drive modes in order of preference.  Canon bodies only accept the
+# values in their own enumeration (e.g. the EOS R10 has no plain "Continuous"),
+# so the first one the camera actually offers is used.  Silent (electronic
+# shutter) modes are last because of rolling-shutter distortion.
+_CANON_CONTINUOUS_DRIVE_MODES = (
+    "Continuous high speed",
+    "Continuous",
+    "Super high speed continuous shooting",
+    "Continuous low speed",
+    "Silent HS continuous",
+    "Continuous silent",
+    "Silent LS continuous",
+)
+
+
+def _find_canon_continuous_drivemode(widget) -> Optional[str]:
+    """Return the best continuous ``drivemode`` choice offered by a Canon camera, or None."""
+    choices = _widget_choices(widget)
+    for mode in _CANON_CONTINUOUS_DRIVE_MODES:
+        if mode in choices:
+            return mode
+    for choice in choices:
+        if "continuous" in choice.lower() and "timer" not in choice.lower():
+            return choice
+    return None
+
+
 # Maximum time a scheduled job may wait for the camera USB lock before it is
 # considered too late to be worth taking.  Once a job has waited this long, the
 # camera is clearly busy with a previous shot and the queued shot would fire
@@ -1618,37 +1676,52 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
     if vendor == 'Canon':
         # For bursts, ensure the camera is in a continuous drive mode so
         # holding the remote release fires repeated frames rather than one.
+        # The return code must be checked: gp_camera_set_config does not raise,
+        # and a drive mode the body does not support would otherwise silently
+        # leave it in Single (one frame per burst, e.g. on the EOS R10).
         try:
             drive_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
-            gp.gp_widget_set_value(drive_w, 'Continuous')
-            _set_gp_config(camera, config, context)
-            logging.debug('Set Canon drivemode to Continuous for burst')
-        except gphoto2.GPhoto2Error:
-            logging.debug('Could not set Canon drivemode to Continuous; proceeding with remote release')
+            continuous = _find_canon_continuous_drivemode(drive_w)
+            if continuous is None:
+                logging.warning('%s: no continuous drive mode available; take_burst will take a single '
+                                'frame. Set the drive mode to continuous on the camera.', camera_name)
+            else:
+                gp.gp_widget_set_value(drive_w, continuous)
+                gp.check_result(_set_gp_config(camera, config, context))
+                logging.debug('Set Canon drivemode to "%s" for burst', continuous)
+        except gphoto2.GPhoto2Error as e:
+            logging.warning('%s: could not set a continuous drive mode (%s); take_burst may take a single '
+                            'frame. Set the drive mode to continuous on the camera.', camera_name, e)
 
         try:
             # Push the button (press & hold for the requested duration)
             remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
-            gp.gp_widget_set_value(remote_release, "Press Full")
-            _set_gp_config(camera, config, context)
-            time.sleep(duration)
-
-            # Release the button
-            remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
-            gp.gp_widget_set_value(remote_release, "Release Full")
-            _set_gp_config(camera, config, context)
+            press, release = _canon_remote_release_values(remote_release)
+            gp.gp_widget_set_value(remote_release, press)
+            gp.check_result(_set_gp_config(camera, config, context))
+        except gphoto2.GPhoto2Error as e:
+            # If 'eosremoterelease' is not supported (e.g. Canon 1000D), then
+            # fallback to just take as number of shots equal to `burst_number`
+            logging.warning("%s: 'eosremoterelease' is not supported (%s), will take %s shots instead",
+                            camera_name, e, str(duration))
+            for fallback_shot in range(int(duration)):
+                take_picture(camera, camera_settings)
+        else:
+            try:
+                time.sleep(duration)
+            finally:
+                # Always release the button, or the camera keeps shooting
+                try:
+                    remote_release = gp.check_result(gp.gp_widget_get_child_by_name(config, 'eosremoterelease'))
+                    gp.gp_widget_set_value(remote_release, release)
+                    gp.check_result(_set_gp_config(camera, config, context))
+                except gphoto2.GPhoto2Error as e:
+                    logging.error("%s: could not release the shutter after take_burst ('%s' failed: %s)",
+                                  camera_name, release, e)
 
             # Ensure that the camera truly finished, so it won't affect next commands
             _wait_for_capture_complete(target, context)
             _drain_camera_events(target, context)
-        except gphoto2.GPhoto2Error:
-            # If 'eosremoterelease' is not supported (e.g. Canon 1000D), then
-            # fallback to just take as number of shots equal to `burst_number`
-            logging.warning("%s: 'eosremoterelease' is not supported, will take %s shots instead",
-                            camera_name,
-                            str(duration))
-            for fallback_shot in range(int(duration)):
-                take_picture(camera, camera_settings)
     elif vendor == 'Nikon':
         # Set capture mode to burst/continuous
         # Try different widget names (differs between DSLR and mirrorless models)
