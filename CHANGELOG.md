@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- A closed Sony settings banner no longer reappears when a scheduled `sync_cameras` command runs; pressing `Camera(s)` still shows it again (Issue #187)
 - Sunrise and sunset are now searched over the local calendar day of the eclipse.  Far from Greenwich the wrong day could be returned, e.g. the next morning's sunrise for Australia (Issue #188)
 - Sun altitudes in the GUI and in the wizard's script comments are now the apparent altitude (with atmospheric refraction), consistent with sunrise/sunset and with what Stellarium shows.  Before, the geometric altitude was shown, so a shot labelled "sun 0.1°" came about 5 minutes before the displayed sunset (Issue #188).  Exposures are still calculated with the geometric altitude
 - Wizard: partial phase and C1/C4 shots are now kept while the sun is partly below the horizon, until the sun has completely set (or from the moment it starts to rise).  Before, they stopped when the centre of the sun reached the geometric horizon, a few minutes before sunset (Issue #188)

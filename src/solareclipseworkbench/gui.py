@@ -112,14 +112,23 @@ class BannerNotification(QFrame):
         self.close_btn.setText("✕")
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
+        # Set when the user closes the banner, so that automatic refreshes (e.g. a scheduled `sync_cameras`)
+        # do not bring it back.  Only a refresh requested by the user (the `Camera(s)` button) clears it.
+        self.dismissed = False
+
         # Explicitly hide the root frame (self) when clicked
-        self.close_btn.clicked.connect(self.hide)
+        self.close_btn.clicked.connect(self.dismiss)
 
         layout.addWidget(self.label, 1)
         layout.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
 
     def setText(self, text: str):
         self.label.setText(text)
+
+    def dismiss(self):
+        """ Hide the banner and remember that the user closed it. """
+        self.dismissed = True
+        self.hide()
 
 
 class SolarEclipseModel:
@@ -2859,6 +2868,9 @@ class CameraOverviewTableModel(QAbstractTableModel):
         # Set by the controller before calling update_camera_overview() so that
         # sync_camera_time / check_camera_state run only once the dict is ready.
         self.on_ready_callback = None
+        # Whether the pending update was requested by the user (`Camera(s)` button).  Only then does a closed
+        # Sony banner reappear.
+        self._user_requested = False
 
         self._data = pd.DataFrame(columns=[CameraOverviewTableColumnNames.CAMERA.value,
                                            CameraOverviewTableColumnNames.BATTERY_LEVEL.value,
@@ -2901,8 +2913,15 @@ class CameraOverviewTableModel(QAbstractTableModel):
             else:
                 return Qt.AlignmentFlag.AlignRight
 
-    def update_camera_overview(self):
-        """ Update the camera overview. """
+    def update_camera_overview(self, user_requested: bool = True):
+        """ Update the camera overview.
+
+        Args:
+            - user_requested: Whether the user asked for this update (`Camera(s)` button).  An automatic update
+                              (`sync_cameras`) does not show the Sony banner again once the user closed it.
+        """
+        # Sticky until the data is applied, so an automatic update in between does not cancel the user's request
+        self._user_requested = self._user_requested or user_requested
         logging.debug('CameraOverviewTableModel.update_camera_overview(): start (scheduling worker)')
         try:
             LOGGER.debug("CameraOverview: scheduling worker to probe cameras")
@@ -3219,8 +3238,11 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     full_text += "\nIf this info is wrong or you changed settings - press 'Camera(s)' again!"
 
                     if hasattr(self, 'view') and getattr(self.view, 'sony_banner_label', None) is not None:
-                        self.view.sony_banner_label.setText(full_text)
-                        self.view.sony_banner_label.setVisible(sony_banner_label_visibility)
+                        banner = self.view.sony_banner_label
+                        if self._user_requested:
+                            banner.dismissed = False
+                        banner.setText(full_text)
+                        banner.setVisible(sony_banner_label_visibility and not banner.dismissed)
                         logging.info("Sony banner updated to:\n%s", full_text)
                 else:
                     # Hide banner if no messages
@@ -3232,6 +3254,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
                     self.view.sony_banner_label.setVisible(False)
         except Exception:
             logging.exception("Error updating Sony banner / background downloaders")
+        self._user_requested = False
 
         # Notify controller that cameras are ready (fires sync_camera_time + check_camera_state)
         cb = getattr(self, 'on_ready_callback', None)
@@ -3582,7 +3605,7 @@ def sync_cameras(controller: SolarEclipseController):
         - controller: Controller of the Solar Eclipse Workbench UI
     """
 
-    controller.model.camera_overview.update_camera_overview()
+    controller.model.camera_overview.update_camera_overview(user_requested=False)
 
 
 if __name__ == "__main__":
