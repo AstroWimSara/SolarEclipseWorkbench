@@ -379,7 +379,7 @@ pip show solareclipseworkbench
 
 ## Running Solar Eclipse Workbench
 
-- Please ensure that all of the connected cameras use 0.3EV exposure step (proper support for 0.5EV will arrive in a future version, for Canon and Nikon). Also, check that the camera's `Auto Power Off` setting isn't too short, as once it's asleep, camera can't be awakened by the app.
+- Please ensure that all of the connected cameras use 0.3EV exposure step (proper support for 0.5EV will arrive in a future version, for Canon and Nikon). Also, check that the camera's `Auto Power Off` setting isn't too short, as once it's asleep, camera can't be awakened by the app. While the cameras are connected and idle, Solar Eclipse Workbench pings them every 20 seconds over USB to keep them awake (paused from 15s before C2 until 15s after C3, and just before scheduled commands), but not every body honours this, so disabling `Auto Power Off` (or setting it to at least 30 minutes) remains the safest choice. For Canon (`Auto power off`) and Nikon (standby timer) the app warns when you press `Camera(s)` if the setting is shorter than that; Sony does not expose this setting, so check it on the camera.
 
 - Ensure that you are connected to the Internet the first time you run and use Solar Eclipse Workbench, as it will require to download several files required for calculations. Make sure to do this before eclipse day!
 

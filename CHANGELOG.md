@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- Connected cameras are kept awake before the script starts: idle cameras are pinged over USB every 20 seconds so their auto power off does not put them to sleep (paused around totality and just before scheduled commands, so shots are never delayed), and a camera that stops responding is reported in the GUI
+- Warning when pressing `Camera(s)` if a Canon's `Auto power off` or a Nikon's standby timer is shorter than 30 minutes (Sony does not expose this setting)
+
 ## [2.0.0rc5] - 2026-08-07
 
 ### Fixed

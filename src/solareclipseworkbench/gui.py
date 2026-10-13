@@ -42,7 +42,8 @@ import threading
 
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
     get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
-    get_sony_save_destination, get_sony_image_quality
+    get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
+    MIN_AUTO_POWER_OFF_S
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
@@ -318,6 +319,21 @@ class SolarEclipseModel:
                 msg = f"Could not read shooting mode for {camera_name}."
                 LOGGER.warning(msg)
                 warnings.append(msg)
+
+            # Auto power off: once asleep, the camera cannot be woken over USB
+
+            try:
+                auto_power_off = get_auto_power_off(camera)
+                if auto_power_off is not None:
+                    label, value, delay_s = auto_power_off
+                    if delay_s is not None and delay_s < MIN_AUTO_POWER_OFF_S:
+                        msg = (f"{label} for {camera_name} is set to '{value}'.\n"
+                               f"Disable it, or set it to at least {int(MIN_AUTO_POWER_OFF_S // 60)} minutes, "
+                               f"so the camera does not fall asleep before the eclipse.")
+                        LOGGER.warning(msg)
+                        warnings.append(msg)
+            except Exception:
+                LOGGER.debug("Could not read auto power off for %s", camera_name, exc_info=True)
 
         return warnings
 
@@ -989,6 +1005,12 @@ class SolarEclipseController(Observer):
 
         self._live_view_window: Union[LiveViewWindow, None] = None
 
+        # Keeps idle cameras from going to sleep before the script starts.
+        # Started once the cameras are connected; update_time() pauses it
+        # around totality and just before scheduled commands.
+        self._keep_alive_thread: Union[CameraKeepAliveThread, None] = None
+        self._keep_alive_allowed = threading.Event()
+
         self.load_settings()
 
     def _run_in_progress(self) -> bool:
@@ -1073,9 +1095,55 @@ class SolarEclipseController(Observer):
             )
             self._live_view_window.set_totality_paused(in_totality)
 
+        self._update_keep_alive_allowed(reference_now)
+
         # self.view.eclipse_visualization.plot(current_time_utc)    FIXME
 
         self.update_jobs_countdown()
+
+    def _update_keep_alive_allowed(self, reference_now: datetime.datetime):
+        """Allow keep-alive pings only when they cannot get in the way of a shot.
+
+        Pings are suspended from 15 s before C2 until 15 s after C3 (same window
+        as live view), and whenever a scheduled command fires within the next
+        few seconds, so a scheduled shot never has to wait for the USB lock.
+        """
+        margin = datetime.timedelta(seconds=15)
+        c2 = self.model.c2_info
+        c3 = self.model.c3_info
+        allowed = not (
+            c2 is not None
+            and c3 is not None
+            and (c2.time_utc - margin) <= reference_now <= (c3.time_utc + margin)
+        )
+
+        if allowed and self.scheduler:
+            try:
+                # next_run_time is on the computer clock (already GPS-corrected), so no offset here
+                horizon = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=5)
+                allowed = not any(
+                    job.next_run_time is not None and job.next_run_time <= horizon
+                    for job in self.scheduler.get_jobs()
+                )
+            except Exception:
+                allowed = False
+
+        if allowed:
+            self._keep_alive_allowed.set()
+        else:
+            self._keep_alive_allowed.clear()
+
+    def _start_keep_alive(self):
+        """Start the camera keep-alive thread once; it follows camera refreshes by itself."""
+        if self._keep_alive_thread is not None and self._keep_alive_thread.is_alive():
+            return
+
+        def cameras():
+            return list((self.model.camera_overview.camera_overview_dict or {}).values())
+
+        self._keep_alive_thread = CameraKeepAliveThread(cameras, should_ping=self._keep_alive_allowed.is_set)
+        self._keep_alive_thread.start()
+        logging.info('Camera keep-alive started (cameras are pinged while idle so they do not fall asleep)')
 
     def update_jobs_countdown(self):
         """ Update the countdown of the scheduled jobs. """
@@ -1192,6 +1260,10 @@ class SolarEclipseController(Observer):
             return
 
         elif isinstance(changed_object, QCloseEvent):
+
+            if self._keep_alive_thread is not None:
+                self._keep_alive_thread.stop()
+                self._keep_alive_thread = None
 
             if self._live_view_window is not None:
                 self._live_view_window.close()
@@ -1445,6 +1517,10 @@ class SolarEclipseController(Observer):
             self.sync_camera_time()
         except Exception:
             logging.exception('Exception while syncing camera time')
+        try:
+            self._start_keep_alive()
+        except Exception:
+            logging.exception('Could not start the camera keep-alive')
         try:
             logging.debug('_on_cameras_ready: checking camera state')
             warnings = self.model.check_camera_state()

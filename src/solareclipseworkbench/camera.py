@@ -684,6 +684,7 @@ def _serialised_on_camera(func):
         try:
             return func(camera, *args, **kwargs)
         finally:
+            camera._last_usb_activity = time.monotonic()
             camera._usb_lock.release()
     return wrapper
 
@@ -1016,6 +1017,7 @@ class LiveViewThread(threading.Thread):
                 self._camera._capture_preview_was_called = True
                 gp.check_result(gp.gp_camera_capture_preview(target, cam_file, context))
                 file_data = gp.check_result(gp.gp_file_get_data_and_size(cam_file))
+                self._camera._last_usb_activity = time.monotonic()
                 self._frame_callback(bytes(file_data))
             except gphoto2.GPhoto2Error as exc:
                 logging.debug('LiveViewThread: preview capture failed: %s', exc)
@@ -1027,6 +1029,218 @@ class LiveViewThread(threading.Thread):
                         self._camera._usb_lock.release()
                     except Exception:
                         pass
+
+
+# Interval between keep-alive pings.  Well below the shortest auto power off
+# the supported bodies allow (Canon: 30 s / 1 min), so one ping always lands
+# before the camera's idle timer expires.
+KEEP_ALIVE_INTERVAL_S: float = 20.0
+
+
+class CameraKeepAliveThread(threading.Thread):
+    """Background thread that keeps idle cameras from going to sleep.
+
+    Between connecting the cameras and the first scheduled shot there can be
+    an hour or more without any USB traffic, long enough for the camera's own
+    auto power off to put it to sleep, after which gphoto2 cannot wake it.
+    Every *interval_s* this thread does a cheap config read (the battery
+    level) on each camera that has not been used over USB within the last
+    interval, which resets the idle timer on most Canon and Nikon bodies.
+
+    Like LiveViewThread it never competes with a scheduled shot: the USB lock
+    is taken with a short timeout and the ping is skipped when it is busy.
+    The caller-supplied *should_ping* hook lets the GUI suspend pings
+    altogether, e.g. around totality or just before a scheduled command.
+
+    Parameters
+    ----------
+    cameras_provider : callable[[], iterable]
+        Returns the currently connected cameras.  Called every cycle so that a
+        camera refresh in the GUI is picked up without restarting the thread.
+    interval_s : float
+        Interval between pings in seconds.
+    lock_timeout : float
+        Maximum seconds to wait for the USB lock before skipping a ping.
+    should_ping : callable[[], bool], optional
+        Returns False while pings must be suspended.  Must be thread-safe.
+    """
+
+    def __init__(self, cameras_provider, interval_s: float = KEEP_ALIVE_INTERVAL_S,
+                 lock_timeout: float = 0.05, should_ping=None):
+        super().__init__(daemon=True, name='CameraKeepAlive')
+        self._cameras_provider = cameras_provider
+        self._interval_s = interval_s
+        self._lock_timeout = lock_timeout
+        self._should_ping = should_ping
+        self._stop_event = threading.Event()
+        # Names of cameras that failed their last ping, so the problem is
+        # reported once rather than every cycle.
+        self._unresponsive: set = set()
+
+    def stop(self):
+        """Signal the thread to stop."""
+        self._stop_event.set()
+
+    def run(self):
+        while not self._stop_event.wait(self._interval_s):
+            try:
+                if self._should_ping is not None and not self._should_ping():
+                    continue
+                self.ping_all()
+            except Exception:
+                logging.exception('CameraKeepAlive: unexpected error')
+
+    def ping_all(self) -> None:
+        """Ping every connected camera that has been idle for a full interval."""
+        seen: set = set()
+        for camera in list(self._cameras_provider() or []):
+            # Aliases map several names onto the same camera object
+            if camera is None or id(camera) in seen:
+                continue
+            seen.add(id(camera))
+            # Virtual cameras never sleep; disconnected ones are being replaced
+            if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera):
+                continue
+            if hasattr(camera, 'is_connected') and not camera.is_connected():
+                continue
+            idle_s = time.monotonic() - getattr(camera, '_last_usb_activity', 0.0)
+            if idle_s < self._interval_s:
+                continue
+            self._ping(camera)
+
+    def _ping(self, camera) -> None:
+        camera_name = getattr(camera, 'name', str(camera))
+        acquired = camera._usb_lock.acquire(timeout=self._lock_timeout)
+        if not acquired:
+            logging.debug('CameraKeepAlive: USB lock busy for %s, skipping ping', camera_name)
+            return
+        try:
+            _keep_alive_request(camera)
+            camera._last_usb_activity = time.monotonic()
+            if camera_name in self._unresponsive:
+                self._unresponsive.discard(camera_name)
+                logging.info('CameraKeepAlive: %s is responding again', camera_name)
+            logging.debug('CameraKeepAlive: pinged %s', camera_name)
+        except gphoto2.GPhoto2Error as exc:
+            if exc.code == gp.GP_ERROR_CAMERA_BUSY:
+                logging.debug('CameraKeepAlive: %s busy, skipping ping', camera_name)
+                return
+            if camera_name not in self._unresponsive:
+                self._unresponsive.add(camera_name)
+                from solareclipseworkbench import hardware_problems
+                hardware_problems.report(
+                    camera_name,
+                    "Camera stopped responding - it may have gone to sleep (auto power off) or been "
+                    "disconnected. Wake it up and press 'Camera(s)'",
+                    detail=str(exc),
+                )
+        finally:
+            camera._usb_lock.release()
+
+
+def _keep_alive_request(camera) -> None:
+    """Do the cheapest config read that still counts as USB activity for the camera."""
+    target = camera._camera if hasattr(camera, '_camera') else camera
+    context = gp.gp_context_new()
+    try:
+        gp.check_result(gp.gp_camera_get_single_config(target, 'batterylevel', context))
+    except gphoto2.GPhoto2Error as exc:
+        if exc.code not in (gp.GP_ERROR_NOT_SUPPORTED, gp.GP_ERROR_BAD_PARAMETERS):
+            raise
+        # Older drivers cannot read a single widget; fall back to the full tree
+        gp.check_result(gp.gp_camera_get_config(target, context))
+
+
+# Auto power off settings shorter than this get a warning at connect time.
+# The keep-alive pings normally stop the timer from ever running out, but they
+# are paused around totality and not every body honours them, so the camera's
+# own setting is the real safety net.
+MIN_AUTO_POWER_OFF_S: float = 30 * 60
+
+# Config widgets that hold the camera's sleep timer, per vendor.  Sony bodies
+# do not expose theirs over PTP.
+_AUTO_POWER_OFF_WIDGETS = {
+    'Canon': ['autopoweroff'],
+    'Nikon': ['autopoweroff', 'meterofftime'],
+}
+
+_DISABLED_WORDS = ('disable', 'off', 'never', 'no limit', 'unlimited', 'infinite', 'none')
+
+_DURATION_UNITS = {
+    's': 1, 'sec': 1, 'secs': 1, 'second': 1, 'seconds': 1,
+    'm': 60, 'min': 60, 'mins': 60, 'minute': 60, 'minutes': 60,
+    'h': 3600, 'hr': 3600, 'hour': 3600, 'hours': 3600,
+}
+
+
+def parse_power_off_delay(value) -> Optional[float]:
+    """Convert an auto power off / standby timer widget value to seconds.
+
+    gphoto2 reports these either as a bare number of seconds (Canon EOS,
+    where 0 means disabled) or as text such as "30 minutes", "1m", "16 s" or
+    "No limit" (Nikon).
+
+    Returns:
+        The delay in seconds, or None when the timer is disabled.
+
+    Raises:
+        ValueError: when the value cannot be interpreted.
+    """
+    text = str(value).strip().lower()
+    if not text:
+        raise ValueError('empty auto power off value')
+    if any(word in text for word in _DISABLED_WORDS):
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        pass
+    else:
+        # 0 and the all-ones UINT32 sentinel both mean "never"
+        return None if seconds <= 0 or seconds >= 0xFFFFFFFF else seconds
+
+    number = ''
+    for i, char in enumerate(text):
+        if char.isdigit() or char == '.':
+            number += char
+        else:
+            unit = text[i:].strip()
+            break
+    else:
+        unit = ''
+    if not number or unit not in _DURATION_UNITS:
+        raise ValueError(f'unrecognised auto power off value: {value!r}')
+    return float(number) * _DURATION_UNITS[unit]
+
+
+def get_auto_power_off(camera) -> Optional[Tuple[str, str, Optional[float]]]:
+    """Read the camera's auto power off (or standby) timer.
+
+    Args:
+        - camera: Camera object
+
+    Returns:
+        (widget label, raw value, delay in seconds or None when disabled), or
+        None when the camera does not expose such a setting.
+    """
+    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera):
+        return None
+
+    target = camera._camera
+    context = gp.gp_context_new()
+    for widget_name in _AUTO_POWER_OFF_WIDGETS.get(getattr(camera, 'vendor', None), []):
+        try:
+            widget = gp.check_result(gp.gp_camera_get_single_config(target, widget_name, context))
+        except gphoto2.GPhoto2Error:
+            continue
+        label = widget.get_label() or widget_name
+        raw_value = widget.get_value()
+        try:
+            return label, str(raw_value), parse_power_off_delay(raw_value)
+        except ValueError:
+            logging.debug('%s: could not interpret %s = %r', getattr(camera, 'name', camera), widget_name, raw_value)
+            continue
+    return None
 
 
 def _reset_canon_eos_ptp_session(camera) -> None:
