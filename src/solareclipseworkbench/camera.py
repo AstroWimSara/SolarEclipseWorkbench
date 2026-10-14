@@ -47,6 +47,62 @@ def _is_sony_camera_instance(camera: object) -> bool:
     return vendor == 'SONY' or _is_sony_model(name)
 
 
+def _vendor_from_model_name(model_name: str) -> Optional[str]:
+    """Return 'Canon', 'Nikon', 'Sony' or None from a gphoto2 model name."""
+    if "Canon" in model_name:
+        return 'Canon'
+    if "Nikon" in model_name:
+        return 'Nikon'
+    if _is_sony_model(model_name):
+        return 'Sony'
+    return None
+
+
+def _detect_vendor(model_name: str, config) -> Optional[str]:
+    """Return the vendor of an initialised camera.
+
+    The gphoto2 model name is used when it names the vendor.  A camera that
+    libgphoto2 does not know yet (e.g. the Sony A7 V with libgphoto2 2.5.34)
+    is detected as "USB PTP Class Camera"; its vendor is then taken from the
+    manufacturer and model the camera itself reports over PTP, so the
+    vendor-specific handling (e.g. the Sony drive modes) still applies.
+
+    Args:
+        - model_name: Camera model name as reported by gphoto2 autodetect
+        - config: The camera's gphoto2 config widget tree (None when it could not be read)
+
+    Returns: 'Canon', 'Nikon', 'Sony' or None.
+    """
+    vendor = _vendor_from_model_name(model_name)
+    if vendor is not None or config is None:
+        return vendor
+
+    reported = []
+    for widget_name in ('manufacturer', 'cameramodel'):
+        try:
+            widget = gp.check_result(gp.gp_widget_get_child_by_name(config, widget_name))
+            reported.append(str(gp.check_result(gp.gp_widget_get_value(widget)) or ''))
+        except gphoto2.GPhoto2Error:
+            pass
+    manufacturer = ' '.join(reported).strip()
+    vendor = next((v for v in ('Canon', 'Nikon', 'Sony') if v.upper() in manufacturer.upper()), None)
+    if vendor is None and any(_is_sony_model(r) for r in reported):
+        vendor = 'Sony'
+    if vendor is not None:
+        camera_log(model_name).warning(
+            'not in the camera list of libgphoto2 %s; the camera reports "%s", so it is handled as a %s.  '
+            'Some settings may not be available until a libgphoto2 release supports this model.',
+            gp.gp_library_version(gp.GP_VERSION_SHORT)[0], manufacturer, vendor)
+    return vendor
+
+
+def _wrap_camera(gp_camera, model_name: str, vendor: Optional[str], display_name: str) -> 'GPhotoCameraAdapter':
+    """Wrap an initialised gphoto2 camera in the adapter for its vendor."""
+    adapter_class = {'Canon': CanonCamera, 'Nikon': NikonCamera, 'Sony': SonyCamera}.get(vendor, GPhotoCameraAdapter)
+    logging.debug('Wrapping camera %s as %s (name=%s)', model_name, adapter_class.__name__, display_name)
+    return adapter_class(gp_camera, display_name)
+
+
 def _set_gp_config(camera, config, context):
     """Set camera config using underlying gphoto object when wrapped by adapter."""
     target = camera._camera if hasattr(camera, '_camera') else camera
@@ -2663,10 +2719,12 @@ def get_camera(camera_name: str):
     _init_camera_claiming_usb(camera, context, camera_name)
 
     # Post-init configuration (capture target, drive mode)
+    vendor = _vendor_from_model_name(camera_name)
     try:
         config = gp.check_result(gp.gp_camera_get_config(camera, context))
+        vendor = _detect_vendor(camera_name, config)
         # Skip Sony cameras, as this option is set in stone once USB is connected
-        if not _is_sony_camera_instance(camera):
+        if vendor != 'Sony':
             # find the capture target config item (to save to the memory card)
             capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
             # set value — search for the memory-card entry by name, not by blind index
@@ -2695,18 +2753,7 @@ def get_camera(camera_name: str):
         camera_log(camera_name).error('get_camera: camera object was not created')
         raise CameraError(f'Could not create camera object for {camera_name}')
 
-    if "Canon" in camera_name:
-        logging.debug('Wrapping camera %s as CanonCamera', camera_name)
-        return CanonCamera(camera, camera_name)
-    elif "Nikon" in camera_name:
-        logging.debug('Wrapping camera %s as NikonCamera', camera_name)
-        return NikonCamera(camera, camera_name)
-    elif _is_sony_model(camera_name):
-        logging.debug('Wrapping camera %s as SonyCamera', camera_name)
-        return SonyCamera(camera, camera_name)
-    else:
-        logging.debug('Wrapping camera %s as generic GPhotoCameraAdapter', camera_name)
-        return GPhotoCameraAdapter(camera, camera_name)
+    return _wrap_camera(camera, camera_name, vendor, camera_name)
 
 
 def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) -> 'BaseCamera':
@@ -2748,10 +2795,12 @@ def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) 
     _init_camera_claiming_usb(camera, context, model_name)
 
     # Post-init configuration (capture target, drive mode)
+    vendor = _vendor_from_model_name(model_name)
     try:
         config = gp.check_result(gp.gp_camera_get_config(camera, context))
+        vendor = _detect_vendor(model_name, config)
         # Skip Sony cameras, as this option is set in stone once USB is connected
-        if not _is_sony_model(model_name):
+        if vendor != 'Sony':
             capture_target = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
             # search for the memory-card entry by name, not by blind index
             value = _find_memory_card_choice(capture_target)
@@ -2772,18 +2821,7 @@ def get_camera_by_port(model_name: str, port: str, alias: Optional[str] = None) 
     if camera is None:
         raise CameraError(f'Could not create camera object for {model_name} at {port}')
 
-    if "Canon" in model_name:
-        logging.debug('Wrapping camera %s as CanonCamera (alias=%s)', model_name, alias)
-        return CanonCamera(camera, display_name)
-    elif "Nikon" in model_name:
-        logging.debug('Wrapping camera %s as NikonCamera (alias=%s)', model_name, alias)
-        return NikonCamera(camera, display_name)
-    elif _is_sony_model(model_name):
-        logging.debug('Wrapping camera %s as SonyCamera (alias=%s)', model_name, alias)
-        return SonyCamera(camera, display_name)
-    else:
-        logging.debug('Wrapping camera %s as GPhotoCameraAdapter (alias=%s)', model_name, alias)
-        return GPhotoCameraAdapter(camera, display_name)
+    return _wrap_camera(camera, model_name, vendor, display_name)
 
 
 def get_serial_number(camera: 'BaseCamera') -> Optional[str]:
