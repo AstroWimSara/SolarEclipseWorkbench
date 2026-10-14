@@ -32,6 +32,7 @@ from solareclipseworkbench.bracketing import (
     DEFAULT_FRAMES, exposure_step, format_ev, hdr_offsets, is_native, native_brackets, parse_bracket,
     parse_hdr_sequence,
 )
+from solareclipseworkbench.sensors import pixel_size_for_model, sensor_for_model
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
     TimingProfile,
@@ -661,6 +662,7 @@ class CameraProfile:
     picture_overhead_s: Optional[float] = None    # measured; None: not measured
     burst_overhead_s: Optional[float] = None
     brackets: List[str] = field(default_factory=list)   # brackets the camera takes itself, e.g. "1 3"
+    pixel_size_um: Optional[float] = None         # from the camera model (see sensors); None: not listed
     tested: str = ""                              # date and time of the test
     full_test: bool = False
 
@@ -744,7 +746,7 @@ def read_camera_profile(camera) -> CameraProfile:
 
     return CameraProfile(camera=name, vendor=vendor, shutter_speeds=speeds, isos=sorted(set(isos)),
                          apertures=apertures, continuous_burst=continuous,
-                         brackets=read_brackets(config, vendor),
+                         brackets=read_brackets(config, vendor), pixel_size_um=pixel_size_for_model(name),
                          tested=time.strftime("%Y-%m-%d %H:%M"))
 
 
@@ -789,6 +791,17 @@ def check_camera(camera, full: bool = False) -> Tuple[TestReport, CameraProfile]
     else:
         report.add(INFO, "The camera offers no bracketing over USB",
                    "take_bracket takes its frames in software: one picture per frame, slower than the camera.")
+
+    sensor = sensor_for_model(name)
+    if sensor is not None:
+        report.add(OK, f"Pixel size {profile.pixel_size_um:.2f} µm",
+                   f"{sensor[0]:g} mm sensor, {sensor[1]} pixels wide.  Used with the focal length to time "
+                   "the first and fourth contact shots.")
+    else:
+        report.add(INFO, "Pixel size not known for this camera model",
+                   "Enter it on the equipment page: the sensor width in mm divided by the image width in "
+                   "pixels, times 1000.  It is used with the focal length to time the first and fourth "
+                   "contact shots.")
 
     check_camera_state(camera, [], report)
 

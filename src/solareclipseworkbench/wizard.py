@@ -56,6 +56,7 @@ from solareclipseworkbench.command_timing import (
     bracket_planning_s,
 )
 from datetime import timedelta
+from solareclipseworkbench.contact_visibility import DEFAULT_PIXEL_SIZE_UM, MAX_STEP_S, contact_step_s
 
 
 # Wizard page IDs
@@ -576,11 +577,26 @@ class EquipmentPage(QWizardPage):
         aperture_range_widget = QWidget()
         aperture_range_widget.setLayout(aperture_range_layout)
         lens_layout.addWidget(aperture_range_widget, 2, 1)
+
+        # Pixel size: with the focal length, it sets how soon the Moon's bite shows after C1
+        lens_layout.addWidget(QLabel("Pixel Size:"), 3, 0)
+        self.pixel_size_spin = QDoubleSpinBox()
+        self.pixel_size_spin.setRange(1.0, 20.0)
+        self.pixel_size_spin.setValue(DEFAULT_PIXEL_SIZE_UM)
+        self.pixel_size_spin.setSingleStep(0.1)
+        self.pixel_size_spin.setDecimals(2)
+        self.pixel_size_spin.setSuffix(" µm")
+        self.pixel_size_spin.setToolTip(
+            "Size of one pixel on the camera sensor: the sensor width in mm divided by the image width in "
+            "pixels, times 1000 (e.g. 35.9 mm / 7952 px = 4.5 µm for a Sony A7R III).  Typical values: "
+            "4.4-6 µm for full frame, 3.7-4.3 µm for APS-C.  Used with the focal length to time the first "
+            "and fourth contact shots.")
+        lens_layout.addWidget(self.pixel_size_spin, 3, 1)
         
         lens_note = QLabel("Note: For telescopes, min and max aperture are often the same (e.g., f/6).")
         lens_note.setWordWrap(True)
         lens_note.setStyleSheet("QLabel { color: #888; font-size: 9pt; font-style: italic; }")
-        lens_layout.addWidget(lens_note, 3, 0, 1, 3)
+        lens_layout.addWidget(lens_note, 4, 0, 1, 3)
         
         lens_group.setLayout(lens_layout)
         layout.addWidget(lens_group)
@@ -688,6 +704,7 @@ class EquipmentPage(QWizardPage):
         # Register fields
         self.registerField("camera_name*", self.camera_name_edit)
         self.registerField("focal_length", self.focal_length_spin, "value")
+        self.registerField("pixel_size", self.pixel_size_spin, "value")
         self.registerField("aperture_min", self.aperture_min_spin, "value")
         self.registerField("aperture_max", self.aperture_max_spin, "value")
         self.registerField("preferred_iso", self.preferred_iso_combo, "currentText")
@@ -715,6 +732,7 @@ class EquipmentPage(QWizardPage):
             # Clear all fields
             self.camera_name_edit.clear()
             self.focal_length_spin.setValue(400)
+            self.pixel_size_spin.setValue(DEFAULT_PIXEL_SIZE_UM)
             self.aperture_min_spin.setValue(5.6)
             self.aperture_max_spin.setValue(8.0)
             self.preferred_iso_combo.setCurrentText("400")
@@ -728,6 +746,10 @@ class EquipmentPage(QWizardPage):
             if camera:
                 self.camera_name_edit.setText(camera["name"])
                 self.focal_length_spin.setValue(camera["focal_length"])
+                # Entered on this page, or else found by Test Camera
+                self.pixel_size_spin.setValue(camera.get("pixel_size")
+                                              or (camera.get("profile") or {}).get("pixel_size_um")
+                                              or DEFAULT_PIXEL_SIZE_UM)
                 self.aperture_min_spin.setValue(camera["aperture_min"])
                 self.aperture_max_spin.setValue(camera["aperture_max"])
                 
@@ -757,6 +779,7 @@ class EquipmentPage(QWizardPage):
         self.config_manager.add_camera(
             name=camera_name,
             focal_length=self.focal_length_spin.value(),
+            pixel_size=self.pixel_size_spin.value(),
             aperture_min=self.aperture_min_spin.value(),
             aperture_max=self.aperture_max_spin.value(),
             filter_nd="5.0",  # Default value for backward compatibility
@@ -894,6 +917,9 @@ class EquipmentPage(QWizardPage):
                 report.add(WARNING, "The ISO range on this page is outside the camera range",
                            f"This page says ISO {iso_min}–{iso_max}, the camera offers ISO "
                            f"{min(profile.isos)}–{max(profile.isos)}.")
+
+        if profile.pixel_size_um is not None:
+            self.pixel_size_spin.setValue(profile.pixel_size_um)
 
         if not self.camera_name_edit.text().strip():
             self.camera_name_edit.setText(camera_name)
@@ -1115,6 +1141,35 @@ class PhenomenaPage(QWizardPage):
         self.c1_c4_check = QCheckBox("First (C1) and Fourth (C4) contacts")
         self.c1_c4_check.setChecked(True)
         phenomena_layout.addWidget(self.c1_c4_check)
+
+        # Step of the contact shots: C1 - step, C1, C1 + step (and the same around C4)
+        contact_step_layout = QHBoxLayout()
+        contact_step_layout.setContentsMargins(20, 0, 0, 0)
+        contact_step_layout.addWidget(QLabel("Shots at C1/C4 ± step:"))
+        self.contact_step_auto_check = QCheckBox("Automatic")
+        self.contact_step_auto_check.setChecked(True)
+        self.contact_step_auto_check.setToolTip(
+            "Nothing is visible at C1 itself: the Moon's bite shows once it is a couple of pixels deep.  "
+            "Automatic works out when that is from the focal length and pixel size on the equipment page "
+            "(tens of seconds with a short lens, a few seconds with a telescope).  The shot after C1 (and "
+            "before C4) then shows the first (last) bite, the shot before C1 (after C4) the whole Sun.")
+        contact_step_layout.addWidget(self.contact_step_auto_check)
+        self.contact_step_spin = QSpinBox()
+        self.contact_step_spin.setRange(2, MAX_STEP_S)
+        self.contact_step_spin.setValue(30)
+        self.contact_step_spin.setSuffix(" s")
+        self.contact_step_spin.setToolTip("Seconds between the contact shots, when not automatic")
+        contact_step_layout.addWidget(self.contact_step_spin)
+        contact_step_layout.addStretch()
+        phenomena_layout.addLayout(contact_step_layout)
+
+        def _update_contact_step():
+            enabled = self.c1_c4_check.isChecked()
+            self.contact_step_auto_check.setEnabled(enabled)
+            self.contact_step_spin.setEnabled(enabled and not self.contact_step_auto_check.isChecked())
+        self.c1_c4_check.toggled.connect(_update_contact_step)
+        self.contact_step_auto_check.toggled.connect(_update_contact_step)
+        _update_contact_step()
         
         # Equispaced filter
         self.equispaced_check = QCheckBox("Equispaced shots during partial phases with filter")
@@ -1392,6 +1447,8 @@ class PhenomenaPage(QWizardPage):
         
         # Register fields
         self.registerField("c1_c4", self.c1_c4_check)
+        self.registerField("contact_step_auto", self.contact_step_auto_check)
+        self.registerField("contact_step", self.contact_step_spin, "value")
         self.registerField("equispaced", self.equispaced_check)
         self.registerField("diamond", self.diamond_check)
         self.registerField("bailys", self.bailys_check)
@@ -1614,6 +1671,13 @@ class SummaryPage(QWizardPage):
         aperture_min = wizard.field('aperture_min')
         aperture_max = wizard.field('aperture_max')
         summary.append(f"Lens: {focal_length}mm, f/{aperture_min}-{aperture_max}")
+        if wizard.field('pixel_size'):
+            summary.append(f"Pixel Size: {float(wizard.field('pixel_size')):.2f} µm")
+        if wizard.field('c1_c4'):
+            if wizard.field('contact_step_auto') is False:
+                summary.append(f"C1/C4 Shots: ± {wizard.field('contact_step')} s")
+            else:
+                summary.append("C1/C4 Shots: ± automatic (when the Moon's bite shows)")
         
         # ISO settings
         preferred_iso = wizard.field('preferred_iso')
@@ -2189,6 +2253,40 @@ class SummaryPage(QWizardPage):
                 start = max(start, 30 + earthshine[3])
             return math.ceil(start)
 
+        # Step of the C1 and C4 shots: C1 - step (whole Sun), C1, C1 + step (first bite), and
+        # C4 - step (last bite), C4, C4 + step.  Automatic: when the bite is deep enough to
+        # show with this focal length and pixel size (see contact_visibility).
+        c1_shutter = get_shutter('partial_c1', '1/800')
+        c4_shutter = get_shutter('partial_c4', '1/800')
+        contact_steps = {"C1": max(2, math.ceil(picture_duration_s(c1_shutter, timing))),
+                         "C4": max(2, math.ceil(picture_duration_s(c4_shutter, timing)))}
+        contact_step_note = None
+        if wizard.field('c1_c4'):
+            if wizard.field('contact_step_auto') is False:
+                manual_step = int(wizard.field('contact_step') or 0)
+                contact_steps = {contact: max(minimum, manual_step) for contact, minimum in contact_steps.items()}
+                contact_step_note = "set in the wizard"
+            else:
+                focal_length = float(wizard.field('focal_length') or 0)
+                pixel_size = float(wizard.field('pixel_size') or DEFAULT_PIXEL_SIZE_UM)
+                try:
+                    visible = contact_step_s(str(eclipse_time).split(' ')[0], latitude, longitude, altitude,
+                                             focal_length, pixel_size)
+                except Exception as e:
+                    logging.warning("Could not work out when the Moon's bite shows at C1/C4: %s", e)
+                    visible = None
+                if visible is not None:
+                    contact_steps = {contact: max(minimum, visible[contact])
+                                     for contact, minimum in contact_steps.items()}
+                    contact_step_note = (f"when the Moon's bite is visible at {focal_length:.0f} mm with "
+                                         f"{pixel_size:.2f} µm pixels")
+        # Partial-phase shots start after the C1 + step shot and end before the C4 - step shot
+        c1_clear_s = buffer_seconds
+        c4_clear_s = buffer_seconds
+        if wizard.field('c1_c4'):
+            c1_clear_s = max(buffer_seconds, contact_steps["C1"] + math.ceil(picture_duration_s(c1_shutter, timing)))
+            c4_clear_s = max(buffer_seconds, contact_steps["C4"] + math.ceil(picture_duration_s("1", timing)))
+
         # C1 and C4 contacts
         if wizard.field('c1_c4'):
             # Check if sun is above horizon at C1
@@ -2204,9 +2302,9 @@ class SummaryPage(QWizardPage):
                     # Only add C1 shots if sun is above horizon
                     if _sun_above_horizon(timings, c1_time):
                         lines.append("# First contact (C1) - with solar filter")
-                        c1_shutter = get_shutter('partial_c1', '1/800')
-                        # Spaced by the time a picture takes on this camera (2 s by default)
-                        step = max(2, math.ceil(picture_duration_s(c1_shutter, timing)))
+                        step = contact_steps["C1"]
+                        if contact_step_note:
+                            lines.append(f"# Shots {step}s apart: {contact_step_note}")
                         lines.append(f'take_picture, C1, -, {_offset_str(step)}, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1-{step}s)"')
                         lines.append(f'take_picture, C1, +, 0:00:00.0, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1)"')
                         lines.append(f'take_picture, C1, +, {_offset_str(step)}, {camera_name}, {c1_shutter}, {aperture}, {preferred_iso}, "First contact (C1+{step}s)"')
@@ -2247,8 +2345,8 @@ class SummaryPage(QWizardPage):
                     # Calculate interval in seconds for C1-C2 phase
                     # Add buffer times to avoid conflicts with contact pictures
                     # (c2_buffer leaves room for the bursts before C2)
-                    c1_c2_duration = (c2_time - c1_time).total_seconds() - buffer_seconds - c2_buffer
-                    c1_start_time = c1_time + timedelta(seconds=buffer_seconds)
+                    c1_c2_duration = (c2_time - c1_time).total_seconds() - c1_clear_s - c2_buffer
+                    c1_start_time = c1_time + timedelta(seconds=c1_clear_s)
                     c2_end_time = c2_time - timedelta(seconds=c2_buffer)
                     
                     if wizard.field('partial_magnitude'):
@@ -2342,9 +2440,9 @@ class SummaryPage(QWizardPage):
                     lines.append("#")
                     
                     # c3_buffer leaves room for the bursts after C3
-                    c3_c4_duration = (c4_time - c3_time).total_seconds() - c3_buffer - buffer_seconds
+                    c3_c4_duration = (c4_time - c3_time).total_seconds() - c3_buffer - c4_clear_s
                     c3_start_time = c3_time + timedelta(seconds=c3_buffer)
-                    c4_end_time = c4_time - timedelta(seconds=buffer_seconds)
+                    c4_end_time = c4_time - timedelta(seconds=c4_clear_s)
                     
                     if wizard.field('partial_magnitude'):
                         magnitude_interval = wizard.field('magnitude_value')
@@ -2433,10 +2531,9 @@ class SummaryPage(QWizardPage):
                         lines.append(f"# Shots every {seconds_interval} seconds")
                     lines.append("#")
 
-                    buffer_seconds = 10
-                    c1_c4_duration = (c4_time - c1_time).total_seconds() - 2 * buffer_seconds
-                    c1_start_time = c1_time + timedelta(seconds=buffer_seconds)
-                    c4_end_time = c4_time - timedelta(seconds=buffer_seconds)
+                    c1_c4_duration = (c4_time - c1_time).total_seconds() - c1_clear_s - c4_clear_s
+                    c1_start_time = c1_time + timedelta(seconds=c1_clear_s)
+                    c4_end_time = c4_time - timedelta(seconds=c4_clear_s)
 
                     if wizard.field('partial_magnitude'):
                         magnitude_interval = wizard.field('magnitude_value')
@@ -2883,8 +2980,9 @@ class SummaryPage(QWizardPage):
                     # Only add C4 shots if sun is above horizon
                     if _sun_above_horizon(timings, c4_time):
                         lines.append("# Fourth contact (C4) - with solar filter")
-                        c4_shutter = get_shutter('partial_c4', '1/800')
-                        step = max(2, math.ceil(picture_duration_s(c4_shutter, timing)))
+                        step = contact_steps["C4"]
+                        if contact_step_note:
+                            lines.append(f"# Shots {step}s apart: {contact_step_note}")
                         lines.append(f'take_picture, C4, -, {_offset_str(step)}, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4-{step}s)"')
                         lines.append(f'take_picture, C4, +, 0:00:00.0, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4)"')
                         lines.append(f'take_picture, C4, +, {_offset_str(step)}, {camera_name}, {c4_shutter}, {aperture}, {preferred_iso}, "Fourth contact (C4+{step}s)"')

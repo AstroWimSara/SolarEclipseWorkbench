@@ -85,7 +85,7 @@ class ConfigManager:
 
     def add_camera(self, name: str, focal_length: int, aperture_min: float,
                    aperture_max: float, filter_nd: str, preferred_iso: int = 400,
-                   iso_min: int = 100, iso_max: int = 1600) -> None:
+                   iso_min: int = 100, iso_max: int = 1600, pixel_size: Optional[float] = None) -> None:
         """Add or update a camera configuration."""
         for camera in self.config["cameras"]:
             if camera["name"] == name:
@@ -98,6 +98,8 @@ class ConfigManager:
                     "iso_min": iso_min,
                     "iso_max": iso_max,
                 })
+                if pixel_size is not None:
+                    camera["pixel_size"] = pixel_size
                 self.save_config()
                 return
         self.config["cameras"].append({
@@ -109,6 +111,7 @@ class ConfigManager:
             "preferred_iso": preferred_iso,
             "iso_min": iso_min,
             "iso_max": iso_max,
+            **({"pixel_size": pixel_size} if pixel_size is not None else {}),
         })
         self.save_config()
 
