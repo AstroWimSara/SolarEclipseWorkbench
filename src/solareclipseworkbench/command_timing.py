@@ -192,6 +192,14 @@ C3_BEADS_START_S = 1
 # Shooting starts about this long after a take_burst command: the camera
 # configuration is written first.
 BURST_LEAD_S = 1.0
+# A Sony shoots within 0.2 to 0.3 s when its settings do not change (measured on
+# an A7R IIIA, discussion #192), as they do not after a prepare_camera.
+BURST_LEAD_BY_VENDOR_S = {"Sony": 0.3}
+
+
+def burst_lead_s(vendor: Optional[str]) -> float:
+    """Seconds from a take_burst command until the camera starts shooting."""
+    return BURST_LEAD_BY_VENDOR_S.get(vendor, BURST_LEAD_S)
 
 
 @dataclass(frozen=True)
@@ -232,17 +240,18 @@ def prepare_duration_s(switch_s: float, profile: TimingProfile = DEFAULT_PROFILE
     return profile.picture_overhead_s + switch_s
 
 
-def beads_burst_start(window: Tuple[float, float], shooting_s: float) -> float:
+def beads_burst_start(window: Tuple[float, float], shooting_s: float, lead_s: float = BURST_LEAD_S) -> float:
     """When to start a beads burst so its shooting is centred on the Baily's beads window.
 
     Args:
         - window: Start and end of the window, in seconds relative to the contact (negative: before it)
         - shooting_s: Time the shutter is held during the burst
+        - lead_s: Seconds from the command until the camera starts shooting (see burst_lead_s)
 
     Returns: Start of the take_burst command in seconds relative to the contact, to a tenth of a second.
     """
     centre = (window[0] + window[1]) / 2
-    return round(centre - shooting_s / 2 - BURST_LEAD_S, 1)
+    return round(centre - shooting_s / 2 - lead_s, 1)
 
 
 def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
@@ -275,8 +284,9 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
     beads_timed = beads_c2 is not None and beads_c3 is not None
     if beads_timed:
         shooting_s = burst_shooting_s(vendor, burst_param, profile)
-        c2_beads_start = -beads_burst_start(beads_c2, shooting_s)
-        c3_beads_start = beads_burst_start(beads_c3, shooting_s)
+        lead_s = burst_lead_s(vendor)
+        c2_beads_start = -beads_burst_start(beads_c2, shooting_s, lead_s)
+        c3_beads_start = beads_burst_start(beads_c3, shooting_s, lead_s)
     else:
         c2_beads_start = C2_BEADS_START_S
         c3_beads_start = C3_BEADS_START_S

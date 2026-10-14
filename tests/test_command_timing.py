@@ -8,6 +8,7 @@ import pytz
 
 from solareclipseworkbench.command_timing import (
     BURST_LEAD_S,
+    burst_lead_s,
     burst_duration_s,
     burst_shooting_s,
     contact_burst_plan,
@@ -169,7 +170,7 @@ def test_the_beads_bursts_are_centred_on_the_bead_windows(vendor):
 
     assert plan.beads_timed
     for start, window in ((-plan.c2_beads_start, beads_c2), (plan.c3_beads_start, beads_c3)):
-        shooting_centre = start + BURST_LEAD_S + shooting / 2
+        shooting_centre = start + burst_lead_s(vendor) + shooting / 2
         assert shooting_centre == pytest.approx(sum(window) / 2, abs=0.05)
 
 
@@ -232,3 +233,15 @@ def test_prepare_drive_modes():
     assert drive_mode("prepare_camera", "burst") == drive_mode("take_burst")
     assert drive_mode("prepare_camera", "single") == drive_mode("take_picture")
     assert drive_mode("prepare_camera", '"1 5"') == drive_mode("take_bracket", '"1 5"')
+
+
+def test_a_sony_starts_shooting_sooner_after_a_burst_command():
+    """Discussion #192: an A7R IIIA shoots within 0.2-0.3 s when its settings do not change."""
+    assert burst_lead_s("Sony") == 0.3
+    assert burst_lead_s("Canon") == burst_lead_s("Nikon") == burst_lead_s(None) == BURST_LEAD_S
+    window = (-0.1, 3.1)
+    sony = contact_burst_plan("Sony", beads_c2=window, beads_c3=window)
+    canon = contact_burst_plan("Canon", beads_c2=window, beads_c3=window)
+    # Same shooting time (Sony and Canon both hold the shutter 2 s), so the Sony command comes 0.7 s later
+    assert sony.c3_beads_start - canon.c3_beads_start == pytest.approx(0.7)
+    assert canon.c2_beads_start - sony.c2_beads_start == pytest.approx(0.7)

@@ -17,7 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
 
 from solareclipseworkbench import hardware_problems, limb_correction
-from solareclipseworkbench.command_timing import BURST_LEAD_S, burst_shooting_s, vendor_from_name
+from solareclipseworkbench.command_timing import burst_lead_s, burst_shooting_s, vendor_from_name
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.utils import schedule_commands
 from solareclipseworkbench.wizard import SummaryPage
@@ -76,7 +76,7 @@ def test_the_beads_bursts_are_centred_on_the_bead_windows(moments, camera_name):
         at, reference, fields = _command(script, f"{contact} beads")
         assert reference == contact
         shooting = burst_shooting_s(vendor, float(fields[-2]))
-        shooting_centre = moments[contact].time_utc + timedelta(seconds=at + BURST_LEAD_S + shooting / 2)
+        shooting_centre = moments[contact].time_utc + timedelta(seconds=at + burst_lead_s(vendor) + shooting / 2)
         window_centre = moments[f"BEADS_{contact}"].time_utc
         assert abs((shooting_centre - window_centre).total_seconds()) <= 0.1, script
         assert f"# Baily's beads window ({contact}): " in script
