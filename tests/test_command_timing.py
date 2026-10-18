@@ -8,6 +8,7 @@ import pytz
 
 from solareclipseworkbench.command_timing import (
     BURST_LEAD_S,
+    planning_profile,
     burst_lead_s,
     burst_duration_s,
     burst_shooting_s,
@@ -152,7 +153,10 @@ def test_wizard_contact_plan_follows_the_phenomena(vendor):
 def test_sony_burst_is_given_in_seconds():
     """Sony's take_burst holds the shutter for N seconds: 30 would shoot through early totality."""
     assert contact_burst_plan("Sony").burst_param == 2
-    assert contact_burst_plan("Nikon").burst_param == 30
+    # Nikon: 2 s worth of frames, at the assumed or the measured frame rate
+    assert contact_burst_plan("Nikon").burst_param == 20
+    assert contact_burst_plan("Nikon", profile=planning_profile("Nikon", burst_overhead_s=0.5,
+                                                               burst_fps=20.0)).burst_param == 40
 
 
 def test_without_bursts_neighbouring_shots_keep_their_usual_distance():
@@ -245,3 +249,139 @@ def test_a_sony_starts_shooting_sooner_after_a_burst_command():
     # Same shooting time (Sony and Canon both hold the shutter 2 s), so the Sony command comes 0.7 s later
     assert sony.c3_beads_start - canon.c3_beads_start == pytest.approx(0.7)
     assert canon.c2_beads_start - sony.c2_beads_start == pytest.approx(0.7)
+
+
+# --- Measured Nikon bursts and the timing recorded in a script -----------------
+
+from solareclipseworkbench.command_timing import (  # noqa: E402
+    CONTACT_BURST_S, DEFAULT_PROFILE, DIAMOND_RING_SHIFT_MAX_S, MAX_BEADS_BURST_S, BURST_MARGIN_S,
+    TimingProfile, fit_test_bursts, nikon_burst_fit, parse_timing_directives, timing_directive,
+)
+
+
+def test_fast_nikon_burst_is_planned_shorter_than_the_default_but_longer_than_measured():
+    """Z 8 with a CFexpress card: 30 frames at 20 fps, 0.6 s overhead -> 2.1 s busy."""
+    profile = planning_profile("Nikon", burst_overhead_s=0.6, burst_fps=20.0)
+    planned = burst_duration_s("Nikon", 30, profile)
+    assert planned < burst_duration_s("Nikon", 30)
+    assert planned >= 2.1 + BURST_MARGIN_S
+    assert burst_shooting_s("Nikon", 30, profile) == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize("vendor", ["Canon", "Sony", None])
+def test_fast_canon_and_sony_bursts_are_planned_shorter_than_the_default(vendor):
+    """An EOS R5 with a CFexpress card: 1 s and 5 s bursts busy for 1.8 s and 5.8 s."""
+    fit = fit_test_bursts(vendor, (1.0, 1.8), (5.0, 5.8))
+    assert fit.busy_per_s == pytest.approx(1.0) and fit.overhead_s == pytest.approx(0.8)
+    profile = planning_profile(vendor, burst_overhead_s=fit.overhead_s, burst_busy_per_s=fit.busy_per_s,
+                               burst_max_s=fit.max_s)
+    planned = burst_duration_s(vendor, 2, profile)
+    assert planned < burst_duration_s(vendor, 2)
+    assert planned >= 2.8 + BURST_MARGIN_S
+    # A slow camera is planned longer than the default
+    assert planning_profile(vendor, burst_overhead_s=9.0).burst_overhead_s == pytest.approx(14.5)
+
+
+def test_untested_nikon_keeps_the_defaults():
+    assert planning_profile("Nikon") == DEFAULT_PROFILE
+
+
+def test_nikon_frame_rate_and_overhead_from_two_bursts():
+    fps, overhead = nikon_burst_fit((10, 0.6 + 10 / 20), (30, 0.6 + 30 / 20))
+    assert fps == pytest.approx(20.0)
+    assert overhead == pytest.approx(0.6)
+
+
+def test_implausible_nikon_frame_rate_falls_back_to_the_default():
+    """Same time for 10 and 30 frames: no rate can be read, the overhead uses NIKON_BURST_FPS."""
+    fps, overhead = nikon_burst_fit((10, 5.0), (30, 5.0))
+    assert fps is None
+    assert overhead == pytest.approx(5.0 - 30 / DEFAULT_PROFILE.nikon_burst_fps)
+
+
+@pytest.mark.parametrize("short, long", [((10, 0.9), (30, 1.4)), ((10, 3.0), (30, 2.0)), ((10, 1.0), (30, 9.0))])
+def test_planned_nikon_burst_always_outlasts_the_measured_one(short, long):
+    fps, overhead = nikon_burst_fit(short, long)
+    profile = planning_profile("Nikon", burst_overhead_s=overhead, burst_fps=fps)
+    assert burst_duration_s("Nikon", long[0], profile) >= long[1] + BURST_MARGIN_S - 0.1
+
+
+def test_timing_directive_round_trip():
+    profile = TimingProfile(picture_overhead_s=2.4, burst_overhead_s=1.9, nikon_burst_fps=19.6,
+                            burst_busy_per_s=1.2, burst_max_s=4.5)
+    line = timing_directive("Nikon Z 8", profile)
+    assert line.startswith("# timing: Nikon Z 8;")
+    lines = ["# header", line, "# timing: broken; burst_overhead_s=abc", "# timing: neg; burst_overhead_s=-1",
+             'take_picture, C2, -, 0:10:00.0, Nikon Z 8, 1/1000, 8, 100, "Partial"']
+    assert parse_timing_directives(lines) == {"Nikon Z 8": profile}
+
+
+
+# --- Beads bursts that cover the Baily's beads window ----------------------------
+
+TESTED_CANON = planning_profile("Canon", burst_overhead_s=3.0, burst_busy_per_s=1.0, burst_max_s=5.0)
+TESTED_Z8 = planning_profile("Nikon", burst_overhead_s=0.6, burst_fps=20.0, burst_max_s=5.0)
+
+
+def test_canon_and_sony_test_bursts_give_the_time_per_second_of_shooting():
+    fit = fit_test_bursts("Canon", (1.0, 4.5), (5.0, 10.5))
+    assert fit.busy_per_s == pytest.approx(1.5)
+    assert fit.overhead_s == pytest.approx(3.0)
+    assert fit.max_s == 5.0
+
+
+@pytest.mark.parametrize("short, long", [((1.0, 7.0), (5.0, 7.5)), ((1.0, 2.0), (5.0, 30.0)), ((1.0, 6.0), (5.0, 9.0))])
+def test_planned_canon_burst_covers_both_test_bursts(short, long):
+    fit = fit_test_bursts("Canon", short, long)
+    profile = planning_profile("Canon", burst_overhead_s=fit.overhead_s, burst_busy_per_s=fit.busy_per_s,
+                               burst_max_s=fit.max_s)
+    for seconds, busy in (short, long):
+        assert burst_duration_s("Canon", seconds, profile) >= busy - 0.01
+
+
+@pytest.mark.parametrize("vendor, profile", [("Canon", TESTED_CANON), ("Sony", TESTED_CANON), ("Nikon", TESTED_Z8)])
+def test_a_tested_camera_covers_the_beads_window(vendor, profile):
+    beads_c2, beads_c3 = (-1.0, 2.0), (-0.5, 3.0)
+    plan = contact_burst_plan(vendor, profile=profile, beads_c2=beads_c2, beads_c3=beads_c3)
+    for start, shooting, window in ((-plan.c2_beads_start, plan.c2_beads_shooting_s, beads_c2),
+                                    (plan.c3_beads_start, plan.c3_beads_shooting_s, beads_c3)):
+        # The window plus 0.5 s either side, centred on it
+        assert shooting == pytest.approx(window[1] - window[0] + 1.0, abs=0.06)
+        assert start + burst_lead_s(vendor) + shooting / 2 == pytest.approx(sum(window) / 2, abs=0.06)
+    # The diamond ring bursts wait for the beads bursts and the first totality shot for the C2 beads
+    assert plan.c3_diamond_start - plan.c3_beads_start >= plan.c3_beads_s
+    assert plan.c2_diamond_start - plan.c2_beads_start >= plan.burst_s
+    assert plan.totality_first_shot >= plan.c2_beads_s - plan.c2_beads_start
+
+
+def test_nikon_beads_burst_is_given_in_frames():
+    plan = contact_burst_plan("Nikon", profile=TESTED_Z8, beads_c2=(-1.0, 2.0), beads_c3=(-0.5, 3.0))
+    assert plan.c2_beads_param == 80              # 4 s at 20 fps
+    assert plan.c3_beads_param == 90              # 4.5 s at 20 fps
+    assert plan.burst_param == 40                 # diamond ring: 2 s
+
+
+def test_an_untested_camera_keeps_two_second_beads_bursts():
+    plan = contact_burst_plan("Canon", beads_c2=(-1.0, 2.0), beads_c3=(-0.5, 3.0))
+    assert plan.c2_beads_shooting_s == plan.c3_beads_shooting_s == CONTACT_BURST_S
+
+
+def test_beads_burst_is_never_longer_than_the_longest_test_burst():
+    plan = contact_burst_plan("Canon", profile=TESTED_CANON, beads_c2=(-4.0, 4.0), beads_c3=(-4.0, 4.0))
+    assert plan.c2_beads_shooting_s <= MAX_BEADS_BURST_S
+    short_test = planning_profile("Canon", burst_overhead_s=3.0, burst_max_s=3.0)
+    plan = contact_burst_plan("Canon", profile=short_test, beads_c2=(-4.0, 4.0), beads_c3=(-4.0, 4.0))
+    assert plan.c2_beads_shooting_s == plan.c3_beads_shooting_s == 3.0
+
+
+def test_beads_burst_is_shortened_so_the_diamond_ring_burst_stays_close():
+    """A camera that needs 3 s per second of shooting: a full-window C3 beads burst pushes the diamond ring late."""
+    slow = planning_profile("Canon", burst_overhead_s=3.0, burst_busy_per_s=3.0, burst_max_s=5.0)
+    window = (-0.5, 3.0)
+    standard = contact_burst_plan("Canon", profile=planning_profile("Canon", burst_overhead_s=3.0,
+                                                                    burst_busy_per_s=3.0),
+                                  beads_c2=window, beads_c3=window)
+    plan = contact_burst_plan("Canon", profile=slow, beads_c2=window, beads_c3=window)
+    assert CONTACT_BURST_S < plan.c3_beads_shooting_s < window[1] - window[0] + 1.0
+    assert plan.c3_diamond_start - standard.c3_diamond_start <= DIAMOND_RING_SHIFT_MAX_S
+    assert plan.c2_diamond_start - standard.c2_diamond_start <= DIAMOND_RING_SHIFT_MAX_S

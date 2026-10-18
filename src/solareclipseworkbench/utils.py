@@ -12,7 +12,7 @@ from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S, parse_prepare_mode
 from solareclipseworkbench.command_timing import (
     vendor_from_name, picture_duration_s, burst_duration_s, hdr_duration_s, bracket_duration_s,
-    drive_mode, mode_switch_s, TimingProfile, DEFAULT_PROFILE,
+    drive_mode, mode_switch_s, TimingProfile, DEFAULT_PROFILE, parse_timing_directives,
 )
 from solareclipseworkbench.notifications import check_notification
 from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
@@ -304,6 +304,13 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
     script_file = scripts.convert_script(filename, reference_moments)
     script_file.seek(0)
 
+    # A script fitted to a tested camera records the timing it was planned with
+    try:
+        with open(filename, encoding="utf-8", errors="replace") as f:
+            timing_profiles = parse_timing_directives(f)
+    except OSError:
+        timing_profiles = {}
+
     unknown: dict = {}
 
     # Loop over all lines in script file
@@ -311,7 +318,7 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
     for cmd_str in script_file:
         window = schedule_command(
             scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start,
-            gps_time_offset=gps_time_offset, unknown_moments=unknown)
+            gps_time_offset=gps_time_offset, unknown_moments=unknown, timing_profiles=timing_profiles)
         if window is not None:
             busy_windows.append(window)
 
@@ -496,7 +503,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                      controller: SolarEclipseController, reference_moment_for_simulation: str,
                      simulated_start: datetime,
                      gps_time_offset: timedelta = timedelta(0),
-                     unknown_moments: Optional[dict] = None) -> Optional[CameraBusyWindow]:
+                     unknown_moments: Optional[dict] = None,
+                     timing_profiles: Optional[dict] = None) -> Optional[CameraBusyWindow]:
     """ Schedule the given command with the given scheduler and reference moments.
 
     Args:
@@ -514,6 +522,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                             fire at the correct GPS-referenced wall-clock time.  Defaults to timedelta(0).
         - unknown_moments: When given, a line asking for a reference moment that does not exist is counted
                            here, as {name: number of lines lost}, so the caller can report it.
+        - timing_profiles: Timing per camera name the script was planned with (see
+                           command_timing.parse_timing_directives); other cameras use the defaults.
 
     Returns: For a camera command, when it starts and how long it is expected to keep the camera
              busy; None otherwise (or when the command was not scheduled).
@@ -673,7 +683,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
     if camera_obj is None:
         return None
-    return camera_busy_window(execution_time, func_name, script_args, description, camera_obj)
+    profile = (timing_profiles or {}).get(script_args[0].strip(), DEFAULT_PROFILE)
+    return camera_busy_window(execution_time, func_name, script_args, description, camera_obj, profile)
 
 # Main
 def main():

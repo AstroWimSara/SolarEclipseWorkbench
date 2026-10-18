@@ -54,6 +54,7 @@ from solareclipseworkbench.command_timing import (
     picture_duration_s,
     hdr_duration_s,
     bracket_planning_s,
+    timing_directive,
 )
 from datetime import timedelta
 from solareclipseworkbench.contact_visibility import DEFAULT_PIXEL_SIZE_UM, MAX_STEP_S, contact_step_s
@@ -2164,6 +2165,13 @@ class SummaryPage(QWizardPage):
             """'C2-0.5s' / 'C3+1.0s', for comments."""
             return f"{reference}{round(seconds_after, 1) + 0.0:+.1f}s"
 
+        def _beads_comment(shooting_s, busy_s):
+            """How long a beads burst shoots and keeps the camera busy."""
+            frames = (f" ({round(shooting_s * timing.nikon_burst_fps)} frames at {timing.nikon_burst_fps:g} "
+                      "frames per second)" if vendor == "Nikon" else "")
+            return (f"# The beads burst shoots for {shooting_s:.1f}s{frames} and keeps the camera busy "
+                    f"for ~{busy_s:.0f}s.")
+
         def _window_comment(contact):
             start, end = bead_windows[contact]
             return (f"# Baily's beads window ({contact}): {_relative(contact, start)} to "
@@ -2632,9 +2640,10 @@ class SummaryPage(QWizardPage):
                 if plan.beads_timed:
                     lines.append(_window_comment("C2"))
                     lines.append("# The beads burst is centred on that window.")
-                lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the diamond ring")
-                lines.append(f"# burst starts at {_relative('C2', -c2_diamond_start)} and the beads burst at "
+                lines.append(f"# The diamond ring burst keeps the camera busy for ~{contact_burst_s:.0f}s, so it starts at "
+                             f"{_relative('C2', -c2_diamond_start)} and the beads burst at "
                              f"{_relative('C2', -c2_beads_start)}.")
+                lines.append(_beads_comment(plan.c2_beads_shooting_s, plan.c2_beads_s))
                 beads_shutter = get_shutter('bailys_beads_c2', '1/500')
                 diamond_shutter = get_shutter('diamond_ring_c2', '1/250')
 
@@ -2642,8 +2651,8 @@ class SummaryPage(QWizardPage):
                     lines.append(f"# The camera needs ~{plan.switch_s:.0f}s to switch from single pictures to continuous "
                                  f"shooting, so it is set up at {_relative('C2', -plan.c2_prepare_start)}.")
                     lines.append(f'prepare_camera, {_contact_offset("C2", -plan.c2_prepare_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, burst, "Prepare for C2 diamond ring"')
-                lines.append(f'take_burst, {_contact_offset("C2", -c2_diamond_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 diamond ring"')
-                lines.append(f'take_burst, {_contact_offset("C2", -c2_beads_start)}, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C2 beads"')
+                lines.append(f'take_burst, {_contact_offset("C2", -c2_diamond_start)}, {camera_name}, {diamond_shutter}, {aperture}, {preferred_iso}, {contact_burst_param:g}, "C2 diamond ring"')
+                lines.append(f'take_burst, {_contact_offset("C2", -c2_beads_start)}, {camera_name}, {beads_shutter}, {aperture}, {preferred_iso}, {plan.c2_beads_param:g}, "C2 beads"')
                 lines.append("")
             
             # Totality/Annularity - Corona
@@ -2950,9 +2959,9 @@ class SummaryPage(QWizardPage):
                 if plan.beads_timed:
                     lines.append(_window_comment("C3"))
                     lines.append("# The beads burst is centred on that window.")
-                lines.append(f"# Each burst keeps the camera busy for ~{contact_burst_s:.0f}s, so the beads burst")
-                lines.append(f"# starts at {_relative('C3', c3_beads_start)} and the diamond ring burst at "
-                             f"{_relative('C3', c3_diamond_start)}.")
+                lines.append(_beads_comment(plan.c3_beads_shooting_s, plan.c3_beads_s))
+                lines.append(f"# The beads burst starts at {_relative('C3', c3_beads_start)} and the diamond ring burst "
+                             f"at {_relative('C3', c3_diamond_start)}.")
                 diamond_c3_shutter = get_shutter('diamond_ring_c3', '1/250')
                 beads_c3_shutter = get_shutter('bailys_beads_c3', '1/500')
 
@@ -2960,8 +2969,8 @@ class SummaryPage(QWizardPage):
                     lines.append(f"# The camera needs ~{plan.switch_s:.0f}s to switch to continuous shooting after the "
                                  f"totality shots, so it is set up at {_relative('C3', plan.c3_prepare_start)}.")
                     lines.append(f'prepare_camera, {_contact_offset("C3", plan.c3_prepare_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, burst, "Prepare for C3 beads"')
-                lines.append(f'take_burst, {_contact_offset("C3", c3_beads_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 beads"')
-                lines.append(f'take_burst, {_contact_offset("C3", c3_diamond_start)}, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param}, "C3 diamond ring"')
+                lines.append(f'take_burst, {_contact_offset("C3", c3_beads_start)}, {camera_name}, {beads_c3_shutter}, {aperture}, {preferred_iso}, {plan.c3_beads_param:g}, "C3 beads"')
+                lines.append(f'take_burst, {_contact_offset("C3", c3_diamond_start)}, {camera_name}, {diamond_c3_shutter}, {aperture}, {preferred_iso}, {contact_burst_param:g}, "C3 diamond ring"')
                 lines.append("# REPLACE SOLAR FILTER after C3!")
                 lines.append("")
         
@@ -3005,11 +3014,14 @@ class SummaryPage(QWizardPage):
             limits = ExposureLimits(int(wizard.field('iso_min')), int(wizard.field('iso_max')),
                                     float(wizard.field('aperture_min')), float(wizard.field('aperture_max')))
             lines, self._adaptation = adapt_script_lines(lines, camera_name, camera_profile, limits)
-            lines[header_end:header_end] = separator + self._adaptation.header_lines(camera_profile)
+            header = self._adaptation.header_lines(camera_profile)
         else:
-            lines[header_end:header_end] = separator + [
-                "# Camera not tested: standard shutter speeds and estimated timing are used.",
-                "# Use 'Test Camera...' in the wizard to fit the script to the camera."]
+            header = ["# Camera not tested: standard shutter speeds and estimated timing are used.",
+                      "# Use 'Test Camera...' in the wizard to fit the script to the camera."]
+        if camera_profile is not None and camera_profile.full_test:
+            # SEW checks the script against the timing it was planned with
+            header.append(timing_directive(camera_name, timing))
+        lines[header_end:header_end] = separator + header
 
         # Kept for the camera test, which needs the contact times.
         self._last_timings = timings

@@ -159,7 +159,7 @@ def test_full_test_finds_a_camera_that_is_slower_than_planned(monkeypatch):
         clock["now"] += 1.5
 
     def fake_burst(camera, settings, duration):
-        clock["now"] += 10.0
+        clock["now"] += duration + 8.0
 
     monkeypatch.setattr(cam_module, "take_picture", fake_picture)
     monkeypatch.setattr(cam_module, "take_burst", fake_burst)
@@ -175,7 +175,7 @@ def test_full_test_finds_a_camera_that_is_slower_than_planned(monkeypatch):
     assert any(t.startswith("All 3 camera commands fit") for t in _titles(settings_only, OK))
 
     full = check_script_with_cameras(script, REFERENCE_MOMENTS, {"Canon EOS R": camera}, "Canon EOS R", full=True)
-    assert full.profile.burst_overhead_s == pytest.approx(8.0)
+    assert full.profile.burst_overhead_s == pytest.approx(1.5 * 8.0 + 1.0)
     skipped = next(i for i in full.items if "would be skipped" in i.title)
     assert skipped.status == ERROR and "Pre-C2 beads" in skipped.detail
     assert "Camera clock set and verified" in _titles(full, OK)
@@ -186,7 +186,7 @@ def test_full_test_finds_a_camera_that_is_slower_than_planned(monkeypatch):
 from solareclipseworkbench.camera_check import (  # noqa: E402
     CameraProfile, ExposureLimits, adapt_script_lines, check_camera, fit_exposure, read_camera_profile,
 )
-from solareclipseworkbench.command_timing import contact_burst_plan  # noqa: E402
+from solareclipseworkbench.command_timing import DEFAULT_PROFILE, contact_burst_plan  # noqa: E402
 
 PROFILE_1000D = CameraProfile(
     "Canon EOS 1000D", "Canon",
@@ -252,20 +252,96 @@ def test_script_lines_are_rewritten_with_a_note_and_other_cameras_are_untouched(
     assert summary.changed == 2
 
 
-def test_measured_durations_are_used_for_planning_but_never_below_the_defaults():
+def test_measured_durations_are_used_for_planning_with_a_margin_for_bursts():
     slow = CameraProfile("cam", "Canon", picture_overhead_s=3.0, burst_overhead_s=9.0)
     quick = CameraProfile("cam", "Canon", picture_overhead_s=0.5, burst_overhead_s=1.0)
-    assert contact_burst_plan("Canon", True, slow.timing_profile()).c2_diamond_start == 4 + 11
-    assert contact_burst_plan("Canon", True, quick.timing_profile()).c2_diamond_start == 4 + 8
+    # 2 s burst + 1.5 x 9 + 1 = 16.5 s; 2 s + 1.5 x 1 + 1 = 4.5 s (untested: 2 + 6 = 8 s)
+    assert contact_burst_plan("Canon", True, slow.timing_profile()).c2_diamond_start == 4 + 17
+    assert contact_burst_plan("Canon", True, quick.timing_profile()).c2_diamond_start == 4 + 5
+    # A picture is never planned below the default
+    assert quick.timing_profile().picture_overhead_s == DEFAULT_PROFILE.picture_overhead_s
 
 
 def test_full_camera_test_measures_picture_and_burst(monkeypatch):
     clock = {"now": 0.0}
     monkeypatch.setattr(camera_check, "_clock", lambda: clock["now"])
     monkeypatch.setattr(cam_module, "take_picture", lambda c, s: clock.update(now=clock["now"] + 2.5))
-    monkeypatch.setattr(cam_module, "take_burst", lambda c, s, d: clock.update(now=clock["now"] + 11.0))
+    monkeypatch.setattr(cam_module, "take_burst", lambda c, s, d: clock.update(now=clock["now"] + d + 9.0))
     report, profile = check_camera(FakeCanon(), full=True)
     assert profile.full_test and profile.clock_settable
     assert profile.picture_overhead_s == pytest.approx(2.5, abs=0.01)
     assert profile.burst_overhead_s == pytest.approx(9.0)
+    assert profile.burst_busy_per_s == pytest.approx(1.0)
+    assert profile.burst_max_s == 5.0
     assert report.worst != ERROR
+
+
+class FakeNikon(FakeCanon):
+    vendor = "Nikon"
+
+    def __init__(self, name="Nikon Z 8"):
+        super().__init__(name)
+
+
+def test_full_camera_test_measures_the_frame_rate_of_a_fast_nikon(monkeypatch):
+    """Z 8 with a CFexpress card: 20 fps, 0.6 s overhead.  The C2/C3 bursts are spaced by that, plus a margin."""
+    clock = {"now": 0.0}
+    frames_asked = []
+    monkeypatch.setattr(camera_check, "_clock", lambda: clock["now"])
+    monkeypatch.setattr(cam_module, "take_picture", lambda c, s: clock.update(now=clock["now"] + 1.0))
+
+    def fake_burst(camera, settings, frames):
+        frames_asked.append(frames)
+        clock["now"] += 0.6 + frames / 20
+
+    monkeypatch.setattr(cam_module, "take_burst", fake_burst)
+    report, profile = check_camera(FakeNikon(), full=True)
+    assert frames_asked == [10, 100]
+    assert profile.burst_fps == pytest.approx(20.0)
+    assert profile.burst_overhead_s == pytest.approx(0.6)
+    assert CameraProfile.from_dict(profile.to_dict()) == profile
+    assert profile.burst_max_s == 5.0                    # 100 frames at 20 fps
+    fast = contact_burst_plan("Nikon", True, profile.timing_profile())
+    assert fast.burst_param == 40                         # 2 s at 20 fps
+    assert fast.burst_s < contact_burst_plan("Nikon").burst_s
+    assert fast.burst_s >= 0.6 + 2.0 + 1.0
+    assert report.worst != ERROR
+
+
+def test_timing_recorded_in_the_script_is_used_for_the_timing_check():
+    """A script fitted to a quick camera must not be flagged with the default (longer) burst time."""
+    camera = FakeCanon("Canon EOS R")
+    camera.widgets["eosremoterelease"] = Widget("None")
+    lines = [
+        'take_burst, C2, -, 0:00:09.0, CAM, 1/60, 2.8, 100, 2, "C2 diamond ring"',
+        'take_burst, C2, -, 0:00:04.0, CAM, 1/4000, 2.8, 100, 2, "Pre-C2 beads"',
+    ]
+    plain = check_script_with_cameras(_script("Canon EOS R", lines), REFERENCE_MOMENTS,
+                                      {"Canon EOS R": camera}, "Canon EOS R")
+    assert any("would be skipped" in i.title for i in plain.items)
+
+    directive = "# timing: Canon EOS R; picture_overhead_s=2; burst_overhead_s=2; nikon_burst_fps=10"
+    timed = check_script_with_cameras(_script("Canon EOS R", [directive] + lines), REFERENCE_MOMENTS,
+                                      {"Canon EOS R": camera}, "Canon EOS R")
+    assert not any("would be skipped" in i.title for i in timed.items)
+
+
+def test_full_camera_test_measures_how_a_canon_copes_with_a_long_burst(monkeypatch):
+    """A camera that empties its buffer slower than it fills it: 1.5 s busy per second of shooting."""
+    clock = {"now": 0.0}
+    asked = []
+    monkeypatch.setattr(camera_check, "_clock", lambda: clock["now"])
+    monkeypatch.setattr(cam_module, "take_picture", lambda c, s: clock.update(now=clock["now"] + 1.0))
+
+    def fake_burst(camera, settings, seconds):
+        asked.append(seconds)
+        clock["now"] += 1.5 * seconds + 3.0
+
+    monkeypatch.setattr(cam_module, "take_burst", fake_burst)
+    report, profile = check_camera(FakeCanon("Canon EOS R"), full=True)
+    assert asked == [1.0, 5.0]
+    assert profile.burst_busy_per_s == pytest.approx(1.5)
+    timing = profile.timing_profile()
+    # The measured overhead with its margin, and the time per second of shooting
+    assert timing.burst_overhead_s == pytest.approx(1.5 * 3.0 + 1.0)
+    assert contact_burst_plan("Canon", True, timing).burst_s == pytest.approx(1.5 * 2 + 5.5)

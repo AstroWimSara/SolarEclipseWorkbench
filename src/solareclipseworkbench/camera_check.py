@@ -35,9 +35,16 @@ from solareclipseworkbench.bracketing import (
 from solareclipseworkbench.sensors import pixel_size_for_model, sensor_for_model
 from solareclipseworkbench.command_timing import (
     DEFAULT_PROFILE,
+    CONTACT_BURST_S,
+    NIKON_TEST_BURSTS_FRAMES,
+    TEST_BURSTS_S,
+    BurstFit,
     TimingProfile,
-    burst_shooting_s,
-    contact_burst_plan,
+    burst_duration_s,
+    burst_param_for_s,
+    fit_test_bursts,
+    parse_timing_directives,
+    planning_profile,
     vendor_from_name,
 )
 
@@ -482,11 +489,64 @@ def _timed(func: Callable, *args) -> float:
     return _clock() - start
 
 
+@dataclass
+class BurstTest:
+    """Two test bursts and what they tell about the camera (see measure_burst)."""
+
+    vendor: Optional[str]
+    short: Tuple[float, float]       # (burst parameter, seconds busy)
+    long: Tuple[float, float]
+    fit: BurstFit
+
+    def planned(self) -> TimingProfile:
+        return planning_profile(self.vendor, burst_overhead_s=self.fit.overhead_s, burst_fps=self.fit.fps,
+                                burst_busy_per_s=self.fit.busy_per_s, burst_max_s=self.fit.max_s)
+
+    def report(self, report: "TestReport", title: str) -> None:
+        planned = self.planned()
+        if self.vendor == "Nikon":
+            measured = (f"{self.short[0]:g} frames took {self.short[1]:.1f} s and {self.long[0]:g} frames "
+                        f"{self.long[1]:.1f} s: ")
+            measured += (f"{self.fit.fps:g} frames per second" if self.fit.fps else
+                         f"the frame rate could not be measured, {planned.nikon_burst_fps:g} frames per second "
+                         "is assumed")
+        else:
+            measured = (f"{self.short[0]:g} s and {self.long[0]:g} s bursts kept the camera busy for "
+                        f"{self.short[1]:.1f} s and {self.long[1]:.1f} s: ")
+            measured += (f"{self.fit.busy_per_s:g} s per second of shooting" if self.fit.busy_per_s else
+                         "the time per second of shooting could not be measured, 1 s is assumed")
+        param = burst_param_for_s(self.vendor, CONTACT_BURST_S, planned)
+        detail = (f"{measured}, plus {self.fit.overhead_s:.1f} s.  The script planning uses "
+                  f"{burst_duration_s(self.vendor, param, planned):.1f} s for a {CONTACT_BURST_S:g} s burst "
+                  f"(untested: {burst_duration_s(self.vendor, burst_param_for_s(self.vendor, CONTACT_BURST_S)):.1f} s)"
+                  f"; beads bursts can be up to {planned.burst_max_s:g} s long.")
+        report.add(OK, f"{title} kept the camera busy for {self.short[1]:.1f} s and {self.long[1]:.1f} s", detail)
+
+
+def measure_burst(camera, settings, vendor: Optional[str]) -> BurstTest:
+    """Time a short and a long test burst, back to back.
+
+    The two separate the time per second of shooting (a Nikon's frame rate)
+    from the fixed overhead, and the long one shows how the camera copes with
+    the longest burst the wizard plans.  The long burst starts while the camera
+    may still be writing the short one to the card, as around C2 and C3.
+    """
+    from solareclipseworkbench import camera as cam_module
+
+    short_param, long_param = NIKON_TEST_BURSTS_FRAMES if vendor == "Nikon" else TEST_BURSTS_S
+    short_s = _timed(cam_module.take_burst, camera, settings, short_param)
+    long_s = _timed(cam_module.take_burst, camera, settings, long_param)
+    short, long = (short_param, short_s), (long_param, long_s)
+    return BurstTest(vendor, short, long, fit_test_bursts(vendor, short, long))
+
+
 def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -> TimingProfile:
     """Set the camera clock and time one test picture and one test burst.
 
-    Returns: Timing profile with the measured overheads (never below the defaults,
-             so a single quick shot cannot make the timing check optimistic).
+    Returns: Timing profile with the measured overheads (a picture never below the
+             default, so a single quick shot cannot make the timing check
+             optimistic; a burst from its two test bursts plus a margin, see
+             planning_profile).
     """
     from solareclipseworkbench import camera as cam_module
 
@@ -507,8 +567,8 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
     except Exception as e:
         report.add(ERROR, "Setting the camera clock failed", str(e))
 
-    picture_overhead = DEFAULT_PROFILE.picture_overhead_s
-    burst_overhead = DEFAULT_PROFILE.burst_overhead_s
+    picture_overhead = None
+    burst = None
 
     # Test picture with the settings of the first take_picture in the script
     pictures = [c for c in commands if c.func == "take_picture"]
@@ -518,7 +578,7 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
         try:
             elapsed = _timed(cam_module.take_picture, camera, settings)
             exposure = _shutter_seconds(cmd.shutter) or 0.0
-            picture_overhead = max(picture_overhead, elapsed - exposure)
+            picture_overhead = elapsed - exposure
             status = OK if elapsed - exposure <= DEFAULT_PROFILE.picture_overhead_s else INFO
             report.add(status, f"Test picture ({cmd.shutter}, f/{cmd.aperture}, ISO {cmd.iso}) took {elapsed:.1f} s",
                        f"{elapsed - exposure:.1f} s on top of the exposure; the script planning assumes "
@@ -532,19 +592,15 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
         cmd = bursts[0]
         settings = cam_module.CameraSettings(name, cmd.shutter, cmd.aperture, int(cmd.iso))
         try:
-            param = float(cmd.args[4])
-            elapsed = _timed(cam_module.take_burst, camera, settings, param)
-            shooting = burst_shooting_s(vendor, param)
-            burst_overhead = max(burst_overhead, elapsed - shooting)
-            status = OK if elapsed - shooting <= DEFAULT_PROFILE.burst_overhead_s else INFO
-            report.add(status, f"Test burst ({cmd.args[4]}) kept the camera busy for {elapsed:.1f} s",
-                       f"{max(0.0, elapsed - shooting):.1f} s on top of the burst itself; the script planning "
-                       f"assumes {DEFAULT_PROFILE.burst_overhead_s:.1f} s.")
+            burst = measure_burst(camera, settings, vendor)
+            burst.report(report, "Test bursts")
         except Exception as e:
             report.add(ERROR, "The test burst failed", str(e))
 
-    return TimingProfile(picture_overhead_s=picture_overhead, burst_overhead_s=burst_overhead,
-                         nikon_burst_fps=DEFAULT_PROFILE.nikon_burst_fps)
+    if burst is None:
+        return planning_profile(vendor, picture_overhead)
+    fit = burst.fit
+    return planning_profile(vendor, picture_overhead, fit.overhead_s, fit.fps, fit.busy_per_s, fit.max_s)
 
 
 # --- Timing ------------------------------------------------------------------
@@ -634,7 +690,8 @@ def check_script_with_cameras(script_text: str, reference_moments: dict, cameras
         report.add(ERROR, "The camera settings could not be read", str(e))
     check_camera_state(camera, commands, report)
 
-    profile = DEFAULT_PROFILE
+    # The timing the wizard planned the script with, when it was fitted to a tested camera
+    profile = parse_timing_directives(script_text.splitlines()).get(script_camera_name, DEFAULT_PROFILE)
     if full:
         profile = run_active_test(camera, commands, report)
         report.profile = profile
@@ -661,18 +718,18 @@ class CameraProfile:
     clock_settable: Optional[bool] = None         # None: not tested
     picture_overhead_s: Optional[float] = None    # measured; None: not measured
     burst_overhead_s: Optional[float] = None
+    burst_fps: Optional[float] = None             # measured Nikon frame rate; None: not measured
+    burst_busy_per_s: Optional[float] = None      # measured Canon/Sony busy time per second of shooting
+    burst_max_s: Optional[float] = None           # seconds of shooting of the longest test burst
     brackets: List[str] = field(default_factory=list)   # brackets the camera takes itself, e.g. "1 3"
     pixel_size_um: Optional[float] = None         # from the camera model (see sensors); None: not listed
     tested: str = ""                              # date and time of the test
     full_test: bool = False
 
     def timing_profile(self) -> TimingProfile:
-        """Overheads to plan with: measured, but never below the defaults."""
-        return TimingProfile(
-            picture_overhead_s=max(DEFAULT_PROFILE.picture_overhead_s, self.picture_overhead_s or 0.0),
-            burst_overhead_s=max(DEFAULT_PROFILE.burst_overhead_s, self.burst_overhead_s or 0.0),
-            nikon_burst_fps=DEFAULT_PROFILE.nikon_burst_fps,
-        )
+        """Overheads to plan with: measured, with a margin for bursts (see planning_profile)."""
+        return planning_profile(self.vendor, self.picture_overhead_s, self.burst_overhead_s, self.burst_fps,
+                                self.burst_busy_per_s, self.burst_max_s)
 
     def shutter_range(self) -> str:
         speeds = sorted((s for s in (_shutter_seconds(c) for c in self.shutter_speeds) if s and s > 0))
@@ -692,6 +749,10 @@ class CameraProfile:
             parts.append(f"picture {self.picture_overhead_s:.1f} s")
         if self.burst_overhead_s is not None:
             parts.append(f"burst +{self.burst_overhead_s:.1f} s")
+        if self.burst_fps is not None:
+            parts.append(f"{self.burst_fps:g} frames per second")
+        if self.burst_busy_per_s is not None:
+            parts.append(f"{self.burst_busy_per_s:g} s busy per second of burst")
         return ", ".join(parts)
 
     def to_dict(self) -> dict:
@@ -829,15 +890,11 @@ def check_camera(camera, full: bool = False) -> Tuple[TestReport, CameraProfile]
         except Exception as e:
             report.add(ERROR, "The test picture failed", str(e))
 
-        burst_param = contact_burst_plan(profile.vendor).burst_param
         try:
-            elapsed = _timed(cam_module.take_burst, camera, settings, burst_param)
-            shooting = burst_shooting_s(profile.vendor, burst_param)
-            profile.burst_overhead_s = round(max(0.0, elapsed - shooting), 2)
-            report.add(OK if profile.burst_overhead_s <= DEFAULT_PROFILE.burst_overhead_s else INFO,
-                       f"Test burst kept the camera busy for {elapsed:.1f} s",
-                       f"{profile.burst_overhead_s:.1f} s on top of the {shooting:g} s burst; the planning assumes "
-                       f"{DEFAULT_PROFILE.burst_overhead_s:.1f} s and uses the measured time when it is longer.")
+            burst = measure_burst(camera, settings, profile.vendor)
+            profile.burst_overhead_s, profile.burst_fps = burst.fit.overhead_s, burst.fit.fps
+            profile.burst_busy_per_s, profile.burst_max_s = burst.fit.busy_per_s, burst.fit.max_s
+            burst.report(report, "Test bursts")
         except Exception as e:
             report.add(ERROR, "The test burst failed", str(e))
         profile.full_test = True

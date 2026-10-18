@@ -1945,32 +1945,60 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             _wait_for_capture_complete(target, context)
             _drain_camera_events(target, context)
     elif vendor == 'Nikon':
-        # Set capture mode to burst/continuous
-        # Try different widget names (differs between DSLR and mirrorless models)
+        # Set the release mode to continuous.  The return codes must be checked:
+        # gp_camera_set_config does not raise, and a body whose release mode is
+        # set with a dial or button refuses the change, so the burst would
+        # otherwise silently be taken in single-frame mode.
+        # The widget name differs between DSLR and mirrorless models.
+        # A refused value stays queued on its widget and would make every later
+        # set_config with this config fail too, so after a refusal the config is
+        # read again.
+        refused = False
         try:
-            # Try 'capturemode' first (older DSLRs)
+            # 'capturemode' first (older DSLRs)
             capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
             gp.gp_widget_set_value(capture_mode, "Burst")
-            _set_gp_config(camera, config, context)
+            refused = True
+            gp.check_result(_set_gp_config(camera, config, context))
+            refused = False
             log.debug('Set capturemode to Burst')
         except gphoto2.GPhoto2Error:
+            if refused:
+                config = gp.check_result(gp.gp_camera_get_config(target, context))
+                refused = False
             try:
-                # Try 'stillcapturemode' (newer mirrorless like Z8/Z9)
+                # 'stillcapturemode' (newer mirrorless like Z8/Z9)
                 # Value 2 is typically Continuous Low, higher values for High Speed
                 capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
                 gp.gp_widget_set_value(capture_mode, 2)  # Continuous shooting mode
-                _set_gp_config(camera, config, context)
+                refused = True
+                gp.check_result(_set_gp_config(camera, config, context))
+                refused = False
                 log.debug('Set stillcapturemode to Continuous (2)')
             except gphoto2.GPhoto2Error as e:
-                log.warning('Could not set Nikon burst/continuous mode: %s', e)
+                if refused:
+                    config = gp.check_result(gp.gp_camera_get_config(target, context))
+                log.warning('could not set a continuous release mode (%s); take_burst may take a single '
+                            'frame. Set the release mode to continuous on the camera.', e)
 
-        # Set burst number
+        # Set burst number, within the range the camera accepts
+        frames = max(1, round(duration))
+        burst_number = None
         try:
             burst_number = gp.check_result(gp.gp_widget_get_child_by_name(config, 'burstnumber'))
-            gp.gp_widget_set_value(burst_number, round(duration))
-            _set_gp_config(camera, config, context)
+            try:
+                _, highest, _ = gp.check_result(gp.gp_widget_get_range(burst_number))
+                if highest >= 1 and frames > highest:
+                    log.warning('the camera takes at most %d frames per burst; taking %d instead of %d',
+                                int(highest), int(highest), frames)
+                    frames = int(highest)
+            except (gphoto2.GPhoto2Error, TypeError, ValueError):
+                pass    # not a range widget: send the requested number
+            gp.gp_widget_set_value(burst_number, frames)
+            gp.check_result(_set_gp_config(camera, config, context))
         except gphoto2.GPhoto2Error as e:
-            log.warning('Could not set Nikon burst number: %s', e)
+            log.warning('could not set the burst to %d frames (%s); take_burst may take a single frame',
+                        frames, e)
 
         try:
             with _shutter_release(camera):
@@ -1984,12 +2012,13 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
                 log.exception('low-level capture failed')
                 raise
 
-        # Rest burst number back to 1, to avoid interference with future commands.
-        try:
-            gp.gp_widget_set_value(burst_number, 1)
-            _set_gp_config(camera, config, context)
-        except gphoto2.GPhoto2Error as e:
-            log.warning("could not reset Nikon burst number to 1 due to '%s'", e)
+        # Reset burst number back to 1, to avoid interference with future commands.
+        if burst_number is not None:
+            try:
+                gp.gp_widget_set_value(burst_number, 1)
+                gp.check_result(_set_gp_config(camera, config, context))
+            except gphoto2.GPhoto2Error as e:
+                log.warning("could not reset Nikon burst number to 1 due to '%s'", e)
     elif vendor == 'Sony':
         # Sony burst: enable continuous capture mode, turn on the bulb,
         # sleep for the chosen amount of time, turn off the bulb and
