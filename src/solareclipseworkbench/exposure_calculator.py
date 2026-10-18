@@ -515,16 +515,14 @@ def format_shutter_speed(exposure_seconds: float) -> str:
             return f"{int(rounded_exposure)}"
         else:
             return f"{rounded_exposure:.1f}"
+    elif rounded_exposure >= 0.4:
+        # 0.4, 0.5, 0.6 and 0.8 s are written as decimals, like the gphoto2 widget
+        # choices of the cameras (Canon uses "0.5", not "1/2").  As "1/X" with a
+        # whole X they would land on the wrong speed: 0.8 s became "1", 0.6 s "0.5".
+        return f"{rounded_exposure:g}"
     else:
-        # Fast shutter - format as "1/X", but use decimal for denominator <= 2
-        # (Canon cameras use "0.5" not "1/2" in their gphoto2 widget choices)
-        denominator = round(1.0 / rounded_exposure)
-        # Handle edge case where denominator is 1 (e.g., due to floating-point precision)
-        if denominator == 1:
-            return "1"
-        if denominator == 2:
-            return "0.5"
-        return f"1/{denominator}"
+        # Fast shutter - format as "1/X" (0.3 s, i.e. 1/3.2, is written "1/3")
+        return f"1/{round(1.0 / rounded_exposure)}"
 
 
 def parse_shutter_speed(shutter_str: str) -> float:

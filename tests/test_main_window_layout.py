@@ -30,7 +30,10 @@ def test_plot_and_jobs_table_are_in_a_non_collapsible_splitter(view):
     splitter = view.output_splitter
 
     assert splitter.widget(0) is view.eclipse_visualization
-    assert splitter.widget(1) is view.jobs_table
+    # The jobs table shares its side with the exposure compensation buttons above it
+    assert splitter.widget(1).isAncestorOf(view.jobs_table)
+    assert splitter.widget(1).isAncestorOf(view.exposure_brighter_button)
+    assert splitter.widget(1).isAncestorOf(view.exposure_darker_button)
     assert not splitter.childrenCollapsible()
 
 

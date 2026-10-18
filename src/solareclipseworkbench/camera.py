@@ -2,6 +2,7 @@ import contextlib
 import functools
 import locale
 import logging
+import math
 import subprocess
 import sys
 import threading
@@ -181,6 +182,76 @@ class CameraSettings:
         self.shutter_speed = shutter_speed
         self.aperture = _normalise_aperture(str(aperture))
         self.iso = iso
+
+
+# Shutter speeds of most cameras, fastest first: the fallback when the camera's own cannot be read
+_STANDARD_SHUTTER_SPEEDS = [
+    "1/8000", "1/6400", "1/5000", "1/4000", "1/3200", "1/2500",
+    "1/2000", "1/1600", "1/1250", "1/1000", "1/800", "1/640",
+    "1/500", "1/400", "1/320", "1/250", "1/200", "1/160",
+    "1/125", "1/100", "1/80", "1/60", "1/50", "1/40",
+    "1/30", "1/25", "1/20", "1/15", "1/13", "1/10",
+    "1/8", "1/6", "1/5", "1/4", "0.3", "1/3",
+    "0.4", "1/2", "0.5", "0.6", "0.8", "1",
+    "1.3", "1.6", "2", "2.5", "3", "4",
+    "5", "6", "8", "10", "13", "15",
+    "20", "25", "30",
+]
+
+
+# Exposure compensation set from the GUI during the eclipse (clouds, haze, dust):
+# every shot that fires from now on is taken this many stops brighter (positive)
+# or darker (negative) than the script says.  Only the shutter speed changes:
+# the aperture and ISO stay as scripted, and the compensated speed is snapped to
+# the camera's nearest supported speed like any scripted one.
+EXPOSURE_COMPENSATION_STEP_EV = 1
+MAX_EXPOSURE_COMPENSATION_EV = 5
+_exposure_compensation_ev = 0
+
+
+def get_exposure_compensation() -> int:
+    """Return the exposure compensation [EV] applied to every shot that fires from now on."""
+    return _exposure_compensation_ev
+
+
+def set_exposure_compensation(ev: int) -> int:
+    """Set the exposure compensation [EV], limited to +/- MAX_EXPOSURE_COMPENSATION_EV.
+
+    Returns the compensation that is now in effect.
+    """
+    global _exposure_compensation_ev
+    ev = max(-MAX_EXPOSURE_COMPENSATION_EV, min(MAX_EXPOSURE_COMPENSATION_EV, int(ev)))
+    if ev != _exposure_compensation_ev:
+        logging.info('Exposure compensation set to %+d EV for all following shots', ev)
+    _exposure_compensation_ev = ev
+    return ev
+
+
+def compensated_shutter_speed(shutter_speed: str, ev: Optional[int] = None) -> str:
+    """Return *shutter_speed* lengthened (positive *ev*) or shortened (negative *ev*) by *ev* stops.
+
+    *ev* defaults to the current exposure compensation.  A speed that is not a
+    number (e.g. 'bulb') is returned unchanged.
+    """
+    if ev is None:
+        ev = _exposure_compensation_ev
+    if not ev:
+        return shutter_speed
+    seconds = _parse_shutter_speed_seconds(str(shutter_speed))
+    if seconds <= 0:
+        return shutter_speed
+    seconds *= 2 ** ev
+    # The nearest standard speed in stops; the command snaps it to the camera's own speeds
+    return min(_STANDARD_SHUTTER_SPEEDS, key=lambda s: abs(math.log(_parse_shutter_speed_seconds(s) / seconds)))
+
+
+def _compensated_settings(camera_settings: CameraSettings) -> CameraSettings:
+    """Return *camera_settings* with the current exposure compensation applied (a copy when it changes)."""
+    shutter_speed = compensated_shutter_speed(camera_settings.shutter_speed)
+    if shutter_speed == camera_settings.shutter_speed:
+        return camera_settings
+    return CameraSettings(camera_settings.camera_name, shutter_speed, camera_settings.aperture,
+                          camera_settings.iso)
 
 
 class BaseCamera(ABC):
@@ -862,9 +933,19 @@ def _serialised_on_camera(func):
 
     The scheduler passes the time the job was scheduled for as the keyword
     scheduled_at, which is kept for _shutter_release and not passed on.
+
+    The exposure compensation set in the GUI is applied here, when the shot
+    fires, so a change reaches every shot still to come.
     """
     @functools.wraps(func)
     def wrapper(camera, *args, scheduled_at: Optional[datetime] = None, **kwargs):
+        if args and isinstance(args[0], CameraSettings):
+            settings = _compensated_settings(args[0])
+            if settings is not args[0]:
+                camera_log(camera).info('%s: exposure compensation %+d EV, shutter speed %s instead of %s',
+                                        func.__name__, _exposure_compensation_ev, settings.shutter_speed,
+                                        args[0].shutter_speed)
+                args = (settings,) + args[1:]
         started = datetime.now(timezone.utc)
         acquired = camera._usb_lock.acquire(timeout=_MAX_LOCK_WAIT_S)
         if not acquired:
@@ -2470,18 +2551,6 @@ def _get_shutter_speed_choices(config) -> list:
     expose different sets of available speeds. Falls back to a common built-in table
     if the widget cannot be read (e.g. on older drivers or the VirtualCamera).
     """
-    _FALLBACK_SPEEDS = [
-        "1/8000", "1/6400", "1/5000", "1/4000", "1/3200", "1/2500",
-        "1/2000", "1/1600", "1/1250", "1/1000", "1/800", "1/640",
-        "1/500", "1/400", "1/320", "1/250", "1/200", "1/160",
-        "1/125", "1/100", "1/80", "1/60", "1/50", "1/40",
-        "1/30", "1/25", "1/20", "1/15", "1/13", "1/10",
-        "1/8", "1/6", "1/5", "1/4", "0.3", "1/3",
-        "0.4", "1/2", "0.5", "0.6", "0.8", "1",
-        "1.3", "1.6", "2", "2.5", "3", "4",
-        "5", "6", "8", "10", "13", "15",
-        "20", "25", "30",
-    ]
     try:
         # Nikon is a weirdo - 'shutterspeed' returns all values in float seconds!
         # 'shutterspeed2' contains the expected values instead -_-
@@ -2497,7 +2566,7 @@ def _get_shutter_speed_choices(config) -> list:
             return [s for s, _ in parseable]
     except gphoto2.GPhoto2Error as e:
         logging.warning('Could not read shutterspeed choices from camera, using fallback table: %s', e)
-    return _FALLBACK_SPEEDS
+    return _STANDARD_SHUTTER_SPEEDS
 
 
 @_serialised_on_camera

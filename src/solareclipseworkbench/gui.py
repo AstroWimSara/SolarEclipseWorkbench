@@ -45,7 +45,9 @@ import threading
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
     get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
-    MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size
+    MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size, get_exposure_compensation, \
+    set_exposure_compensation, compensated_shutter_speed, EXPOSURE_COMPENSATION_STEP_EV, \
+    MAX_EXPOSURE_COMPENSATION_EV
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
@@ -549,6 +551,19 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.jobs_table = QJobsTableView()
 
+        # Exposure compensation for all following shots (clouds, haze, dust)
+        self.exposure_darker_button = QPushButton(f"\u2212{EXPOSURE_COMPENSATION_STEP_EV} EV")
+        self.exposure_darker_button.setToolTip(
+            f"Take all following pictures {EXPOSURE_COMPENSATION_STEP_EV} stop darker (shorter shutter speed)")
+        self.exposure_brighter_button = QPushButton(f"+{EXPOSURE_COMPENSATION_STEP_EV} EV")
+        self.exposure_brighter_button.setToolTip(
+            f"Take all following pictures {EXPOSURE_COMPENSATION_STEP_EV} stop brighter (longer shutter speed), "
+            f"e.g. for clouds or dust")
+        self.exposure_reset_button = QPushButton("Reset exposure")
+        self.exposure_reset_button.setToolTip("Take all following pictures with the exposure from the script")
+        self.exposure_compensation_label = QLabel()
+        self.show_exposure_compensation(get_exposure_compensation())
+
         # Banner with camera settings to check (hidden by default; shown for Sony and Nikon cameras)
         self.camera_banner = BannerNotification()
         self.camera_banner.setVisible(False)
@@ -767,7 +782,24 @@ class SolarEclipseView(QMainWindow, Observable):
         # more room (e.g. on widescreen displays).  Neither side can be collapsed completely.
         self.output_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.output_splitter.addWidget(self.eclipse_visualization)
-        self.output_splitter.addWidget(self.jobs_table)
+        # The exposure compensation sits right above the jobs it changes
+        exposure_hbox = QHBoxLayout()
+        exposure_hbox.setContentsMargins(0, 0, 0, 0)
+        exposure_hbox.addWidget(QLabel("Exposure of all following shots:"))
+        exposure_hbox.addWidget(self.exposure_darker_button)
+        exposure_hbox.addWidget(self.exposure_compensation_label)
+        exposure_hbox.addWidget(self.exposure_brighter_button)
+        exposure_hbox.addWidget(self.exposure_reset_button)
+        exposure_hbox.addStretch(1)
+        for button in (self.exposure_darker_button, self.exposure_brighter_button, self.exposure_reset_button):
+            button.clicked.connect(self.on_toolbar_button_click)
+        jobs_vbox = QVBoxLayout()
+        jobs_vbox.setContentsMargins(0, 0, 0, 0)
+        jobs_vbox.addLayout(exposure_hbox)
+        jobs_vbox.addWidget(self.jobs_table, 1)
+        jobs_widget = QWidget()
+        jobs_widget.setLayout(jobs_vbox)
+        self.output_splitter.addWidget(jobs_widget)
         self.output_splitter.setChildrenCollapsible(False)
         self.output_splitter.setStretchFactor(0, 1)
         self.output_splitter.setStretchFactor(1, 2)
@@ -884,6 +916,19 @@ class SolarEclipseView(QMainWindow, Observable):
             self.refresh_plot_action.setIcon(QIcon(str(ICON_PATH / "refresh.png")))
             self.refresh_plot_action.triggered.connect(self.on_toolbar_button_click)
             self.toolbar.addAction(self.refresh_plot_action)
+
+    def show_exposure_compensation(self, ev: int):
+        """ Show the exposure compensation applied to all following shots.
+
+        Args:
+            - ev: Exposure compensation [EV]; positive is brighter
+        """
+
+        self.exposure_compensation_label.setText(f"{ev:+d} EV" if ev else "as scripted")
+        self.exposure_compensation_label.setStyleSheet("font-weight: bold; color: #d35400;" if ev else "")
+        self.exposure_darker_button.setEnabled(ev > -MAX_EXPOSURE_COMPENSATION_EV)
+        self.exposure_brighter_button.setEnabled(ev < MAX_EXPOSURE_COMPENSATION_EV)
+        self.exposure_reset_button.setEnabled(ev != 0)
 
     def on_toolbar_button_click(self):
         """ Action triggered when a toolbar button is clicked."""
@@ -1626,6 +1671,19 @@ class SolarEclipseController(Observer):
 
             if reply == QMessageBox.StandardButton.Yes:
                 self._shutdown_scheduler()
+
+        elif changed_object in (self.view.exposure_darker_button, self.view.exposure_brighter_button,
+                                self.view.exposure_reset_button):
+            if changed_object is self.view.exposure_reset_button:
+                ev = 0
+            elif changed_object is self.view.exposure_brighter_button:
+                ev = get_exposure_compensation() + EXPOSURE_COMPENSATION_STEP_EV
+            else:
+                ev = get_exposure_compensation() - EXPOSURE_COMPENSATION_STEP_EV
+            ev = set_exposure_compensation(ev)
+            self.view.show_exposure_compensation(ev)
+            if self.jobs_model:
+                self.jobs_model.update_commands()
 
         elif text == "Datetime format":
             self.settings_popup = SettingsPopup(self)
@@ -3553,6 +3611,49 @@ class JobsTableColumnNames(Enum):
     DESCRIPTION = "Description"
 
 
+def _shutter_speed_string(shutter_speed: str) -> str:
+    """ Return the shutter speed for the jobs table, with the exposure compensation when one is set.
+
+    E.g. "1/1000 → 1/500" at +1 EV.
+    """
+
+    compensated = compensated_shutter_speed(shutter_speed)
+    if compensated == shutter_speed:
+        return shutter_speed
+    return f"{shutter_speed} \u2192 {compensated}"
+
+
+def job_command_string(job: Job) -> str:
+    """ Return the command of a scheduled job as shown in the jobs table.
+
+    Args:
+        - job: Scheduled job
+    """
+
+    name = job.func.__name__
+
+    if name in ("take_picture", "take_burst", "take_bracket", "prepare_camera", "take_hdr"):
+        camera_settings: CameraSettings = job.args[1]
+        settings = (f"\"{camera_settings.camera_name}\", {_shutter_speed_string(camera_settings.shutter_speed)}, "
+                    f"{camera_settings.aperture}, {camera_settings.iso}")
+        if name == "take_picture":
+            return f"take_picture({settings})"
+        if name == "take_hdr":
+            return f"take_hdr({settings}, {job.args[2]} stops)"
+        return f"{name}({settings}, {job.args[2]})"
+
+    if name == "sync_cameras":
+        return "sync_cameras()"
+
+    if name == "voice_prompt":
+        return f"{name}({', '.join(job.args).strip()})"
+
+    if name == "execute_command":
+        return f"command({', '.join(job.args).strip()})"
+
+    return ""
+
+
 class JobsTableModel(QAbstractTableModel, Observable):
     def __init__(self, scheduler: BackgroundScheduler, controller: SolarEclipseController):
         """ Initialisation of the model for the table with the scheduled jobs.
@@ -3579,6 +3680,7 @@ class JobsTableModel(QAbstractTableModel, Observable):
 
         self.execution_times_utc_as_datetime = []
         self.execution_times_local_as_datetime = []
+        self.jobs: list[Job] = []
 
         job: Job
         for job in scheduler.get_jobs():
@@ -3593,60 +3695,8 @@ class JobsTableModel(QAbstractTableModel, Observable):
                     countdown = format_countdown(execution_time_utc - now_utc)
                 description: str = job.name
 
-                job_string = ""
-
-                if job.func.__name__ == "take_picture":
-                    camera_settings: CameraSettings = job.args[1]
-                    camera_name = camera_settings.camera_name
-                    shutter_speed = camera_settings.shutter_speed
-                    aperture = camera_settings.aperture
-                    iso = camera_settings.iso
-
-                    job_string = f"take_picture(\"{camera_name}\", {shutter_speed}, {aperture}, {iso})"
-
-                elif job.func.__name__ == "take_burst":
-                    camera_settings: CameraSettings = job.args[1]
-                    camera_name = camera_settings.camera_name
-                    shutter_speed = camera_settings.shutter_speed
-                    aperture = camera_settings.aperture
-                    iso = camera_settings.iso
-                    duration = job.args[2]
-
-                    job_string = f"take_burst(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {duration})"
-
-                elif job.func.__name__ == "take_bracket":
-                    camera_settings: CameraSettings = job.args[1]
-                    camera_name = camera_settings.camera_name
-                    shutter_speed = camera_settings.shutter_speed
-                    aperture = camera_settings.aperture
-                    iso = camera_settings.iso
-                    step = job.args[2]
-
-                    job_string = f"take_bracket(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {step})"
-
-                elif job.func.__name__ == "prepare_camera":
-                    camera_settings: CameraSettings = job.args[1]
-                    job_string = (f"prepare_camera(\"{camera_settings.camera_name}\", {camera_settings.shutter_speed}, "
-                                  f"{camera_settings.aperture}, {camera_settings.iso}, {job.args[2]})")
-
-                elif job.func.__name__ == "take_hdr":
-                    camera_settings: CameraSettings = job.args[1]
-                    camera_name = camera_settings.camera_name
-                    shutter_speed = camera_settings.shutter_speed
-                    aperture = camera_settings.aperture
-                    iso = camera_settings.iso
-                    stops = job.args[2]
-
-                    job_string = f"take_hdr(\"{camera_name}\", {shutter_speed}, {aperture}, {iso}, {stops} stops)"
-
-                elif job.func.__name__ == "sync_cameras":
-                    job_string = f"sync_cameras()"
-
-                elif job.func.__name__ == "voice_prompt":
-                    job_string = f"{job.func.__name__}({', '.join(job.args).strip()})"
-
-                elif job.func.__name__ == "execute_command":
-                    job_string = f"command({', '.join(job.args).strip()})"
+                job_string = job_command_string(job)
+                self.jobs.append(job)
 
                 self.execution_times_utc_as_datetime.append(execution_time_utc)
                 formatted_execution_time_utc = format_time(execution_time_utc, self.time_format)
@@ -3692,11 +3742,20 @@ class JobsTableModel(QAbstractTableModel, Observable):
 
             self.endResetModel()
 
+    def update_commands(self):
+        """ Show the shutter speeds with the current exposure compensation. """
+
+        self.beginResetModel()
+        for row, job in enumerate(self.jobs):
+            self._data.loc[row, JobsTableColumnNames.COMMAND.value] = job_command_string(job)
+        self.endResetModel()
+
     def clear_jobs_overview(self):
         """ Clear the scheduled jobs overview. """
 
         self.beginResetModel()
         self._data = pd.DataFrame(columns=self._data.columns)
+        self.jobs = []
         self.endResetModel()
 
     def rowCount(self, index):
