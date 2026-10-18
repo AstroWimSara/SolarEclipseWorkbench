@@ -1224,6 +1224,79 @@ class LiveViewThread(threading.Thread):
                         pass
 
 
+# Config widget for the size of the live-view frames.  Canon EOS bodies offer
+# e.g. Large/Medium/Small, recent Nikon bodies QVGA/VGA/XGA.  Sony does not
+# expose it: its preview has a fixed size.
+LIVE_VIEW_SIZE_WIDGET = 'liveviewsize'
+_LIVE_VIEW_SIZE_LOCK_WAIT_S = 2.0
+
+
+def get_live_view_sizes(camera) -> Optional[Tuple[str, list[str]]]:
+    """Read the live-view frame size of the camera and the sizes it offers.
+
+    Args:
+        - camera: Camera object
+
+    Returns: (current size, available sizes), or None when the camera does not
+             let the live-view size be changed or is busy.
+    """
+    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera):
+        return None
+    lock = getattr(camera, '_usb_lock', None)
+    if lock is not None and not lock.acquire(timeout=_LIVE_VIEW_SIZE_LOCK_WAIT_S):
+        camera_log(camera).warning('camera busy, live view size not read')
+        return None
+    try:
+        widget = gp.check_result(gp.gp_camera_get_single_config(camera._camera, LIVE_VIEW_SIZE_WIDGET,
+                                                                gp.gp_context_new()))
+        choices = _widget_choices(widget)
+        if not choices:
+            return None
+        return str(widget.get_value()), choices
+    except gphoto2.GPhoto2Error:
+        return None
+    finally:
+        if lock is not None:
+            camera._last_usb_activity = time.monotonic()
+            lock.release()
+
+
+def set_live_view_size(camera, size: str) -> bool:
+    """Set the size of the live-view frames.
+
+    Larger frames take longer to transfer, and a scheduled shot that fires while
+    a frame is being transferred waits for it, so a larger size adds that much
+    delay to such a shot.
+
+    Args:
+        - camera: Camera object
+        - size: One of the sizes returned by get_live_view_sizes
+
+    Returns: True when the camera accepted the size.
+    """
+    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera):
+        return False
+    log = camera_log(camera)
+    lock = getattr(camera, '_usb_lock', None)
+    if lock is not None and not lock.acquire(timeout=_LIVE_VIEW_SIZE_LOCK_WAIT_S):
+        log.warning('camera busy, live view size not changed')
+        return False
+    try:
+        context = gp.gp_context_new()
+        widget = gp.check_result(gp.gp_camera_get_single_config(camera._camera, LIVE_VIEW_SIZE_WIDGET, context))
+        widget.set_value(size)
+        gp.check_result(gp.gp_camera_set_single_config(camera._camera, LIVE_VIEW_SIZE_WIDGET, widget, context))
+        log.info('live view size set to %s', size)
+        return True
+    except gphoto2.GPhoto2Error as e:
+        log.warning('could not set the live view size to %s: %s', size, e)
+        return False
+    finally:
+        if lock is not None:
+            camera._last_usb_activity = time.monotonic()
+            lock.release()
+
+
 # Interval between keep-alive pings.  Well below the shortest auto power off
 # the supported bodies allow (Canon: 30 s / 1 min), so one ping always lands
 # before the camera's idle timer expires.

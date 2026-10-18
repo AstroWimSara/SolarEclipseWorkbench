@@ -45,7 +45,7 @@ import threading
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
     get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
-    MIN_AUTO_POWER_OFF_S
+    MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
@@ -2709,6 +2709,11 @@ class LiveViewWindow(QWidget):
       - Disabled/re-enabled at any time via the toggle button.
       - Auto-paused between C2 and C3 (totality) by the controller calling
         ``set_totality_paused(True/False)``.
+
+    The preview uses the live-view size set on the camera.  When the camera
+    lets it be changed (Canon EOS, recent Nikon bodies), ``Preview size``
+    selects another one for as long as the window is open; the camera's own
+    setting is restored when the window closes.
     """
 
     def __init__(self, camera, parent=None):
@@ -2750,6 +2755,25 @@ class LiveViewWindow(QWidget):
         self._zoom_factor = 1.0
         self._zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
 
+        # Preview size: only offered when the camera lets it be changed
+        self._size_combo = QComboBox()
+        self._original_size: Union[str, None] = None
+        sizes = get_live_view_sizes(camera)
+        if sizes is None:
+            self._size_combo.addItem("Camera default")
+            self._size_combo.setEnabled(False)
+            self._size_combo.setToolTip("This camera does not let SEW change the size of the live-view frames")
+        else:
+            self._original_size, choices = sizes
+            self._size_combo.addItems(choices)
+            self._size_combo.setCurrentText(self._original_size)
+            self._size_combo.setToolTip(
+                "Size of the live-view frames.  Larger frames show more detail but take longer to transfer: "
+                "a scheduled shot that fires during a transfer waits for it.\n"
+                f"The camera setting ({self._original_size}) is restored when this window closes."
+            )
+        self._size_combo.currentTextChanged.connect(self._on_size_changed)
+
         # Pan controls (hidden until a zoom > 1 is selected)
         self._last_pixmap: Union[QPixmap, None] = None
         self._last_ts: Union[datetime.datetime, None] = None
@@ -2768,6 +2792,8 @@ class LiveViewWindow(QWidget):
         btn_layout.addWidget(self._toggle_btn)
         btn_layout.addWidget(close_btn)
         btn_layout.addStretch(1)
+        btn_layout.addWidget(QLabel("Preview size:"))
+        btn_layout.addWidget(self._size_combo)
         btn_layout.addWidget(QLabel("Zoom:"))
         btn_layout.addWidget(self._zoom_combo)
 
@@ -2839,6 +2865,8 @@ class LiveViewWindow(QWidget):
         """Push the user+totality state into the thread and refresh the button."""
         if self._thread is None:
             return
+        # No preview size changes around totality: each one is a USB round-trip
+        self._size_combo.setEnabled(self._original_size is not None and not self._totality_paused)
         if self._user_enabled and not self._totality_paused:
             self._thread.resume()
             self._toggle_btn.setText("Disable Live View")
@@ -2880,6 +2908,13 @@ class LiveViewWindow(QWidget):
     def _on_toggle(self):
         self._user_enabled = not self._user_enabled
         self._apply_state()
+
+    def _on_size_changed(self, size: str):
+        """Slot for preview size combo box changes."""
+        if self._original_size is None or self._totality_paused:
+            return
+        if not set_live_view_size(self._camera, size):
+            QMessageBox.warning(self, "Preview size", f"The camera did not accept preview size {size}.")
 
     def _on_zoom_changed(self, index: int):
         """Slot for zoom combo box changes."""
@@ -2971,13 +3006,22 @@ class LiveViewWindow(QWidget):
         painter.end()
 
         self._image_label.setPixmap(disp)
-        self._timestamp_label.setText("Last frame: " + ts.strftime("%Y-%m-%d  %H:%M:%S"))
+        self._timestamp_label.setText("Last frame: " + ts.strftime("%Y-%m-%d  %H:%M:%S")
+                                      + f"  ({pixmap.width()}\u00d7{pixmap.height()})")
 
     def closeEvent(self, event):
         self._poll_timer.stop()
         if self._thread is not None:
             self._thread.stop()
             self._thread = None
+        # Give the camera its own preview size back, unless that would cost a
+        # USB round-trip during totality
+        if self._original_size is not None and self._size_combo.currentText() != self._original_size:
+            if self._totality_paused:
+                camera_log(self._camera).warning('live view size left at %s (window closed during totality)',
+                                                 self._size_combo.currentText())
+            else:
+                set_live_view_size(self._camera, self._original_size)
         event.accept()
 
 
