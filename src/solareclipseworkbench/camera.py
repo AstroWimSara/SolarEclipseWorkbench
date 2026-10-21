@@ -2177,9 +2177,12 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
     one picture per frame, changing the shutter speed in between.
 
     Canon cannot set the number of AEB frames over USB: it is the 'Number of
-    bracketed shots' custom function.  A bracket with fewer frames than that
-    setting is fine (the first frames are 0, -, +); when it is set lower than the
-    bracket, the bracket stops at the end of the camera's sequence.
+    bracketed shots' custom function, and it must match the bracket.  With more
+    set, the bracket is not centred (with 5 set, an EOS 80D shoots 0, -2, -1, +1,
+    +2 steps, so a 3-frame bracket is 0, -2, -1); with fewer set, the bracket stops
+    at the end of the camera's sequence.  A camera that
+    does not report the bracketed shutter speed (e.g. the EOS 80D) takes all frames,
+    because the end of its sequence cannot be seen.
 
     Args:
         - camera: Camera object
@@ -2277,10 +2280,19 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             gp.gp_widget_set_value(aeb, aeb_value)
             _set_gp_config(camera, config, context)
 
+            # Some bodies (e.g. the EOS 80D) always report the dial speed during
+            # AEB.  The second frame is never at the base exposure, so a camera
+            # that reports it there cannot show where its sequence ends.
+            reports_bracket = spec.frames > 3
             for br_shot in range(spec.frames):
+                if br_shot == 1 and reports_bracket and _canon_shutter_speed(target, context) == base_speed:
+                    reports_bracket = False
+                    log.info("The camera does not report the bracketed shutter speed: check that "
+                             "'Number of bracketed shots' on the camera is set to %d", spec.frames)
                 # After 3, 5, ... frames, a camera whose AEB is set to that many
                 # frames is back at the base exposure: its sequence is complete.
-                if br_shot >= 3 and br_shot % 2 == 1 and _canon_shutter_speed(target, context) == base_speed:
+                if (reports_bracket and br_shot >= 3 and br_shot % 2 == 1
+                        and _canon_shutter_speed(target, context) == base_speed):
                     log.warning("AEB stopped after %d frames instead of %d: set 'Number of bracketed "
                                 "shots' on the camera to %d", br_shot, spec.frames, spec.frames)
                     break

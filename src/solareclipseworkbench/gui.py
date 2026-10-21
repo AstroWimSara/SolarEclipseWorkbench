@@ -1261,7 +1261,7 @@ class SolarEclipseController(Observer):
         except Exception:
             return False
 
-    def _show_camera_problems(self):
+    def _show_camera_problems(self, script_loaded: bool = False):
         """Show queued camera problems, without ever interrupting a run.
 
         Before the run a dialog is right: that is when a camera that failed to
@@ -1269,12 +1269,16 @@ class SolarEclipseController(Observer):
         running a modal dialog is worse than the problem it reports, because it
         blocks the UI thread while frames are being taken, so the count goes in
         the window title instead and the detail stays in the log.
+
+        Loading a script starts its schedule, but the problems found while
+        loading it (a bad bracket, commands already past) are shown right away
+        (script_loaded): that is the moment the script can still be fixed.
         """
         try:
             if hardware_problems.count() == 0:
                 return
 
-            if self._run_in_progress():
+            if self._run_in_progress() and not script_loaded:
                 pending = hardware_problems.peek()
                 worst = "error" if any(p.severity == "error" for p in pending) else "warning"
                 marker = "\u26d4" if worst == "error" else "\u26a0"
@@ -1287,9 +1291,10 @@ class SolarEclipseController(Observer):
             summary = hardware_problems.summarise(problems)
             has_error = any(p.severity == "error" for p in problems)
             box = QMessageBox.critical if has_error else QMessageBox.warning
+            kind = "Script" if all(p.source == "Script" for p in problems) else "Camera"
             box(
                 self.view,
-                "Camera problem" if len(problems) == 1 else "Camera problems",
+                f"{kind} problem" if len(problems) == 1 else f"{kind} problems",
                 summary + "\n\nDetails are in the log file.",
             )
         except Exception:
@@ -1623,6 +1628,10 @@ class SolarEclipseController(Observer):
                                    "were not scheduled.  Available: %s", name, count,
                                    ", ".join(sorted(self.model.reference_moments)))
 
+                # Problems found while loading (a bad bracket, commands already past) are shown
+                # now, while the script can still be fixed, not after the run
+                self._show_camera_problems(script_loaded=True)
+
                 self.jobs_model = JobsTableModel(self.scheduler, self)
                 self.view.jobs_table.setModel(self.jobs_model)
                 self.jobs_model.add_observer(self.view.jobs_table)
@@ -1847,9 +1856,12 @@ class SolarEclipseController(Observer):
 
         # Location
 
-        is_location_loaded = self.set_location(self.view.settings.value("longitude", None, type=float),
-                                               self.view.settings.value("latitude", None, type=float),
-                                               self.view.settings.value("altitude", None, type=float))
+        # A missing key is read as 0.0 when type=float is given, so check that the key exists first
+
+        longitude, latitude, altitude = (self.view.settings.value(key, type=float)
+                                         if self.view.settings.contains(key) else None
+                                         for key in ("longitude", "latitude", "altitude"))
+        is_location_loaded = self.set_location(longitude, latitude, altitude)
 
         # Eclipse date
 
@@ -1889,7 +1901,9 @@ class SolarEclipseController(Observer):
         """
 
 
-        if longitude and latitude and altitude:
+        # 0 is a valid coordinate (e.g. an altitude at sea level)
+
+        if longitude is not None and latitude is not None and altitude is not None:
             self.model.set_position(longitude, latitude, altitude)
 
             self.view.longitude_label.setText(str(longitude))
@@ -3836,7 +3850,7 @@ def main():
         "-lon",
         "--longitude",
         help="longitude of the location where to watch the solar eclipse (W is negative)",
-        default=False,
+        default=None,
         type=float
     )
 
@@ -3844,7 +3858,7 @@ def main():
         "-lat",
         "--latitude",
         help="latitude of the location where to watch the solar eclipse (N is positive)",
-        default=False,
+        default=None,
         type=float
     )
 
@@ -3852,7 +3866,7 @@ def main():
         "-alt",
         "--altitude",
         help="altitude of the location where to watch the solar eclipse (in metres)",
-        default=False,
+        default=None,
         type=float
     )
 
@@ -3900,7 +3914,8 @@ def main():
     # Make the view available to the camera overview model so it can read simulator flags
     model.camera_overview.view = view
 
-    if args.longitude and args.latitude and args.altitude:
+    is_location_given = args.longitude is not None and args.latitude is not None and args.altitude is not None
+    if is_location_given:
         controller.set_location(args.longitude, args.latitude, args.altitude)
 
     if args.date:
@@ -3911,7 +3926,7 @@ def main():
     # need to be downloaded.
     view.show()
 
-    if args.longitude and args.latitude and args.altitude and args.date:
+    if is_location_given and args.date:
         # Schedule after the event loop starts so the main window is painted.
         QTimer.singleShot(0, controller.set_reference_moments)
 

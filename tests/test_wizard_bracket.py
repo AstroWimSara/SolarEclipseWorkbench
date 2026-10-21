@@ -120,9 +120,17 @@ def test_check_software_and_invalid_brackets():
 
 def test_check_reminds_canon_of_the_menu_setting():
     report = Report()
-    check_brackets(_Config(CANON), "Canon", [_bracket("1 3"), _bracket("1 5")], report)
+    check_brackets(_Config(CANON), "Canon", [_bracket("1 5"), _bracket("2 5")], report)
     item = next(i for i in report.items if i.title == "Check the number of bracketed shots on the camera")
-    assert "at least 5" in item.detail
+    assert "set the camera to 5" in item.detail
+
+
+def test_check_warns_canon_of_different_frame_counts():
+    # The menu setting applies to every bracket: a 3-frame bracket with 5 set is not centred
+    report = Report()
+    check_brackets(_Config(CANON), "Canon", [_bracket("1 3"), _bracket("1 5")], report)
+    assert "The brackets use different numbers of frames" in _titles(report)
+    assert "Check the number of bracketed shots on the camera" not in _titles(report)
 
 
 def test_script_without_brackets_is_not_checked():

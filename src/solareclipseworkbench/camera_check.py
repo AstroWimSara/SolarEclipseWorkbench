@@ -363,10 +363,18 @@ def check_brackets(config, vendor: Optional[str], commands: List[ScriptCommand],
         report.add(OK, "The camera takes every bracket itself", quoted(specs))
 
     if vendor == "Canon" and specs:
+        # With 5 set, an EOS 80D shoots 0, -2, -1, +1, +2 steps: a 3-frame bracket is 0, -2, -1
         frames = sorted({spec.frames for spec in specs.values()})
-        report.add(INFO, "Check the number of bracketed shots on the camera",
-                   f"Canon sets it in a custom function, not over USB.  The script uses "
-                   f"{' and '.join(map(str, frames))} frames: set the camera to at least {frames[-1]}.")
+        if len(frames) == 1:
+            report.add(INFO, "Check the number of bracketed shots on the camera",
+                       f"Canon sets it in a custom function, not over USB.  The script uses "
+                       f"{frames[0]} frames: set the camera to {frames[0]}.")
+        else:
+            report.add(WARNING, "The brackets use different numbers of frames",
+                       f"The script uses {' and '.join(map(str, frames))} frames, but Canon sets the number of "
+                       f"bracketed shots in a custom function, not over USB, so it is the same for every bracket.  "
+                       f"A bracket with fewer frames than that setting is not centred: with 5 set, a 3-frame "
+                       f"bracket is 0, -2 and -1 steps.  Use the same number of frames for every bracket.")
 
 
 def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport) -> None:

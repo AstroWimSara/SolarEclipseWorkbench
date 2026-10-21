@@ -1,7 +1,7 @@
 import logging
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -186,6 +186,31 @@ def report_camera_conflicts(windows: List[CameraBusyWindow]) -> List[CameraConfl
     return conflicts
 
 
+def report_past_commands(past: list) -> None:
+    """Warn about script commands whose time had already passed when the script was loaded.
+
+    The scheduler skips them with only a line in the log, so a script loaded too
+    late (or a simulation started too close to its reference moment) would
+    silently lose its first commands.
+    """
+    if not past:
+        return
+    past = sorted(past)
+    first_time, first = past[0]
+    last_time, last = past[-1]
+    if len(past) == 1:
+        which = f'"{first}" at {_hms(first_time)} UTC'
+    else:
+        which = f'from "{first}" at {_hms(first_time)} UTC to "{last}" at {_hms(last_time)} UTC'
+    hardware_problems.report(
+        "Script",
+        f"{len(past)} command(s) of the script are already past and will not run.  In a simulation, "
+        f"start it earlier before the reference moment.",
+        detail=which,
+        severity="warning",
+    )
+
+
 def calculate_next_solar_eclipses(count: int) -> list:
     """ Calculate the next solar eclipses, starting from today.
 
@@ -312,16 +337,19 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
         timing_profiles = {}
 
     unknown: dict = {}
+    past: list = []
 
     # Loop over all lines in script file
     busy_windows = []
     for cmd_str in script_file:
         window = schedule_command(
             scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start,
-            gps_time_offset=gps_time_offset, unknown_moments=unknown, timing_profiles=timing_profiles)
+            gps_time_offset=gps_time_offset, unknown_moments=unknown, timing_profiles=timing_profiles,
+            past_commands=past)
         if window is not None:
             busy_windows.append(window)
 
+    report_past_commands(past)
     report_camera_conflicts(busy_windows)
     time_shift = gps_time_offset
     if reference_moment:
@@ -504,7 +532,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                      simulated_start: datetime,
                      gps_time_offset: timedelta = timedelta(0),
                      unknown_moments: Optional[dict] = None,
-                     timing_profiles: Optional[dict] = None) -> Optional[CameraBusyWindow]:
+                     timing_profiles: Optional[dict] = None,
+                     past_commands: Optional[list] = None) -> Optional[CameraBusyWindow]:
     """ Schedule the given command with the given scheduler and reference moments.
 
     Args:
@@ -524,6 +553,8 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                            here, as {name: number of lines lost}, so the caller can report it.
         - timing_profiles: Timing per camera name the script was planned with (see
                            command_timing.parse_timing_directives); other cameras use the defaults.
+        - past_commands: When given, a command whose time has already passed (it will not run) is
+                         added here as (execution time, description), so the caller can report it.
 
     Returns: For a camera command, when it starts and how long it is expected to keep the camera
              busy; None otherwise (or when the command was not scheduled).
@@ -657,6 +688,12 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
         # and would fire the shutter late.  Scheduling earlier on the computer clock
         # by subtracting the offset ensures the action happens at the correct moment.
         execution_time = execution_time - gps_time_offset
+
+        now = datetime.now(timezone.utc)
+        if execution_time.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        if past_commands is not None and execution_time < now:
+            past_commands.append((execution_time, description))
 
         trigger = DateTrigger(run_date=execution_time, timezone=pytz.utc)
 
