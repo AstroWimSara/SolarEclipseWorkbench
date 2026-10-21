@@ -106,3 +106,18 @@ def test_busy_camera_is_not_waited_for_forever():
     finally:
         done.set()
         t.join()
+
+
+def test_a_size_the_camera_does_not_offer_starts_at_the_camera_default():
+    # An EOS 80D reports 'val 0' next to Large, Medium and Small, and does not accept it back
+    from solareclipseworkbench.gui import CAMERA_DEFAULT_SIZE, live_view_size_items
+
+    items, selected = live_view_size_items("val 0", ["Large", "Medium", "Small"])
+    assert items == [CAMERA_DEFAULT_SIZE, "Large", "Medium", "Small"]
+    assert selected == CAMERA_DEFAULT_SIZE
+
+
+def test_a_size_the_camera_offers_is_selected():
+    from solareclipseworkbench.gui import live_view_size_items
+
+    assert live_view_size_items("Medium", ["Large", "Medium", "Small"]) == (["Large", "Medium", "Small"], "Medium")

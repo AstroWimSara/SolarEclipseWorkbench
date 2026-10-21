@@ -2770,6 +2770,21 @@ class EclipsePlotWidget(QtWidgets.QWidget):
     #         self.ax.text(x, y, label, ha="center", va="center", fontsize=10, color="dimgray")
 
 
+CAMERA_DEFAULT_SIZE = "Camera default"
+
+
+def live_view_size_items(current: str, choices: list) -> tuple:
+    """Items of the preview size box, and the one to select first.
+
+    Some cameras report a size they do not offer (an EOS 80D reports 'val 0'
+    next to Large, Medium and Small) and do not accept it back: the box then
+    starts at "Camera default", which is never sent to the camera.
+    """
+    if current in choices:
+        return list(choices), current
+    return [CAMERA_DEFAULT_SIZE] + list(choices), CAMERA_DEFAULT_SIZE
+
+
 class LiveViewWindow(QWidget):
     """Floating window that shows a live-view preview from a gphoto2 camera.
 
@@ -2832,17 +2847,21 @@ class LiveViewWindow(QWidget):
         self._original_size: Union[str, None] = None
         sizes = get_live_view_sizes(camera)
         if sizes is None:
-            self._size_combo.addItem("Camera default")
+            self._size_combo.addItem(CAMERA_DEFAULT_SIZE)
             self._size_combo.setEnabled(False)
             self._size_combo.setToolTip("This camera does not let SEW change the size of the live-view frames")
         else:
-            self._original_size, choices = sizes
-            self._size_combo.addItems(choices)
+            items, self._original_size = live_view_size_items(*sizes)
+            self._size_combo.addItems(items)
             self._size_combo.setCurrentText(self._original_size)
+            if self._original_size == CAMERA_DEFAULT_SIZE:
+                restored = ("The camera does not report its own setting, so a size chosen here stays on the "
+                            "camera after this window closes.")
+            else:
+                restored = f"The camera setting ({self._original_size}) is restored when this window closes."
             self._size_combo.setToolTip(
                 "Size of the live-view frames.  Larger frames show more detail but take longer to transfer: "
-                "a scheduled shot that fires during a transfer waits for it.\n"
-                f"The camera setting ({self._original_size}) is restored when this window closes."
+                "a scheduled shot that fires during a transfer waits for it.\n" + restored
             )
         self._size_combo.currentTextChanged.connect(self._on_size_changed)
 
@@ -2983,7 +3002,7 @@ class LiveViewWindow(QWidget):
 
     def _on_size_changed(self, size: str):
         """Slot for preview size combo box changes."""
-        if self._original_size is None or self._totality_paused:
+        if self._original_size is None or self._totality_paused or size == CAMERA_DEFAULT_SIZE:
             return
         if not set_live_view_size(self._camera, size):
             QMessageBox.warning(self, "Preview size", f"The camera did not accept preview size {size}.")
@@ -3092,6 +3111,9 @@ class LiveViewWindow(QWidget):
             if self._totality_paused:
                 camera_log(self._camera).warning('live view size left at %s (window closed during totality)',
                                                  self._size_combo.currentText())
+            elif self._original_size == CAMERA_DEFAULT_SIZE:
+                camera_log(self._camera).info('live view size left at %s (the camera did not report its own '
+                                              'size)', self._size_combo.currentText())
             else:
                 set_live_view_size(self._camera, self._original_size)
         event.accept()
