@@ -11,13 +11,13 @@ To see what a camera reports for a setting, close Solar Eclipse Workbench and ru
 - [x] **The camera may report the bracketed speed during AEB.** If so, the frame count now works. Set `Number of bracketed shots` to **5** in the camera menu and run `take_bracket … "1 5"`: 5 frames should be taken. SEW used to stop after 3 frames, because it read the shutter speed from a stale copy of the settings.
   Model: Canon EOS 80D (2026-10-20), after the fix in the next item. `"1 5"` at 1/60 gave 1/60, 1/250, 1/125, 1/30, 1/15 (0, −2, −1, +1, +2), and `"+/- 1 2/3"` gave 5 frames 1 2/3 EV apart. The frames are about 1.3 s apart: a `"1 5"` kept the camera busy 6.7 s and a `"3 5"` at 1/30 9.1 s, against 10.1 s and 12.4 s in the planning.
 - [ ] **The bracket stops when the menu is set lower than the script.** Set `Number of bracketed shots` to **3** and run `"1 5"`: SEW should take 3 frames and log `AEB stopped after 3 frames instead of 5 …`.
-  Model: ______ (only on a body that reports the bracketed speed. The EOS 80D does not, so it takes all 5 frames. Still to check that these are 0, −1, +1, 0, −1: in the 2026-10-20 run of `2_aeb_menu3.txt` the menu was still at 5.)
+  Model: ______ (only on a body that reports the bracketed speed). Canon EOS 80D (2026-10-21), which does not: with the menu at 3, `"1 5"` took all 5 frames, 1/60, 1/125, 1/30, 1/60, 1/125 (0, −1, +1, then a new sequence 0, −1), as expected. `"1 3"` gave 0, −1, +1.
 - [x] **The camera may always report the base speed during AEB.** If it does, every bracket stops after 3 frames, the same as before these changes. Note it here so the check can be changed.
   Result: Canon EOS 80D (2026-10-20) always reports the base speed. With `Number of bracketed shots` at 5, `"1 5"` and `"+/- 1 2/3"` at 1/60 both logged `AEB stopped after 3 frames instead of 5` (`sew-20261020-191947Z.log`). After the third frame the camera still reported 1/60, where its next frame is at 1/250. `gphoto2 --get-config shutterspeed` after each of 4 AEB frames also gives 1/60 every time, so reading the speed later does not help. Fixed: a camera that reports the base speed before the second frame now takes every frame of the script. Run `1_aeb_menu5.txt` again to check this.
 - [x] **A bracket with fewer frames than the menu setting still works.** Set the menu to **5** and run `"1 3"`. The 3 frames should be 0, −1, +1 EV (the camera's default bracketing order). Check the exposures in the EXIF data, and check that AEB is off afterwards.
   Result: it does not work. Canon EOS 80D (2026-10-20), menu at 5: the camera's sequence is 0, −2, −1, +1, +2 steps (EXIF `AEBBracketValue`, frames `_MG_6969`–`_MG_6983`), so `"1 3"` gave 1/60, 1/250, 1/125 (0, −2, −1). AEB was off afterwards (the next single pictures were at 1/60), and turning AEB on again starts a new sequence. The README and `Verify with Camera...` now say the menu must match the bracket, and `Verify with Camera...` warns when a script mixes frame counts.
 - [x] **A step AEB does not offer falls back to software.** With the camera set to 1/2-stop increments, a `"1/3 3"` bracket should log `AEB does not offer a step of 1/3 EV, will fallback to simulated bracketing` and still take 3 frames.
-  Model: Canon EOS 80D (2026-10-20), tested the other way round: at 1/3-stop increments, `"1/2 3"` at 1/60 logged `AEB does not offer a step of 1/2 EV, will fallback to simulated bracketing` and took 1/80, 1/60, 1/40. The 1/2-stop case is still to do.
+  Model: Canon EOS 80D (2026-10-20), tested the other way round: at 1/3-stop increments, `"1/2 3"` at 1/60 logged `AEB does not offer a step of 1/2 EV, will fallback to simulated bracketing` and took 1/80, 1/60, 1/40. At 1/2-stop increments (2026-10-21), `"1/3 3"` logged `AEB does not offer a step of 1/3 EV, will fallback to simulated bracketing` and took 1/90, 1/60, 1/45.
 
 ## Nikon
 
@@ -45,25 +45,30 @@ To see what a camera reports for a setting, close Solar Eclipse Workbench and ru
 
 - [ ] **The exposures are correct.** `"1 5"` at 1/60 should give about 1/250, 1/125, 1/60, 1/30, 1/15, darkest first. Afterwards the camera should be back at 1/60.
   Canon EOS 80D (2026-10-20): `"1/2 3"` at 1/60 gave 1/80, 1/60, 1/40 (the nearest 1/3 EV speeds, darkest first), and the next bracket started at 1/60 again. A Canon at 1/3 EV takes `"1 5"` with AEB, so the 5-frame case needs a Nikon, a Sony or a Canon at 1/2 EV.
-- [ ] **Brackets near the camera's limits.** A bracket near the fastest or slowest shutter speed should repeat the end speed rather than fail.
-  Canon EOS 80D (2026-10-20), with AEB rather than software: `"2/3 5"` at 1/6400 gave 1/6400, 1/8000, 1/8000, 1/4000, 1/2500. The camera repeats 1/8000 itself, and nothing failed. Software bracketing near the limit is still to do.
+- [x] **Brackets near the camera's limits.** A bracket near the fastest or slowest shutter speed should repeat the end speed rather than fail.
+  Canon EOS 80D (2026-10-20), with AEB: `"2/3 5"` at 1/6400 gave 1/6400, 1/8000, 1/8000, 1/4000, 1/2500. The camera repeats 1/8000 itself, and nothing failed. In software (2026-10-21, 1/2 EV increments): `"2/3 5"` at 1/6000 gave 1/8000, 1/8000, 1/6000, 1/4000, 1/2000, with the warning `frames are up to 0.9 EV off`. Only the fast end was tested.
 
 ## Scripts in SEW
 
-- [ ] **A bad bracket is caught when the script is loaded.** A script with `"1 4"` or `"abc"` should show a problem in the GUI when it is loaded, and that bracket should be skipped. The other commands should still be scheduled.
-  Canon EOS 80D (2026-10-20): both were logged as errors when the script was loaded and were skipped, and the other commands ran. **But the dialog only appeared after the run.** The scheduler starts when the script is loaded, so `_show_camera_problems` holds the dialog back until the run ends, as it does for camera problems during a run. Fixed: the dialog ("Script problems") now opens when the script is loaded. Load `7_bad_brackets.txt` again to check. Commands already past when a script is loaded are now reported in the same dialog.
+- [x] **A bad bracket is caught when the script is loaded.** A script with `"1 4"` or `"abc"` should show a problem in the GUI when it is loaded, and that bracket should be skipped. The other commands should still be scheduled.
+  Canon EOS 80D (2026-10-20): both were logged as errors when the script was loaded and were skipped, and the other commands ran. **But the dialog only appeared after the run.** The scheduler starts when the script is loaded, so `_show_camera_problems` holds the dialog back until the run ends, as it does for camera problems during a run. Fixed: the dialog ("Script problems") now opens when the script is loaded. Checked on 2026-10-21: the dialog opens when `7_bad_brackets.txt` is loaded. Commands already past when a script is loaded are now reported in the same dialog. Checked by loading `5_timing.txt` with the simulation at C2 − 2 min, which reported `8 command(s) of the script are already past`.
 - [x] **Old scripts still load.** A script with the Canon form `"+/- 1 2/3"` should load and take 5 frames.
   Canon EOS 80D (2026-10-20): 5 frames, 0, −3 1/3, −1 2/3, +1 2/3, +3 1/3 EV.
-- [ ] **No false timing warnings.** Run a simulation of a bracketed script: no "will probably be skipped" warnings for commands the wizard spaced, and no dropped commands in the log.
+- [x] **No false timing warnings.** Run a simulation of a bracketed script: no "will probably be skipped" warnings for commands the wizard spaced, and no dropped commands in the log.
+  Canon EOS 80D (2026-10-21), wizard script with 21 corona brackets `"1 5"`, two 2 s earthshine pictures and an 8-frame one-way HDR (`sew-20261021-192413Z.log`): no warnings, all 24 commands ran, every bracket took 5 frames (115 frames). Each command released the shutter 0.1–0.47 s after its scheduled time. The tightest spot is the earthshine picture at C2+30 s: it ended 0.3 s before the bracket at C2+34 s, which the wizard spaces with the 2 s planned picture overhead (1.6 s measured).
 
 ## Wizard
 
-- [ ] **Test Camera saves the brackets.** The report has a line "The camera takes N brackets itself" (or "offers no bracketing over USB"), and the result is kept after saving and reopening the wizard.
-  Canon EOS 80D (2026-10-20): the report line is there, and the brackets are saved in the camera profile in `~/.sew_wizard_config.json`. Still to check: they are still there after reopening the wizard. The status line next to `Test Camera...` does not mention brackets.
-- [ ] **Phenomena page, tested camera.** Only the camera's own steps and frame counts are offered. For Canon, the note names the frame count to set in the camera menu.
-- [ ] **Phenomena page, untested camera.** Standard steps (1/3 to 3 EV) and 3, 5, 7 or 9 frames are offered.
-- [ ] **The generated script.** With "Bracket each corona exposure" on, the corona shots are `take_bracket` lines with the chosen bracket in quotes, the summary shows "Corona Bracket: …", and the brackets fit within totality.
-- [ ] **Verify with Camera.** It warns when a bracket will be taken in software, and gives the Canon reminder about the menu setting.
+- [x] **Test Camera saves the brackets.** The report has a line "The camera takes N brackets itself" (or "offers no bracketing over USB"), and the result is kept after saving and reopening the wizard.
+  Canon EOS 80D (2026-10-20): the report line is there, and the brackets are saved in the camera profile in `~/.sew_wizard_config.json`. On 2026-10-21 they were still there after reopening the wizard. The status line next to `Test Camera...` does not mention brackets.
+- [x] **Phenomena page, tested camera.** Only the camera's own steps and frame counts are offered. For Canon, the note names the frame count to set in the camera menu.
+  Canon EOS 80D (2026-10-21): steps 1/3 to 3 EV with 3, 5 or 7 frames, and the note names the frame count.
+- [x] **Phenomena page, untested camera.** Standard steps (1/3 to 3 EV) and 3, 5, 7 or 9 frames are offered.
+  Checked 2026-10-21 with an untested camera entry.
+- [x] **The generated script.** With "Bracket each corona exposure" on, the corona shots are `take_bracket` lines with the chosen bracket in quotes, the summary shows "Corona Bracket: …", and the brackets fit within totality.
+  Canon EOS 80D (2026-10-21): `Total_Solar_Eclipse_2027_20261021.txt` has 21 `take_bracket` lines with `"1 5"`. The last ends at C2+4:52, 16 s before C3.
+- [x] **Verify with Camera.** It warns when a bracket will be taken in software, and gives the Canon reminder about the menu setting.
+  Canon EOS 80D (2026-10-21): the Canon reminder names 5 frames. Every bracket was one the camera takes itself, so the software warning did not come up.
 
 ## take_hdr (#159)
 
@@ -71,22 +76,23 @@ To see what a camera reports for a setting, close Solar Eclipse Workbench and ru
   Model: Canon EOS 80D (2026-10-20): 9 frames as listed, about 1.3 s apart (12.5 s in all).
 - [x] **One way.** `…, 4, one-way, "HDR"` gives 5 frames, from 1/1000 to 1/60, and the longest is taken once.
   Model: Canon EOS 80D (2026-10-20)
-- [ ] **A camera set to 1/2 EV steps.** Frames should still be 1 EV apart, e.g. 1/1000, 1/500, 1/250. Before this change they were 1.5 EV apart.
-  Model: ______
+- [x] **A camera set to 1/2 EV steps.** Frames should still be 1 EV apart, e.g. 1/1000, 1/500, 1/250. Before this change they were 1.5 EV apart.
+  Model: Canon EOS 80D (2026-10-21): 3 stops from 1/1000 gave 1/1000, 1/500, 1/250, 1/125 and back.
 - [ ] **Sony one-way with a matching mode.** With 4 stops, the log should say `take_hdr: 4 stops one-way taken as camera bracket "1 5" around 1/250`, and 5 frames 1 EV apart should be written. Sony takes the middle frame first. Check both `PC` and `PC+Camera` save mode.
   Model: ______
 - [ ] **Sony one-way without a matching mode.** For example 3 stops: the frames should be taken one by one, as with a round trip.
   Model: ______
-- [ ] **Wizard.** Choosing "One way" under the HDR option writes `…, 4, one-way, "HDR at maximum eclipse"`, and the summary shows "HDR: 4 stops, one way". "Round trip" writes the line exactly as before.
+- [x] **Wizard.** Choosing "One way" under the HDR option writes `…, 4, one-way, "HDR at maximum eclipse"`, and the summary shows "HDR: 4 stops, one way". "Round trip" writes the line exactly as before.
+  Canon EOS 80D (2026-10-21): `take_hdr, C2, +, 0:02:26.0, …, 1/1600, 4.0, 100, 7, one-way, "HDR at maximum eclipse"`. 8 frames from 1/1600 to 1/13 were taken.
 
 ## 1/2 EV exposure steps (#169)
 
 - [x] **Canon or Nikon set to 1/2 EV steps.** `Test Camera...` shows "Exposure step 1/2 EV" (this only works if the camera then lists its shutter speeds in 1/2 EV steps), and lists AEB or bracketing steps such as `1/2`, `1`, `1 1/2`.
   Model: Canon EOS 80D (2026-10-20). With 1/2 EV increments the camera lists its shutter speeds in 1/2 EV steps (…, 1/90, 1/125, 1/180, …), and the apertures too.
-- [ ] **A bracket on a 1/2 EV camera.** `"1/2 3"` uses the camera's AEB or bracketing. `"1/3 3"` falls back to software and logs `take_bracket: the camera has no shutter speeds for 3 frames, 1/3 EV apart; …`.
-  Model: ______
-- [ ] **A script made for 1/3 EV.** A script with 1/3 EV speeds (e.g. 1/320) runs on a 1/2 EV camera, with each speed rounded to the camera's nearest one.
-  Model: ______
+- [x] **A bracket on a 1/2 EV camera.** `"1/2 3"` uses the camera's AEB or bracketing. `"1/3 3"` falls back to software and logs `take_bracket: the camera has no shutter speeds for 3 frames, 1/3 EV apart; …`.
+  Model: Canon EOS 80D (2026-10-21): `"1/2 3"` with AEB gave 1/60, 1/90, 1/45. `"1/3 3"` gave 1/90, 1/60, 1/45 in software and logged `frames are up to 0.3 EV off`.
+- [x] **A script made for 1/3 EV.** A script with 1/3 EV speeds (e.g. 1/320) runs on a 1/2 EV camera, with each speed rounded to the camera's nearest one.
+  Model: Canon EOS 80D (2026-10-21): 1/320 was taken at 1/350, and a `"1 3"` AEB around it gave 1/350, 1/750, 1/180.
 - [ ] **Sony set to 1/2 EV steps.** Check whether a Sony lists its shutter speeds in 1/2 EV steps (`gphoto2 --get-config shutterspeed`). If it does, `Test Camera...` shows the warning to set 1/3 EV. If it doesn't, the warning can never appear, so note that here.
   Result: ______
 
