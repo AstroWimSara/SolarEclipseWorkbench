@@ -1,0 +1,7 @@
+# Canon 6. prepare_camera.  Camera at 1/3 EV increments, Number of bracketed shots = 5.
+# Simulation start: C2 - 0:02:00.  Lasts about 1.5 minutes.
+take_picture, C2, -, 0:01:45.0, MY_CAMERA, 1/800, 8, 100, "6-1 single picture at 1/800"
+prepare_camera, C2, -, 0:01:30.0, MY_CAMERA, 1/100, 8, 100, burst, "6-2 prepare for burst: expect no picture"
+take_burst, C2, -, 0:01:20.0, MY_CAMERA, 1/100, 8, 100, 2, "6-3 burst after prepare"
+prepare_camera, C2, -, 0:01:00.0, MY_CAMERA, 1/30, 8, 100, "3 5", "6-4 prepare for bracket: expect no picture"
+take_bracket, C2, -, 0:00:50.0, MY_CAMERA, 1/30, 8, 100, "3 5", "6-5 bracket after prepare: expect 5 frames"

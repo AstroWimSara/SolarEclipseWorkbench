@@ -1,0 +1,8 @@
+# Canon 1. AEB.  Camera at 1/3 EV increments, Number of bracketed shots = 5.
+# Simulation start: C2 - 0:02:00.  Lasts about 1.5 minutes.
+take_picture, C2, -, 0:01:45.0, MY_CAMERA, 1/60, 8, 100, "1-0 reference picture at 1/60"
+take_bracket, C2, -, 0:01:30.0, MY_CAMERA, 1/60, 8, 100, "1 5", "1-1 AEB 1 5: expect 5 frames 1/250 1/125 1/60 1/30 1/15 (order: see the camera's bracketing sequence)"
+take_bracket, C2, -, 0:01:10.0, MY_CAMERA, 1/60, 8, 100, "1 3", "1-2 AEB 1 3 with the menu at 5: expect an off-centre bracket, e.g. 0 -2 -1"
+take_picture, C2, -, 0:00:55.0, MY_CAMERA, 1/60, 8, 100, "1-3 single picture after AEB: expect 1 frame at 1/60"
+take_bracket, C2, -, 0:00:40.0, MY_CAMERA, 1/60, 8, 100, "+/- 1 2/3", "1-4 old Canon form: expect 5 frames 1 2/3 EV apart"
+take_picture, C2, -, 0:00:20.0, MY_CAMERA, 1/60, 8, 100, "1-5 single picture after AEB: expect 1 frame at 1/60"

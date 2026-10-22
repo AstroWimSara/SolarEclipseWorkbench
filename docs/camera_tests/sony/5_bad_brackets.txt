@@ -1,0 +1,7 @@
+# 5. Load-time checks.  Only load the script: no need to run it.
+# Expect a "Script problems" dialog for 5-2 and 5-3 as soon as it is loaded,
+# and 5-1 and 5-4 still in the jobs table.
+take_picture, C2, -, 0:01:45.0, MY_CAMERA, 1/60, 8, 100, "5-1 valid picture"
+take_bracket, C2, -, 0:01:30.0, MY_CAMERA, 1/60, 8, 100, "1 4", "5-2 bad bracket: 4 frames"
+take_bracket, C2, -, 0:01:15.0, MY_CAMERA, 1/60, 8, 100, "abc", "5-3 bad bracket: abc"
+take_bracket, C2, -, 0:01:00.0, MY_CAMERA, 1/60, 8, 100, "1 3", "5-4 valid bracket"

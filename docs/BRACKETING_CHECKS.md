@@ -1,6 +1,8 @@
 # Bracketing: checks on real cameras
 
-The bracketing changes for #161 (`take_bracket` with `"<EV step> <frames>"`) and #171 (the wizard reads the camera's brackets) pass the automated tests. They have not yet been tried on a real camera. Tick off each item once it has been checked on a real body, and note the model.
+The bracketing changes for #161 (`take_bracket` with `"<EV step> <frames>"`) and #171 (the wizard reads the camera's brackets) pass the automated tests. They have not yet been tried on a real camera.
+
+The test scripts for these checks are in [`camera_tests/`](camera_tests/), and [CAMERA_TESTS.md](CAMERA_TESTS.md) tells users how to run them on their own camera. Tick off each item once it has been checked on a real body, and note the model.
 
 To see what a camera reports for a setting, close Solar Eclipse Workbench and run `gphoto2 --get-config <name>` with the camera connected. For example, `gphoto2 --get-config aeb` lists the choices of the `aeb` setting.
 

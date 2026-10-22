@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Test scripts for Canon, Nikon and Sony bodies in `docs/camera_tests/`, and a guide, [Testing your camera](docs/CAMERA_TESTS.md), on how to run them and what to send back: brackets, HDR sequences, shot timing and `prepare_camera`, with what each line should give
 - Connected cameras are kept awake before the script starts: idle cameras are pinged over USB every 20 seconds so their auto power off does not put them to sleep (paused around totality and just before scheduled commands, so shots are never delayed), and a camera that stops responding is reported in the GUI
 - Warning when pressing `Camera(s)` if a Canon's `Auto power off` or a Nikon's standby timer is shorter than 30 minutes (Sony does not expose this setting)
 - Warning when a script is loaded if a command will probably be skipped because its camera is still busy with an earlier command (estimated from the exposure time, the USB overhead and, for bursts, the time to empty the camera buffer)

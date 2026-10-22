@@ -1,0 +1,6 @@
+# Canon 2. AEB with the menu set lower than the script.
+# Camera at 1/3 EV increments, Number of bracketed shots = 3.
+# Simulation start: C2 - 0:02:00.  Lasts about 1 minute.
+take_bracket, C2, -, 0:01:45.0, MY_CAMERA, 1/60, 8, 100, "1 5", "2-1 AEB 1 5 with the menu at 3: expect 3 frames and 'AEB stopped', or 5 frames with repeats if the camera does not report the bracketed speed"
+take_bracket, C2, -, 0:01:25.0, MY_CAMERA, 1/60, 8, 100, "1 3", "2-2 AEB 1 3 with the menu at 3: expect 3 frames 1/125 1/60 1/30"
+take_picture, C2, -, 0:01:10.0, MY_CAMERA, 1/60, 8, 100, "2-3 single picture after AEB: expect 1 frame at 1/60"

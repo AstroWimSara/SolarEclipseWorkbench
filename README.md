@@ -734,6 +734,8 @@ The following cameras are tested:
 
 It is possible to take pictures in burst mode.  The speed is limited by the speed of the camera (and card).
 
+To test brackets, HDR sequences and shot timing on your own camera, see [Testing your camera](docs/CAMERA_TESTS.md).  It has test scripts for Canon, Nikon and Sony bodies.
+
 ### Reference moments
 
 The reference moments of the eclipse that used in the scripts are:

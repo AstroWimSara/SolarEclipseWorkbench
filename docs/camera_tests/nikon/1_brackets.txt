@@ -1,0 +1,9 @@
+# Nikon 1. Brackets.  Camera at 1/3 EV steps, release mode dial on Continuous.
+# Simulation start: C2 - 0:02:30.  Lasts about 2 minutes.
+take_picture, C2, -, 0:02:15.0, MY_CAMERA, 1/60, 8, 100, "1-0 reference picture at 1/60"
+take_bracket, C2, -, 0:02:00.0, MY_CAMERA, 1/60, 8, 100, "1 3", "1-1 bracket 1 3: expect 3 frames 1/125 1/60 1/30"
+take_bracket, C2, -, 0:01:40.0, MY_CAMERA, 1/60, 8, 100, "2/3 5", "1-2 bracket 2/3 5: expect 5 frames 2/3 EV apart"
+take_picture, C2, -, 0:01:20.0, MY_CAMERA, 1/60, 8, 100, "1-3 single picture after a bracket: expect 1 frame at 1/60"
+take_bracket, C2, -, 0:01:05.0, MY_CAMERA, 1/60, 8, 100, "1 9", "1-4 bracket 1 9: on a body with fewer frames, expect 'failed to set aebracketingpattern at 9 images, chose ... instead'"
+take_bracket, C2, -, 0:00:40.0, MY_CAMERA, 1/60, 8, 100, "1/2 3", "1-5 a 1/2 EV step on a camera at 1/3 EV: note what the log says and the exposures"
+take_picture, C2, -, 0:00:20.0, MY_CAMERA, 1/60, 8, 100, "1-6 single picture: expect 1 frame at 1/60"
