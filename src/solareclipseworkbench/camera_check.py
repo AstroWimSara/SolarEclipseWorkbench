@@ -374,7 +374,8 @@ def check_brackets(config, vendor: Optional[str], commands: List[ScriptCommand],
                        f"The script uses {' and '.join(map(str, frames))} frames, but Canon sets the number of "
                        f"bracketed shots in a custom function, not over USB, so it is the same for every bracket.  "
                        f"A bracket with fewer frames than that setting is not centred: with 5 set, a 3-frame "
-                       f"bracket is 0, -2 and -1 steps.  Use the same number of frames for every bracket.")
+                       f"bracket is 0, -2 and -1 steps (or -2, -1 and 0, depending on the bracketing sequence).  "
+                       f"Use the same number of frames for every bracket.")
 
 
 def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport) -> None:
