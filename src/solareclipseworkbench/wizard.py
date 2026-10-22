@@ -2750,7 +2750,7 @@ class SummaryPage(QWizardPage):
                             else:
                                 hdr_excl_speed_str = wizard.field('hdr_start_speed')
                             # Shutter-open times of the ramp down and back up, plus USB overhead
-                            hdr_duration = hdr_duration_s(hdr_excl_speed_str, hdr_stops_val, hdr_sequence)
+                            hdr_duration = hdr_duration_s(hdr_excl_speed_str, hdr_stops_val, hdr_sequence, timing)
                             # Same start as the take_hdr line written below
                             hdr_start = hdr_start_after_c2(hdr_duration)
                             if hdr_start is None:
@@ -2933,7 +2933,7 @@ class SummaryPage(QWizardPage):
                     hdr_iso_auto = preferred_iso
                 hdr_iso = int(wizard.field('hdr_iso_manual')) if not wizard.field('hdr_iso_auto') else hdr_iso_auto
                 n_shots = len(hdr_offsets(hdr_stops, hdr_sequence))
-                hdr_duration = hdr_duration_s(hdr_start_speed, hdr_stops, hdr_sequence)
+                hdr_duration = hdr_duration_s(hdr_start_speed, hdr_stops, hdr_sequence, timing)
                 # The default round trip is left out, so the line reads as before
                 hdr_sequence_field = f" {hdr_sequence}," if hdr_sequence == HDR_ONE_WAY else ""
                 lines.append("# HDR burst at maximum eclipse")

@@ -79,7 +79,7 @@ def estimate_busy_s(func_name: str, script_args: list, camera=None,
             return burst_duration_s(vendor, float(script_args[4]), profile)
         if func_name == "take_hdr":
             return hdr_duration_s(shutter, int(script_args[4]), parse_hdr_sequence(
-                script_args[5] if len(script_args) > 5 else None))
+                script_args[5] if len(script_args) > 5 else None), profile)
         if func_name == "take_bracket":
             vendor = getattr(camera, "vendor", None) or vendor_from_name(script_args[0])
             return bracket_duration_s(shutter, profile, script_args[4], vendor)

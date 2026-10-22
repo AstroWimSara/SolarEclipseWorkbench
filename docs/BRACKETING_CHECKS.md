@@ -67,6 +67,7 @@ To see what a camera reports for a setting, close Solar Eclipse Workbench and ru
   Canon EOS R (2026-10-21/22): 5 frames, −3 1/3, −1 2/3, 0, +1 2/3, +3 1/3 EV.
 - [x] **No false timing warnings.** Run a simulation of a bracketed script: no "will probably be skipped" warnings for commands the wizard spaced, and no dropped commands in the log.
   Canon EOS 80D (2026-10-21), wizard script with 21 corona brackets `"1 5"`, two 2 s earthshine pictures and an 8-frame one-way HDR (`sew-20261021-192413Z.log`): no warnings, all 24 commands ran, every bracket took 5 frames (115 frames). Each command released the shutter 0.1–0.47 s after its scheduled time. The tightest spot is the earthshine picture at C2+30 s: it ended 0.3 s before the bracket at C2+34 s, which the wizard spaces with the 2 s planned picture overhead (1.6 s measured).
+  Canon EOS R (2026-10-22), wizard script with 16 corona brackets `"1 5"` (up to 2 s base, so 8 s frames), two 4 s earthshine pictures and an 8-frame one-way HDR (`sew-20261022-192623Z.log`): no warnings at load, all 19 commands ran, and all 90 frames are there. But the HDR kept the R busy 15.7 s against 14.4 s planned, so the bracket after it released the shutter 1.1 s late (the others: 0.27–0.58 s). `hdr_duration_s` plans 1.5 s per frame for every camera, and the R needs about 1.9 s. The earthshine pictures ended 0.8 s and 0.26 s before the next bracket.
 
 ## Wizard
 

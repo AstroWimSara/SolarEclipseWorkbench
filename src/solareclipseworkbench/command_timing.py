@@ -34,6 +34,10 @@ PICTURE_OVERHEAD_S = 2.0
 # Per shot and fixed overhead of a take_hdr sequence (see wizard HDR planning).
 HDR_SHOT_OVERHEAD_S = 1.5
 HDR_FIXED_OVERHEAD_S = 2.0
+# An HDR frame is triggered without waiting for the full picture round trip, so
+# it is this much quicker than a picture on the same camera: an EOS 80D took
+# about 1.4 s per HDR frame, an EOS R (2.35 s per picture) about 1.9 s.
+HDR_SHOT_SAVING_S = 0.5
 
 # Configuration round trips before the shutter is pressed, plus the time after
 # release until the camera reports capture complete and has written its burst
@@ -312,11 +316,18 @@ def burst_duration_s(vendor: Optional[str], burst_param: float, profile: TimingP
     return burst_shooting_s(vendor, burst_param, profile) * profile.burst_busy_per_s + profile.burst_overhead_s
 
 
-def hdr_duration_s(start_shutter_speed: str, stops: int, sequence: str = HDR_ROUND_TRIP) -> float:
+def hdr_shot_overhead_s(profile: TimingProfile = DEFAULT_PROFILE) -> float:
+    """Overhead per HDR frame: the default, or longer on a camera measured to be slower."""
+    return max(HDR_SHOT_OVERHEAD_S, profile.picture_overhead_s - HDR_SHOT_SAVING_S)
+
+
+def hdr_duration_s(start_shutter_speed: str, stops: int, sequence: str = HDR_ROUND_TRIP,
+                   profile: TimingProfile = DEFAULT_PROFILE) -> float:
     """Busy time of a take_hdr: ramp up to the longest exposure (and back down for a round trip)."""
     start_s = _exposure_s(start_shutter_speed)
     offsets = hdr_offsets(stops, sequence)
-    return sum(start_s * 2 ** k for k in offsets) + len(offsets) * HDR_SHOT_OVERHEAD_S + HDR_FIXED_OVERHEAD_S
+    return (sum(start_s * 2 ** k for k in offsets) + len(offsets) * hdr_shot_overhead_s(profile)
+            + HDR_FIXED_OVERHEAD_S)
 
 
 def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROFILE,

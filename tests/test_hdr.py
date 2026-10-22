@@ -18,7 +18,8 @@ from solareclipseworkbench.bracketing import (
     parse_hdr_sequence,
 )
 from solareclipseworkbench.camera_check import ScriptCommand, estimate_frames
-from solareclipseworkbench.command_timing import HDR_FIXED_OVERHEAD_S, HDR_SHOT_OVERHEAD_S, hdr_duration_s
+from solareclipseworkbench.command_timing import (HDR_FIXED_OVERHEAD_S, HDR_SHOT_OVERHEAD_S, TimingProfile,
+                                                  hdr_duration_s)
 from solareclipseworkbench.wizard import SummaryPage
 
 THIRDS = ["1/4000", "1/3200", "1/2500", "1/2000", "1/1600", "1/1250", "1/1000", "1/800", "1/640", "1/500",
@@ -97,6 +98,25 @@ def test_round_trip_duration_is_unchanged():
     start = 1 / 1000
     ramp = sum(start * 2 ** k for k in range(5)) + sum(start * 2 ** k for k in range(3, -1, -1))
     assert hdr_duration_s("1/1000", 4) == pytest.approx(ramp + 9 * HDR_SHOT_OVERHEAD_S + HDR_FIXED_OVERHEAD_S)
+
+
+def test_a_slower_camera_gets_more_time_per_frame():
+    # EOS R: 2.35 s per picture, an 8-frame one-way HDR from 1/640 took 15.7 s
+    eos_r = TimingProfile(picture_overhead_s=2.35)
+    assert hdr_duration_s("1/640", 7, HDR_ONE_WAY, eos_r) == pytest.approx(255 / 640 + 8 * 1.85 + HDR_FIXED_OVERHEAD_S)
+    assert hdr_duration_s("1/640", 7, HDR_ONE_WAY, eos_r) > 15.7
+
+
+def test_a_camera_at_the_default_overhead_keeps_the_default_estimate():
+    # EOS 80D: planned at the 2 s default per picture, about 1.4 s per HDR frame
+    assert hdr_duration_s("1/1000", 4, profile=TimingProfile(picture_overhead_s=2.0)) == pytest.approx(
+        hdr_duration_s("1/1000", 4))
+
+
+def test_busy_estimate_uses_the_camera_profile():
+    profile = TimingProfile(picture_overhead_s=2.35)
+    busy = utils.estimate_busy_s("take_hdr", ["cam", "1/640", "6.3", "100", "7", "one-way"], profile=profile)
+    assert busy == pytest.approx(hdr_duration_s("1/640", 7, HDR_ONE_WAY, profile))
 
 
 def test_one_way_is_shorter():
