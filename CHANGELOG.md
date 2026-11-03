@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [2.0.0rc5] - 2026-11-03
 
 ### Added
 
@@ -37,6 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `take_hdr` can run one way (`one-way`: from the shortest to the longest exposure, stops + 1 shots) as well as the round trip it always did (`round-trip`, still the default): add the sequence after the number of stops, e.g. `..., 4, one-way, "HDR"`.  The longest exposure is taken once either way.  A Sony takes a one-way sequence with its own continuous bracketing when it has a matching 1 EV mode.  Frames are now 1 EV apart in exposure rather than three places apart in the shutter speed list, so `take_hdr` also works with cameras set to 1/2 EV steps.  An unknown sequence or a number of stops below 1 is reported when the script is loaded.  The wizard offers the choice under `HDR burst at maximum eclipse` (Issue #159)
 - `take_bracket` takes a bracket as `"<EV step> <frames>"` for every camera brand, e.g. `"1 3"` or `"0.7 5"`, instead of always 5 frames in a brand-specific syntax.  Canon picks the matching AEB step, Nikon its step and pattern, Sony the matching continuous bracketing mode; when the camera does not offer the bracket it is taken in software, with the frames placed in EV (not shutter speed list positions).  The Canon `"+/- 1 2/3"` form (5 frames) and Sony mode names still work.  An invalid bracket is reported when the script is loaded, and the busy-camera warning now counts every frame of a bracket (Issue #161)
 - Back to the newest python-gphoto2 (2.6.4, with libgphoto2 2.5.34); `take_burst` on Canon now works with both the old and the new libgphoto2
+- Updated dependencies: apscheduler 3.11.3, astropy 8.0.2, astropy-iers-data 0.2026.11.2, geodatasets 2026.10.0, geopandas 1.2.0, geopy 2.5.0, matplotlib 3.11.2, playsound3 3.3.2, PyQt6 6.12.0, pytz 2026.6, skyfield 1.55 and timezonefinder 9.0.0 (not 9.2, which needs Python 3.12)
 - Every log message about one camera now starts with that camera's name (its alias when one is configured), so a DEBUG log with several cameras connected shows which body each message is about (Issue #156)
 - The eclipse plot and the jobs table are now separated by a splitter: drag it to give the scheduler more room, e.g. on widescreen displays.  Its position is remembered with `Save` and when closing the application (Issue #182)
 - Camera commands only send the settings that differ from what the camera reports, and skip the USB round-trip altogether when nothing differs.  A `take_picture` no longer reads the camera configuration twice, and a Sony `take_bracket` or `take_burst` that is already in the right capture mode does not set it again, so a series of identical shots (e.g. brackets around C2 and C3) starts sooner after its scheduled time (Discussion #192)
