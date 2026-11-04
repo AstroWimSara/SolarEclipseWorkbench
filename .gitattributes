@@ -1,0 +1,5 @@
+# Batch files must reach Windows with CRLF line endings: cmd.exe misreads
+# labels and goto with LF.  Stored as-is (not normalised to LF), so the file
+# downloaded from raw.githubusercontent.com keeps its CRLF line endings too.
+*.cmd -text
+*.bat -text

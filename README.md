@@ -24,10 +24,13 @@ pip install --upgrade --pre solareclipseworkbench
 - [Solar Eclipse Workbench](#solar-eclipse-workbench)
   - [Table of contents](#table-of-contents)
   - [Installation instructions](#installation-instructions)
+    - [Installation with the installer script on macOS and Linux](#installation-with-the-installer-script-on-macos-and-linux)
     - [Installation on macOS](#installation-on-macos)
     - [Installation on Ubuntu 26.04](#installation-on-ubuntu-2604)
     - [Installation on Ubuntu 24.04](#installation-on-ubuntu-2404)
     - [Installation on Windows 11](#installation-on-windows-11)
+      - [Installation with the installer script](#installation-with-the-installer-script)
+      - [Manual installation](#manual-installation)
     - [Make cameras accessible in wsl](#make-cameras-accessible-in-wsl)
       - [Replace the Windows USB driver with WinUSB (required for gphoto2)](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2)
     - [Sony PC Remote settings discussion](#sony-pc-remote-settings-discussion)
@@ -82,6 +85,27 @@ pip install --upgrade --pre solareclipseworkbench
     - [GUI icons](#gui-icons)
 
 ## Installation instructions
+
+The quickest way is the installer script: [`install.sh`](#installation-with-the-installer-script-on-macos-and-linux) on macOS and Linux, [`install-sew.cmd`](#installation-with-the-installer-script) on Windows.  The sections after that describe the same steps by hand.
+
+### Installation with the installer script on macOS and Linux
+
+Open a terminal and run, as your normal user (not with `sudo`):
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/AstroWimSara/SolarEclipseWorkbench/main/scripts/install.sh | bash
+```
+
+or download [`install.sh`](https://raw.githubusercontent.com/AstroWimSara/SolarEclipseWorkbench/main/scripts/install.sh) and run `bash install.sh`.  The script:
+
+- installs [uv](https://docs.astral.sh/uv/) and, with it, Solar Eclipse Workbench in its own environment with its own Python.  The packages from PyPI include libgphoto2, GDAL and Qt, so on most computers no Homebrew, GDAL or Python installation is needed.
+- on Linux (Debian, Ubuntu, Raspberry Pi OS), installs the few system packages that are still needed (gstreamer for the voice prompts, the Qt display libraries, and gphoto2 for the camera permissions) and asks for your password for that.  It adds you to the `plugdev` and `dialout` groups (cameras and USB GPS without `sudo`), and masks the `gvfs-gphoto2-volume-monitor` service so the desktop does not claim the cameras.  On another distribution, it says which packages to install yourself.
+- on macOS older than 14 (Apple Silicon) or 15 (Intel), for which there is no prebuilt gphoto2 package, installs gphoto2 with [Homebrew](https://brew.sh/) so it can be built.  This needs Homebrew and the Xcode command line tools.
+- adds `Solar Eclipse Workbench`, `Eclipse Wizard` (the wizard) and `Eclipse Simulation` (the application in [simulation mode](#simulation-mode), to rehearse a script) to the applications menu (Linux) or to `~/Applications` (macOS, also in Launchpad).  From a terminal, start them with `sew`, `sew_wizard` and `sew --sim`.
+
+Log out and back in once if the script added you to a group.  Run the script again to upgrade.  Options: `--yes` (do not ask before starting), `--no-shortcuts`, `--dry-run` (only show what it would do) and `--uninstall` (removes the application and its shortcuts, and keeps your settings and logs).
+
+It needs 64-bit Linux with glibc 2.34 or newer on x86-64 (Ubuntu 22.04, Debian 12 and newer) or 2.39 or newer on ARM64 (Ubuntu 24.04, Debian 13, Raspberry Pi OS Trixie and newer), because Qt is not published for older systems.  On those, use the manual installation below.
 
 ### Installation on macOS
 
@@ -229,7 +253,34 @@ pip install solareclipseworkbench
 
 ### Installation on Windows 11
 
-- GPhoto2 is only available for Linux and macOS.  To run Solar Eclipse Workbench, wsl should be used.
+GPhoto2, which controls the cameras, is only available for Linux and macOS.  On Windows, Solar Eclipse Workbench therefore runs in WSL (Windows Subsystem for Linux), and its windows open on the Windows desktop like any other application.  Windows 10 version 21H2 or later also works.
+
+#### Installation with the installer script
+
+The installer script does all the steps of the [manual installation](#manual-installation) and [makes the cameras accessible in WSL](#make-cameras-accessible-in-wsl):
+
+- Download [`install-sew.cmd`](https://raw.githubusercontent.com/AstroWimSara/SolarEclipseWorkbench/main/scripts/windows/install-sew.cmd) (right-click the link, `Save link as...`), for example to your `Downloads` folder.
+- Double-click `install-sew.cmd`, as your normal user (not `Run as administrator`).  It downloads the actual installer, [`install-sew.ps1`](scripts/windows/install-sew.ps1), and runs it.  Your browser may warn that this kind of file can harm your computer (choose `Keep`), and Windows may show `Windows protected your PC` (click `More info`, then `Run anyway`).
+- If you prefer PowerShell, download `install-sew.ps1` instead and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File $HOME\Downloads\install-sew.ps1
+```
+
+- The script:
+  - installs WSL and Ubuntu 24.04.  If Windows has to restart, the script continues by itself after you log in again.  Ubuntu asks for a new Linux user name and password once; at the Linux prompt that follows, type `exit` to continue.
+  - installs [usbipd-win](https://github.com/dorssel/usbipd-win), which passes USB devices from Windows to WSL,
+  - installs gphoto2, gstreamer (for the voice prompts) and Solar Eclipse Workbench in Ubuntu, using [uv](https://docs.astral.sh/uv/),
+  - adds `Solar Eclipse Workbench`, `Solar Eclipse Workbench Wizard`, `Solar Eclipse Workbench (simulation)`, `Share cameras with Solar Eclipse Workbench` and `Update Solar Eclipse Workbench` to the Start menu, and Solar Eclipse Workbench to the desktop,
+  - asks you to connect your cameras and USB GPS receiver, lists the USB devices, and shares the ones you choose with WSL.
+- Windows asks for permission (UAC) for the steps that need administrator rights.  If an error mentions virtualization, enable it in the BIOS or UEFI settings (Intel VT-x, AMD-V or SVM) and run the script again.
+- A camera or GPS receiver only has to be shared once.  For a new one, use `Share cameras with Solar Eclipse Workbench` from the Start menu.  Once a device is shared, Solar Eclipse Workbench attaches it to WSL by itself every time it looks for cameras (`Camera(s)`, the wizard's `Test Camera...`) or starts the USB GPS, so you no longer type `usbipd attach` after connecting a camera.
+- If a camera then gives `Could not claim the USB device` (error -53), replace its Windows driver once, as described in [Replace the Windows USB driver with WinUSB](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2).
+- To upgrade, use `Update Solar Eclipse Workbench` from the Start menu, or run the script again.
+- The application keeps a minimised console window open next to it, with the log.
+
+#### Manual installation
+
 - Open a terminal or powershell in Windows
 - Install wsl by executing the command
 
@@ -294,7 +345,7 @@ pip install solareclipseworkbench
 
 ### Make cameras accessible in wsl
 
-The USB devices are not automatically accessible in wsl.  To make the cameras accessible, the following steps should be taken:
+The USB devices are not automatically accessible in wsl.  The [installer script](#installation-with-the-installer-script) does the steps below for you.  To make the cameras accessible manually, the following steps should be taken:
 - Download the usbipd-win package from [GitHub](https://github.com/dorssel/usbipd-win/releases)
 - Install the package
 - Start a PowerShell terminal as administrator
@@ -372,7 +423,13 @@ Camera clock - SEW cannot set the clock of a Sony camera over USB: pressing `Cam
 
 ## Upgrading Solar Eclipse Workbench
 
-To upgrade Solar Eclipse Workbench to the latest version, activate your Python environment and run:
+If you installed with an installer script, run it again: `install.sh` on macOS and Linux, `Update Solar Eclipse Workbench` from the Start menu on Windows.  Or, in a terminal (in WSL on Windows):
+
+```bash
+uv tool upgrade solareclipseworkbench
+```
+
+If you installed by hand in a Python environment, activate it and run:
 
 ```bash
 cd solareclipseworkbench
@@ -654,7 +711,7 @@ sudo usermod -aG dialout $USER
 Log out and back in (or reboot) for the change to take effect.  You only need to do this
 once.
 
-**WSL users**: the USB device must also be shared with WSL using `usbipd`.  Open a **PowerShell** terminal as administrator:
+**WSL users**: the USB device must also be shared with WSL using `usbipd`.  The [installer script](#installation-with-the-installer-script) adds you to the `dialout` group and shares the receiver if you choose it in the list; for a receiver you add later, use `Share cameras with Solar Eclipse Workbench` from the Start menu.  To share it manually, open a **PowerShell** terminal as administrator:
 
 ```powershell
 usbipd list                  # find your GPS device, note its BUSID (e.g. 3-4)
