@@ -407,30 +407,35 @@ def compute_central_lat_lon_for_time(e, utc):
     l1 = e['L10'] + e['L11'] * t + e['L12'] * t * t
     l2 = e['L20'] + e['L21'] * t + e['L22'] * t * t
     xp = e['X1'] + 2 * e['X2'] * t + 3 * e['X3'] * t * t
+    yp = e['Y1'] + 2 * e['Y2'] * t + 3 * e['Y3'] * t * t
 
     omega = 1 / math.sqrt(1 - 0.006694385 * math.cos(d * rad) * math.cos(d * rad))
     p = e['M1'] / 57.2957795
+    # Meeus: b and c are the components of the shadow's velocity relative to the ground, while capital B is the
+    # height of the central point above the fundamental plane.  They must be kept apart, otherwise the duration
+    # and the path width come out wrong.
+    b = yp - p * x * math.sin(d * rad)
     c = xp + p * y * math.sin(d * rad)
     y1 = omega * y
     b1 = omega * math.sin(d * rad)
     b2 = 0.99664719 * omega * math.cos(d * rad)
-    b = math.sqrt(max(0, 1 - x * x - y1 * y1))
-    phi1 = math.asin(b * b1 + y1 * b2)
-    sin_h = x / math.cos(phi1)
-    cos_h = (b * b2 - y1 * b1) / math.cos(phi1)
+    capital_b = math.sqrt(max(0, 1 - x * x - y1 * y1))
+    phi1 = math.asin(capital_b * b1 + y1 * b2)
+    sin_h = max(-1.0, min(1.0, x / math.cos(phi1)))
+    cos_h = max(-1.0, min(1.0, (capital_b * b2 - y1 * b1) / math.cos(phi1)))
     h = solve_quadrant(sin_h, cos_h) / rad
     phi = math.atan(1.00336409 * math.tan(phi1)) / rad
     lam = m - h - 0.00417807 * e['Δt']
-    l1p = l1 - b * e['tanf1']
-    l2p = l2 - b * e['tanf2']
-    a = c - p * b * math.cos(d * rad)
+    l1p = l1 - capital_b * e['tanf1']
+    l2p = l2 - capital_b * e['tanf2']
+    a = c - p * capital_b * math.cos(d * rad)
     n = math.sqrt(a * a + b * b)
     duration = 7200 * l2p / n
-    k2 = b * b + ((x * a + y * b) * (x * a + y * b)) / (n * n)
+    k2 = capital_b * capital_b + ((x * a + y * b) * (x * a + y * b)) / (n * n)
     k = math.sqrt(k2)
     width = 12756 * abs(l2p) / k
-    a = (l1p - l2p) / (l1p + l2p)
-    return {'lat': phi, 'lon': -lam, 'magnitude': a, 'duration': duration, 'width': width}
+    magnitude = (l1p - l2p) / (l1p + l2p)
+    return {'lat': phi, 'lon': -lam, 'magnitude': magnitude, 'duration': duration, 'width': width}
 
 
 def compute_extremes(e, t0):
@@ -829,20 +834,20 @@ def compute_outline_point(be, q, umbra):
     sin_q = math.sin(q)
     cos_q = math.cos(q)
     tan_f = be['tanf1']
-    l = be['L1']
+    l0 = be['L1']
     if umbra:
-        l = be['L2']
+        l0 = be['L2']
         tan_f = be['tanf2']
-    xi = be['X'] - l * sin_q
-    eta = (be['Y'] - l * cos_q) / rho1
-    zeta1 = math.sqrt(1 - xi * xi - eta * eta)
-    zeta = rho2 * (zeta1 * cos_d1d2 - eta * sin_d1d2)
-    l = l - zeta * tan_f
-    xi = be['X'] - l * sin_q
-    eta = (be['Y'] - l * cos_q) / rho1
-    zeta1 = math.sqrt(1 - xi * xi - eta * eta)
-    zeta = rho2 * (zeta1 * cos_d1d2 - eta * sin_d1d2)
-    l = l - zeta * tan_f
+    # The radius on the ground is L - zeta tan f, with zeta the height of the ground point above the fundamental
+    # plane.  Iterate from the plane radius L each time; subtracting the correction cumulatively makes the shadow
+    # ~30% too large.
+    l = l0
+    for _ in range(3):
+        xi = be['X'] - l * sin_q
+        eta = (be['Y'] - l * cos_q) / rho1
+        zeta1 = math.sqrt(1 - xi * xi - eta * eta)
+        zeta = rho2 * (zeta1 * cos_d1d2 - eta * sin_d1d2)
+        l = l0 - zeta * tan_f
     xi = be['X'] - l * sin_q
     eta = (be['Y'] - l * cos_q) / rho1
     zeta1 = math.sqrt(1 - xi * xi - eta * eta)

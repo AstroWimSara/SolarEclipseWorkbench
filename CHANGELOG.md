@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
+
 ## [2.0.0] - 2026-11-03
 
 ### Added
