@@ -18,7 +18,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Union, Optional
 
-import geopandas
 import numpy as np
 import pandas as pd
 import pytz
@@ -34,7 +33,6 @@ from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
-from geodatasets import get_path
 from gphoto2 import GPhoto2Error, Camera
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -58,6 +56,7 @@ from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget
+from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
 from solareclipseworkbench.constants import SUN_RADIUS, MOON_RADIUS
 from solareclipseworkbench import configuration
 
@@ -1454,6 +1453,13 @@ class SolarEclipseController(Observer):
 
             self.view.eclipse_visualization.set_location(longitude, latitude, altitude)
 
+            # The eclipse may have been changed on the map in the location window.
+            selected = changed_object.location_plot.selected_eclipse_date()
+            if selected and selected != changed_object.initial_eclipse_date:
+                eclipse_date = datetime.datetime.strptime(selected, "%Y-%m-%d")
+                self.model.set_eclipse_date(Time(eclipse_date))
+                self.view.eclipse_date.setText(eclipse_date.strftime(DATE_FORMATS[self.view.date_format]))
+
             return
 
         elif isinstance(changed_object, EclipsePopup):
@@ -2069,8 +2075,10 @@ class LocationPopup(QWidget, Observable):
             - Altitude [meters].
 
         The window also provides a saved-locations drop-down and an address-search bar (when geopy is installed).  When
-        pressing the "Plot" button, the location will be displayed on a world map (as a red dot).  When pressing the
-        "OK" button, the controller will be notified.
+        coordinates change, the location is shown on a map (as a red dot) together with the path of totality or
+        annularity of the selected eclipse, and the distance from the centre line.  The eclipse can be changed in
+        the drop-down above the map.  When pressing the "OK" button, the controller will be notified (and takes over
+        a changed eclipse as the eclipse date).
 
         If the location had already been set before, the coordinate fields will be pre-filled.
 
@@ -2100,7 +2108,12 @@ class LocationPopup(QWidget, Observable):
             )
         layout.addWidget(self.location_widget)
 
-        self.location_plot = LocationPlot()
+        # Map with the path of the selected eclipse and the observer.  The eclipse can be changed above the map;
+        # pressing OK then also makes it the eclipse date of the main window.
+        self.location_plot = EclipsePathWidget(date_format=DATE_FORMATS[observer.view.date_format])
+        self.initial_eclipse_date = model.eclipse_date.strftime("%Y-%m-%d") if model.eclipse_date is not None \
+            else None
+        self.location_plot.set_eclipse_date(self.initial_eclipse_date)
         layout.addWidget(self.location_plot)
 
         ok_button = QPushButton("OK")
@@ -2119,6 +2132,7 @@ class LocationPopup(QWidget, Observable):
 
         self.location_widget.longitude_edit.textChanged.connect(self._schedule_auto_plot)
         self.location_widget.latitude_edit.textChanged.connect(self._schedule_auto_plot)
+        self.location_widget.altitude_edit.textChanged.connect(self._schedule_auto_plot)
 
         # Plot whatever coordinates are currently in the fields — covers both the
         # case where the model already had a location and the case where LocationWidget
@@ -2150,7 +2164,7 @@ class LocationPopup(QWidget, Observable):
         self._plot_timer.start()
 
     def plot_location(self):
-        """Plot the selected location on the world map.
+        """Plot the selected location on the map and say where it is relative to the eclipse path.
 
         Silently ignored when longitude or latitude are empty or not yet valid numbers.
         """
@@ -2159,7 +2173,11 @@ class LocationPopup(QWidget, Observable):
             lat = float(self.latitude.text())
         except ValueError:
             return
-        self.location_plot.plot_location(longitude=lon, latitude=lat)
+        try:
+            alt = float(self.altitude.text())
+        except ValueError:
+            alt = 0.0
+        self.location_plot.plot_location(longitude=lon, latitude=lat, altitude=alt)
 
     def accept_location(self):
         """ Notify the observer about the selection of a new location and close the pop-up window.
@@ -2199,22 +2217,8 @@ class EclipsePopup(QWidget, Observable):
 
         date_format = DATE_FORMATS[observer.view.date_format]
 
-        formatted_eclipse_dates = []
-
-        from solareclipseworkbench.utils import calculate_next_solar_eclipses
-        for eclipse_date in calculate_next_solar_eclipses(20):
-            formatted_eclipse_date = datetime.datetime.strptime(eclipse_date['date'], "%d/%m/%Y").strftime(date_format) + " - " + eclipse_date['type']
-            if eclipse_date['type'] == "T" or eclipse_date['type'] == "A" or eclipse_date['type'] == "H":
-                # For total, annular, and hybrid eclipses, also show the duration
-                duration = eclipse_date["duration"]
-                # Convert duration to minutes:seconds
-                minutes, seconds = divmod(duration, 60)
-                formatted_eclipse_date += f" - {int(minutes)}m {int(seconds):02}s"
-                formatted_eclipse_dates.append(formatted_eclipse_date)
-            else:
-                formatted_eclipse_dates.append(formatted_eclipse_date + " - " + str(int(eclipse_date["magnitude"] * 100)) + "%")
-
-        self.eclipse_combobox.addItems(formatted_eclipse_dates)
+        # "<date> - <type> - <duration for central eclipses, magnitude for partial ones>"
+        self.eclipse_combobox.addItems([label for label, _ in eclipse_choices(20, date_format)])
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.load_eclipse_date)
@@ -2384,61 +2388,6 @@ class SettingsPopup(QWidget, Observable):
         """ Close the pop-up window without accepting any settings changes."""
 
         self.close()
-
-
-class LocationPlot(FigureCanvas):
-    """ Display the world with the selected location marked with a red dot."""
-
-    def __init__(self, parent=None, dpi=100):
-        """ Plot a world map."""
-
-        self.figure = Figure(dpi=dpi)
-        self.ax = self.figure.add_subplot(111, aspect='equal')
-
-        FigureCanvas.__init__(self, self.figure)
-        self.setParent(parent)
-
-        FigureCanvas.updateGeometry(self)
-
-        self.location_is_drawn = False
-        self.location = None
-        self.gdf = None
-
-        # noinspection SpellCheckingInspection
-        world = geopandas.read_file(get_path("naturalearth.land"))
-        # Crop -> min longitude, min latitude, max longitude, max latitude
-        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)
-
-        self.ax.set_aspect("equal")
-
-        self.draw()
-
-    def plot_location(self, longitude: float, latitude: float):
-        """ Indicate the given location on the world map with a red dot.
-
-        Args:
-            - longitude: Longitude of the location [degrees]
-            - latitude: Latitude of the location [degrees]
-        """
-
-        if self.location_is_drawn:
-            self.gdf.plot(ax=self.ax, color="white")
-
-        df = pd.DataFrame(
-            {
-                "Latitude": [latitude],
-                "Longitude": [longitude],
-            }
-        )
-        self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude),
-                                          crs="EPSG:4326")
-        self.gdf.plot(ax=self.ax, color="red")
-
-        self.ax.set_aspect("equal")
-
-        self.draw()
-        self.location_is_drawn = True
-
 
 
 @dataclass(frozen=True)
