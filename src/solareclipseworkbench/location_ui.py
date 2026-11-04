@@ -210,6 +210,15 @@ class ConfigManager:
             return True
         return False
 
+    def get_candidate_sites(self) -> List[Dict]:
+        """Return the shortlist of the Compare sites window (name, longitude, latitude, altitude)."""
+        return list(self.config.get("candidate_sites", []))
+
+    def set_candidate_sites(self, sites: List[Dict]) -> None:
+        """Store the shortlist of the Compare sites window."""
+        self.config["candidate_sites"] = list(sites)
+        self.save_config()
+
     def delete_camera(self, name: str) -> bool:
         """Remove a saved camera by name. Returns True if it was found and deleted."""
         original_len = len(self.config["cameras"])

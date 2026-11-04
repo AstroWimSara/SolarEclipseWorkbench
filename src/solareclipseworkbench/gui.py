@@ -441,6 +441,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.beads_action = QAction("Baily's beads", self)
         self.timeline_action = QAction("Timeline", self)
         self.run_report_action = QAction("Run report", self)
+        self.compare_sites_action = QAction("Compare sites", self)
 
         self.place_time_frame = QFrame()
 
@@ -924,6 +925,14 @@ class SolarEclipseView(QMainWindow, Observable):
         self.run_report_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.run_report_action)
 
+        # Compare candidate sites
+
+        self.compare_sites_action.setStatusTip("Compare candidate sites: totality, Sun altitude, Baily's beads "
+                                               "and cloud forecast side by side")
+        self.compare_sites_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
+        self.compare_sites_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.compare_sites_action)
+
         # Refresh Plot
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
@@ -1222,6 +1231,7 @@ class SolarEclipseController(Observer):
         self._beads_window: Union[BeadsPanel, None] = None
         self._timeline_window = None
         self._run_report_window = None
+        self._sites_window = None
         # The script loaded last, for the timeline
         self.script_filename: Union[str, None] = None
 
@@ -1551,10 +1561,10 @@ class SolarEclipseController(Observer):
                 self._beads_window.close()
                 self._beads_window = None
 
-            for window in (self._timeline_window, self._run_report_window):
+            for window in (self._timeline_window, self._run_report_window, self._sites_window):
                 if window is not None:
                     window.close()
-            self._timeline_window = self._run_report_window = None
+            self._timeline_window = self._run_report_window = self._sites_window = None
 
             if self.model.camera_overview.camera_overview_dict:
                 cameras = self.model.camera_overview.camera_overview_dict.values()
@@ -1748,6 +1758,9 @@ class SolarEclipseController(Observer):
         elif text == "Run report":
             self._open_run_report_window()
 
+        elif text == "Compare sites":
+            self._open_sites_window()
+
         elif text == "Refresh Plot":
             self.update_visualization()
 
@@ -1866,6 +1879,38 @@ class SolarEclipseController(Observer):
         self._run_report_window.show()
         self._run_report_window.activateWindow()
         self._run_report_window.raise_()
+
+    def _sites_context(self):
+        """The eclipse date (YYYY-MM-DD) and the location of the main window, for the Compare sites window."""
+        from solareclipseworkbench.site_comparison import Site
+        date = None
+        if self.model.is_eclipse_date_set:
+            day = self.model.eclipse_date.datetime
+            date = f"{day.year:04d}-{day.month:02d}-{day.day:02d}"
+        site = None
+        if self.model.is_location_set:
+            site = Site("Current location", self.model.longitude, self.model.latitude, self.model.altitude)
+        return date, site
+
+    def _use_site(self, site):
+        """Make a site of the Compare sites window the observing location, and recompute the contacts."""
+        self.set_location(site.longitude, site.latitude, site.altitude)
+        LOGGER.info("Location set to %s (%s, %s, %s m) from Compare sites", site.name, site.longitude,
+                    site.latitude, site.altitude)
+        if self.model.is_eclipse_date_set:
+            self.set_reference_moments()
+
+    def _open_sites_window(self):
+        """Open (or bring to front) the Compare sites window."""
+        from solareclipseworkbench.sites_ui import SiteComparisonWindow
+        if self._sites_window is None:
+            self._sites_window = SiteComparisonWindow(self._sites_context, self._use_site)
+        else:
+            self._sites_window.fill_saved_locations()
+            self._sites_window.refresh_context()
+        self._sites_window.show()
+        self._sites_window.activateWindow()
+        self._sites_window.raise_()
 
     def _open_beads_window(self):
         """Open (or bring to front) the Baily's beads window."""
@@ -3942,17 +3987,35 @@ def main():
              "(default: the newest log in which a script was loaded)",
     )
 
+    parser.add_argument(
+        "--compare",
+        metavar="LOCATION",
+        nargs="*",
+        help="compare candidate sites for the eclipse of --date and exit: the named saved locations, or the "
+             "shortlist of the Compare sites window when none are named (plus --longitude/--latitude/--altitude "
+             "when given)",
+    )
+
+    parser.add_argument(
+        "--forecast",
+        action="store_true",
+        help="with --compare: also fetch the cloud cover at maximum eclipse from Open-Meteo",
+    )
+
     args = parser.parse_args()
 
     if args.report is not None:
         return report_main(args.report)
 
     # --check prints its own result; the log file still gets everything
-    setup_logging("sew", console_level=logging.WARNING if args.check else logging.INFO)
+    setup_logging("sew", console_level=logging.WARNING if args.check or args.compare is not None else logging.INFO)
     LOGGER.info("Starting up Solar Eclipse Workbench")
 
     if args.check:
         return check_main(args)
+
+    if args.compare is not None:
+        return compare_main(args)
 
     configuration.SONY_CONTINUOUS_MODE = args.sony_cont_mode
     # args[1:1] = ["-stylesheet", str(styles_location)]
@@ -4015,6 +4078,44 @@ def check_main(args) -> int:
         figure.savefig(args.plot, dpi=120)
         print(f"Timeline drawn to {args.plot}")
     return 1 if timeline.dropped or timeline.unknown_moments else 0
+
+
+def compare_main(args) -> int:
+    """sew --compare: print the candidate sites side by side and exit."""
+    from solareclipseworkbench import site_comparison
+    from solareclipseworkbench.site_comparison import Site
+
+    if not args.date:
+        print("--compare needs the date of the eclipse: --date YYYY-MM-DD")
+        return 2
+    config = ConfigManager()
+    sites = []
+    if args.compare:
+        for name in args.compare:
+            location = config.get_location(name)
+            if location is None:
+                saved = ", ".join(loc["name"] for loc in config.get_locations()) or "none"
+                print(f"No saved location called {name!r} (saved: {saved})")
+                return 2
+            sites.append(Site(location["name"], float(location["longitude"]), float(location["latitude"]),
+                              float(location.get("altitude", 0.0))))
+    else:
+        for data in config.get_candidate_sites():
+            try:
+                sites.append(Site.from_dict(data))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if args.longitude is not None and args.latitude is not None:
+        sites.append(Site("Command line location", args.longitude, args.latitude, args.altitude or 0.0))
+    if not sites:
+        print("No sites to compare: name saved locations, add sites in the Compare sites window, "
+              "or give --longitude, --latitude and --altitude")
+        return 2
+
+    results = site_comparison.compare_sites(sites, args.date)
+    forecasts = [site_comparison.fetch_cloud_cover_for(r) for r in results] if args.forecast else None
+    print(site_comparison.format_comparison(results, args.date, forecasts))
+    return 1 if all(r.error for r in results) else 0
 
 
 def report_main(log: str) -> int:

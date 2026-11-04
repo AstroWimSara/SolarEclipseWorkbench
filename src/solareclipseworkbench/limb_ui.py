@@ -19,7 +19,7 @@ import threading
 import numpy as np
 from PyQt6.QtCore import Qt, QPointF, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
-from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QSlider,
+from PyQt6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QSlider,
                              QVBoxLayout, QWidget)
 
 from solareclipseworkbench.limb_correction import (K2, EARTH_RADIUS_KM, is_enabled,
@@ -532,3 +532,199 @@ class BeadsPanel(QWidget):
         moment = self.view.moment_hours()
         self.time_label.setText(
             f"{self.solution.to_utc(moment).strftime('%H:%M:%S.%f')[:-4]}  ({offset:+.2f} s)")
+
+
+class BeadsComparisonWindow(QWidget):
+    """Baily's beads of several sites next to each other.
+
+    One BeadsView per site, with shared controls: the slider moves every view
+    to the same number of seconds from its own C2 or C3, so the views show how
+    the beads differ from one site to the next at the same stage of the contact.
+
+    Args:
+        - eclipse_date: YYYY-MM-DD
+        - sites: (name, longitude, latitude, altitude, caption) per site; the caption is shown under the name,
+          e.g. the bead windows.
+    """
+
+    # Emitted from the solver thread with (generation, index, solution)
+    solved = pyqtSignal(int, int, object)
+
+    COLUMNS = 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.WindowType.Window)
+        self.setWindowTitle("Baily's beads of the candidate sites")
+        self.setWindowIcon(beads_icon(32))
+        self.resize(1200, 460)
+
+        self.eclipse_date = None
+        self.sites = []
+        self.views = []
+        self.names = []
+        self.captions = []
+        self._generation = 0
+        self._pending = 0
+        # Reaches the widest bead window of the sites: near a limit that is well over SLIDER_RANGE_S
+        self.range_s = SLIDER_RANGE_S
+        self.solved.connect(self._on_solved)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+
+        self.summary = QLabel("")
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+
+        self.grid = QGridLayout()
+        self.grid.setSpacing(6)
+        layout.addLayout(self.grid, 1)
+
+        controls = QHBoxLayout()
+        self.mode_box = QComboBox()
+        self.mode_box.addItems(["Profile", "Preview"])
+        self.mode_box.currentTextChanged.connect(lambda text: self._each(lambda v: v.set_mode(text.lower())))
+        controls.addWidget(self.mode_box)
+
+        self.exaggeration_box = QComboBox()
+        self.exaggeration_box.addItems(["10x", "25x", "50x", "100x"])
+        self.exaggeration_box.setCurrentText("50x")
+        self.exaggeration_box.currentTextChanged.connect(
+            lambda text: self._each(lambda v: v.set_exaggeration(float(text.rstrip("x")))))
+        controls.addWidget(self.exaggeration_box)
+
+        self.contact_box = QComboBox()
+        self.contact_box.addItems(["C2", "C3"])
+        self.contact_box.currentTextChanged.connect(self._on_contact)
+        controls.addWidget(self.contact_box)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        scrub = QHBoxLayout()
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(-SLIDER_STEPS, SLIDER_STEPS)
+        self.slider.setMinimumWidth(160)
+        self.slider.setToolTip("Seconds from each site's own contact")
+        self.slider.valueChanged.connect(self._on_slider)
+        scrub.addWidget(self.slider, 1)
+        self.time_label = QLabel("C2 +0.00 s")
+        scrub.addWidget(self.time_label)
+        layout.addLayout(scrub)
+
+    def _each(self, action):
+        for view in self.views:
+            action(view)
+
+    def set_sites(self, eclipse_date, sites):
+        """Show these sites, and solve their limb profiles in the background."""
+        self._generation += 1
+        generation = self._generation
+        self.eclipse_date = eclipse_date
+        self.sites = list(sites)
+
+        while self.grid.count():
+            widget = self.grid.takeAt(0).widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.views, self.names, self.captions = [], [], []
+
+        exaggeration = float(self.exaggeration_box.currentText().rstrip("x"))
+        for index, (name, _lon, _lat, _alt, caption) in enumerate(self.sites):
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            title = QLabel(f"<b>{name}</b>")
+            cell_layout.addWidget(title)
+            view = BeadsView(None)
+            view.set_mode(self.mode_box.currentText().lower())
+            view.set_exaggeration(exaggeration)
+            view.contact = self.contact_box.currentText()
+            view.set_countdown("solving...")
+            cell_layout.addWidget(view, 1)
+            text = QLabel(caption or "")
+            text.setWordWrap(True)
+            cell_layout.addWidget(text)
+            self.grid.addWidget(cell, index // self.COLUMNS, index % self.COLUMNS)
+            self.views.append(view)
+            self.names.append(title)
+            self.captions.append(text)
+
+        self._pending = len(self.sites)
+        self.summary.setText(f"Eclipse of {eclipse_date}: the slider moves every site to the same number of "
+                             f"seconds from its own contact.  Solving {len(self.sites)} limb profiles...")
+
+        def solve():
+            for i, (_name, longitude, latitude, altitude, _caption) in enumerate(self.sites):
+                try:
+                    solution = solve_limb(eclipse_date, latitude, longitude, altitude)
+                except Exception as exc:
+                    logging.warning("Could not solve the lunar limb profile of %s: %s", _name, exc)
+                    solution = None
+                try:
+                    self.solved.emit(generation, i, solution)
+                except RuntimeError:
+                    return    # The window was closed and deleted while solving
+
+        threading.Thread(target=solve, daemon=True, name="BeadsComparisonSolver").start()
+
+    def _on_solved(self, generation, index, solution):
+        if generation != self._generation or index >= len(self.views):
+            return
+        view = self.views[index]
+        view.solution = solution
+        view.set_countdown(None if solution is not None else "no totality or no limb profile")
+        view.contact = self.contact_box.currentText()
+        view.offset_s = self._offset()
+        self._fit_range()
+        self._update_captions()
+        self._pending -= 1
+        if self._pending == 0:
+            self.summary.setText(f"Eclipse of {self.eclipse_date}: the slider moves every site to the same "
+                                 f"number of seconds from its own contact.")
+
+    def _on_contact(self, contact):
+        self._each(lambda v: v.set_contact(contact))
+        self.slider.setValue(0)
+        self._on_slider(0)
+
+    def _offset(self, value=None):
+        return (self.slider.value() if value is None else value) / SLIDER_STEPS * self.range_s
+
+    def _fit_range(self):
+        """Let the slider reach every solved bead window, plus a second either side."""
+        reach = SLIDER_RANGE_S
+        for view in self.views:
+            solution = view.solution
+            if solution is None:
+                continue
+            for contact in ("C2", "C3"):
+                window = solution.windows.get(contact)
+                if window is None or not window.solved:
+                    continue
+                centre = contact_hours(solution, contact)
+                reach = max(reach, abs(window.start - centre) * 3600.0 + 1.0,
+                            abs(window.end - centre) * 3600.0 + 1.0)
+        reach = float(np.ceil(reach))
+        if reach != self.range_s:
+            offset = self._offset()
+            self.range_s = reach
+            self.slider.blockSignals(True)
+            self.slider.setValue(int(round(offset / self.range_s * SLIDER_STEPS)))
+            self.slider.blockSignals(False)
+
+    def _on_slider(self, value):
+        offset = self._offset(value)
+        self._each(lambda v: v.set_offset(offset))
+        self.time_label.setText(f"{self.contact_box.currentText()} {offset:+.2f} s")
+        self._update_captions()
+
+    def _update_captions(self):
+        contact = self.contact_box.currentText()
+        for (name, _lon, _lat, _alt, caption), view, label in zip(self.sites, self.views, self.captions):
+            text = caption or ""
+            if view.solution is not None:
+                window = view.solution.window_seconds(contact)
+                moment = view.solution.to_utc(view.moment_hours()).strftime("%H:%M:%S.%f")[:-4]
+                text = (f"{text}\n" if text else "") + \
+                    f"{moment} UTC   {contact} bead window {_seconds(window)} s"
+            label.setText(text)

@@ -48,6 +48,7 @@ pip install --upgrade --pre solareclipseworkbench
       - [Live view](#live-view)
       - [Script timeline](#script-timeline)
       - [Run report](#run-report)
+      - [Compare sites](#compare-sites)
   - [Running the Configuration Wizard](#running-the-configuration-wizard)
   - [USB GPS device](#usb-gps-device)
     - [Supported hardware](#supported-hardware)
@@ -427,6 +428,8 @@ The following command line parameters can be used to start up gui.py.
 |                  | --check SCRIPT        | Print the timeline of a script per camera and exit (see [Script timeline](#script-timeline)) |
 |                  | --plot PNG            | With `--check`: also draw the timeline around totality to an image file      |
 |                  | --report [LOG]        | Print the run report of a log file and exit (see [Run report](#run-report))  |
+|                  | --compare [LOCATION ...] | Print candidate sites side by side for `--date` and exit (see [Compare sites](#compare-sites)) |
+|                  | --forecast            | With `--compare`: also fetch the cloud cover at maximum eclipse from Open-Meteo |
 
 ### UI functionality
 
@@ -580,6 +583,15 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - From the command line: `sew --report` prints the report of the last run in the newest log, `sew --report <log file>` of a given log.
 - Use it after rehearsing a script in simulation mode with the cameras you will use (see [Timing shots around C2 and C3](#timing-shots-around-c2-and-c3)).  With the virtual camera every shot is reported as `shot` straight away; the real delays and busy times only show with a real camera.
 - Logs written by version 2.0.0 or older have no planned commands: the report then only lists what those logs have.
+
+#### Compare sites
+
+- The **"Compare sites"** icon puts a shortlist of candidate sites side by side for the eclipse date that is set: the eclipse type and magnitude, the duration of totality (corrected for the lunar limb when the limb profile is installed, with the difference to the longest one on the list), the local time of C2, the altitude and azimuth of the Sun at maximum eclipse, and the Baily's beads windows around C2 and C3.  The longest totality is in bold, and a Sun lower than 10° is marked: check the horizon in that direction.
+- Add sites with `Add current location` (the location of the main window), a saved location (from the `Location` window or the wizard) with `Add`, or `New row` to type in a name and coordinates.  Names and coordinates can be edited in the table.  The list is kept with the saved locations (in `~/.sew_wizard_config.json`), so it is still there the night before the eclipse.  `Compare` computes every site, which takes about half a second per site.
+- `Cloud forecast` fetches the cloud cover at maximum eclipse (total, and low, mid and high clouds) from [Open-Meteo](https://open-meteo.com), interpolated between the hourly values; hovering over it shows the hourly cover from C1 to C4.  Forecasts reach about 15 days ahead, so until then the column says from which date one is available.  For an eclipse in the past it shows what the sky really was (the ERA5 reanalysis), e.g. to check a site afterwards.  This needs a network connection; the rest of the window does not.
+- `Compare beads` shows the Baily's beads of the sites with totality next to each other, drawn like in the [`Baily's beads`](#lunar-limb-correction-and-bailys-beads) window (as a profile or as a picture, with the same exaggeration).  One slider moves every site to the same number of seconds from its own C2 or C3, so the views show how many beads each site gets and for how long at the same stage of the contact; under each view are its time in UTC and its bead window.  Near the limits of the path a bead window can last over ten seconds, and the slider then reaches further than ±8 s.  This needs the lunar limb profile.
+- `Use this site` (or a double click on a result) makes the selected site the observing location and recomputes the reference moments, and `Save as text...` writes the comparison, longest totality first.
+- From the command line: `sew --compare -d 2027-08-02` prints the shortlist of the window, `sew --compare "La Horra" "Tarifa" -d 2027-08-02 --forecast` the named saved locations with their cloud cover; `--longitude`, `--latitude` and `--altitude` add one more site.
 
 > **Note**: Live view via gphoto2 is tested on the Nikon Z8.  Support on other bodies depends on whether their gphoto2 driver implements `capture_preview`.  Canon EOS bodies and most modern Nikon and Sony Alpha bodies support it; some entry-level or older bodies do not.
 
