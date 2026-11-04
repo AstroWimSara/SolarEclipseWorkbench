@@ -311,7 +311,7 @@ usbipd list
 usbipd bind --busid <camera_id>
 ```
 
-- Attach the camera to wsl by executing the following command in a PowerShell terminal.  Make sure that a wsl terminal is also open. **This should be done every time the camera is connected to the computer!!**
+- Attach the camera to wsl by executing the following command in a PowerShell terminal.  Make sure that a wsl terminal is also open.  Solar Eclipse Workbench does this by itself for every shared device when it looks for cameras or starts the USB GPS (with usbipd-win 4 or newer), so you only need it to test the camera outside the application, e.g. with `lsusb` or `gphoto2 --auto-detect`.
 
 ```bash
 usbipd attach --wsl --busid <camera_id>
@@ -654,14 +654,14 @@ sudo usermod -aG dialout $USER
 Log out and back in (or reboot) for the change to take effect.  You only need to do this
 once.
 
-**WSL users**: the USB device must also be attached to WSL using `usbipd`.  Open a
-**PowerShell** terminal as administrator:
+**WSL users**: the USB device must also be shared with WSL using `usbipd`.  Open a **PowerShell** terminal as administrator:
 
 ```powershell
-usbipd list                  # find your GPS device, note its BUSID (e.g. 3:4)
-usbipd bind --busid 3:4      # one-time: mark the device as shareable
-usbipd attach --busid 3:4 --wsl   # attach before each session
+usbipd list                  # find your GPS device, note its BUSID (e.g. 3-4)
+usbipd bind --busid 3-4      # one-time: mark the device as shareable
 ```
+
+Solar Eclipse Workbench attaches a shared receiver to WSL by itself when the USB GPS is started.  Outside the application, attach it with `usbipd attach --busid 3-4 --wsl`.
 
 ### macOS
 

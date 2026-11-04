@@ -16,7 +16,7 @@ import os
 from gphoto2 import Camera
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional
-from solareclipseworkbench import configuration
+from solareclipseworkbench import configuration, hardware_problems, wsl_usb
 from solareclipseworkbench.logging_setup import camera_log
 from solareclipseworkbench.bracketing import (
     HDR_ONE_WAY, HDR_ROUND_TRIP, bracket_deviation, bracket_exposures, format_ev, hdr_native_bracket, hdr_offsets,
@@ -2864,6 +2864,29 @@ def get_cameras() -> list:
     return detected
 
 
+def detect_cameras() -> list:
+    """Like :func:`get_cameras`, but first attaches shared USB devices to WSL.
+
+    Use this where the user asks for camera detection (``Camera(s)``, the wizard's
+    camera test), not on the paths a running script takes: attaching runs a
+    Windows process and waits for the device to settle.  Outside WSL it is
+    identical to :func:`get_cameras`.
+    """
+    try:
+        wsl_usb.attach_shared_devices()
+    except Exception:  # detection must carry on with what is already attached
+        logging.debug('Attaching USB devices to WSL failed', exc_info=True)
+    detected = get_cameras()
+    if not detected:
+        try:
+            hint = wsl_usb.missing_device_hint()
+        except Exception:
+            hint = None
+        if hint:
+            hardware_problems.report('WSL USB', 'No camera found', detail=hint, severity='warning')
+    return detected
+
+
 def __get_address(camera_name: str) -> str:
     """ Gets the address of the camera if the name is given
 
@@ -3555,7 +3578,7 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
         vc.connect()
         return {vc.name: vc}
 
-    detected = get_cameras()  # [(model_name, port), ...]
+    detected = detect_cameras()  # [(model_name, port), ...]
     try:
         logging.info('Found cameras: %s', detected)
     except Exception:

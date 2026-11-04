@@ -853,8 +853,8 @@ class EquipmentPage(QWizardPage):
         from solareclipseworkbench.camera_check import WARNING, check_camera
 
         try:
-            from solareclipseworkbench.camera import get_cameras, get_camera_by_port
-            detected = get_cameras()
+            from solareclipseworkbench.camera import detect_cameras, get_camera_by_port
+            detected = detect_cameras()
         except Exception as exc:
             QMessageBox.critical(self, "Detection Failed", f"Could not detect cameras via gphoto2:\n{exc}")
             return
@@ -969,8 +969,8 @@ class EquipmentPage(QWizardPage):
         QApplication.processEvents()
 
         try:
-            from solareclipseworkbench.camera import get_cameras, get_camera_by_port, get_serial_number
-            detected = get_cameras()
+            from solareclipseworkbench.camera import detect_cameras, get_camera_by_port, get_serial_number
+            detected = detect_cameras()
         except Exception as exc:
             self.detect_camera_btn.setEnabled(True)
             self.detect_camera_btn.setText("Detect Connected Camera")
