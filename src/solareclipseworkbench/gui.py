@@ -27,7 +27,7 @@ from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QIm
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -439,6 +439,8 @@ class SolarEclipseView(QMainWindow, Observable):
         self.save_action = QAction("Save", self)
         self.live_view_action = QAction("Live View", self)
         self.beads_action = QAction("Baily's beads", self)
+        self.timeline_action = QAction("Timeline", self)
+        self.run_report_action = QAction("Run report", self)
 
         self.place_time_frame = QFrame()
 
@@ -908,6 +910,20 @@ class SolarEclipseView(QMainWindow, Observable):
         self.beads_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.beads_action)
 
+        # Script timeline
+
+        self.timeline_action.setStatusTip("Show the script per camera: which commands start late or are dropped")
+        self.timeline_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        self.timeline_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.timeline_action)
+
+        # Run report
+
+        self.run_report_action.setStatusTip("Show what became of every command of a run, from its log file")
+        self.run_report_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.run_report_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.run_report_action)
+
         # Refresh Plot
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
@@ -1204,6 +1220,10 @@ class SolarEclipseController(Observer):
 
         self._live_view_window: Union[LiveViewWindow, None] = None
         self._beads_window: Union[BeadsPanel, None] = None
+        self._timeline_window = None
+        self._run_report_window = None
+        # The script loaded last, for the timeline
+        self.script_filename: Union[str, None] = None
 
         # Keeps idle cameras from going to sleep before the script starts.
         # Started once the cameras are connected; update_time() pauses it
@@ -1531,6 +1551,11 @@ class SolarEclipseController(Observer):
                 self._beads_window.close()
                 self._beads_window = None
 
+            for window in (self._timeline_window, self._run_report_window):
+                if window is not None:
+                    window.close()
+            self._timeline_window = self._run_report_window = None
+
             if self.model.camera_overview.camera_overview_dict:
                 cameras = self.model.camera_overview.camera_overview_dict.values()
 
@@ -1620,6 +1645,10 @@ class SolarEclipseController(Observer):
                                             self.model.camera_overview.camera_overview_dict, self,
                                             self.sim_reference_moment, self.sim_offset_minutes,
                                             gps_time_offset=self.model.gps_time_offset)
+
+                self.script_filename = filename
+                if self._timeline_window is not None:
+                    self._timeline_window.set_script(filename)
 
                 # Remind Nikon users to set the release-mode dial for the bursts / brackets in this script
                 self.model.camera_overview.set_continuous_mode_commands(
@@ -1713,6 +1742,12 @@ class SolarEclipseController(Observer):
         elif text == "Baily's beads":
             self._open_beads_window()
 
+        elif text == "Timeline":
+            self._open_timeline_window()
+
+        elif text == "Run report":
+            self._open_run_report_window()
+
         elif text == "Refresh Plot":
             self.update_visualization()
 
@@ -1805,6 +1840,32 @@ class SolarEclipseController(Observer):
 
         self._live_view_window = LiveViewWindow(camera, parent=None)
         self._live_view_window.show()
+
+    def _open_timeline_window(self):
+        """Open (or bring to front) the script timeline, on the script loaded last."""
+        from solareclipseworkbench.report_ui import TimelineWindow
+        if self._timeline_window is None:
+            self._timeline_window = TimelineWindow(
+                lambda: (self.model.reference_moments, self.model.camera_overview.camera_overview_dict))
+        if self._timeline_window.filename is None and self.script_filename is None:
+            self._timeline_window.choose_script()
+        else:
+            self._timeline_window.set_script(self.script_filename if self._timeline_window.filename is None
+                                             else None)
+        self._timeline_window.show()
+        self._timeline_window.activateWindow()
+        self._timeline_window.raise_()
+
+    def _open_run_report_window(self):
+        """Open (or bring to front) the run report, on the newest log with a loaded script."""
+        from solareclipseworkbench.report_ui import RunReportWindow
+        if self._run_report_window is None:
+            self._run_report_window = RunReportWindow()
+        else:
+            self._run_report_window.fill_logs()
+        self._run_report_window.show()
+        self._run_report_window.activateWindow()
+        self._run_report_window.raise_()
 
     def _open_beads_window(self):
         """Open (or bring to front) the Baily's beads window."""
@@ -3799,9 +3860,6 @@ class QJobsTableView(QTableView):
 
 
 def main():
-    setup_logging("sew")
-    LOGGER.info("Starting up Solar Eclipse Workbench")
-
     parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")
     parser.add_argument(
         "-s",
@@ -3862,7 +3920,40 @@ def main():
         help="Specify continuous mode name for Sony cameras"
     )
 
+    parser.add_argument(
+        "--check",
+        metavar="SCRIPT",
+        help="print the timeline of a script per camera, with the commands that start late or are dropped, "
+             "and exit (needs --longitude, --latitude, --altitude and --date)",
+    )
+
+    parser.add_argument(
+        "--plot",
+        metavar="PNG",
+        help="with --check: also draw the timeline around totality to this image file",
+    )
+
+    parser.add_argument(
+        "--report",
+        metavar="LOG",
+        nargs="?",
+        const="",
+        help="print what became of every command of the last run in a log file and exit "
+             "(default: the newest log in which a script was loaded)",
+    )
+
     args = parser.parse_args()
+
+    if args.report is not None:
+        return report_main(args.report)
+
+    # --check prints its own result; the log file still gets everything
+    setup_logging("sew", console_level=logging.WARNING if args.check else logging.INFO)
+    LOGGER.info("Starting up Solar Eclipse Workbench")
+
+    if args.check:
+        return check_main(args)
+
     configuration.SONY_CONTINUOUS_MODE = args.sony_cont_mode
     # args[1:1] = ["-stylesheet", str(styles_location)]
     app = QApplication(list(sys.argv))
@@ -3902,6 +3993,54 @@ def main():
         QTimer.singleShot(0, controller.set_reference_moments)
 
     return app.exec()
+
+
+def check_main(args) -> int:
+    """sew --check: print the timeline of a script and exit; 1 when a command will be dropped."""
+    from solareclipseworkbench.script_timeline import build_timeline, draw_timeline, format_timeline
+
+    if args.longitude is None or args.latitude is None or args.altitude is None or not args.date:
+        print("--check needs the location and the date: --longitude, --latitude, --altitude and --date")
+        return 2
+    reference_moments, _, eclipse_type = calculate_reference_moments(args.longitude, args.latitude, args.altitude,
+                                                                     Time(args.date))
+    timeline = build_timeline(args.check, reference_moments)
+    print(f"Script {args.check}, {eclipse_type} eclipse of {args.date} at {args.longitude}, {args.latitude}, "
+          f"{args.altitude} m\n")
+    print(format_timeline(timeline))
+    if args.plot:
+        from matplotlib.figure import Figure
+        figure = Figure(figsize=(14, 2 + 0.6 * max(1, len(timeline.cameras))))
+        draw_timeline(figure, timeline)
+        figure.savefig(args.plot, dpi=120)
+        print(f"Timeline drawn to {args.plot}")
+    return 1 if timeline.dropped or timeline.unknown_moments else 0
+
+
+def report_main(log: str) -> int:
+    """sew --report: print the report of the last run in a log file and exit."""
+    from solareclipseworkbench import run_report
+
+    if log:
+        path = Path(log)
+    else:
+        logs = run_report.run_logs()
+        if not logs:
+            print(f"No log with a loaded script in {run_report.LOG_DIR}")
+            return 1
+        path = logs[0]
+    try:
+        runs = run_report.read_log(path)
+    except OSError as e:
+        print(f"Could not read {path}: {e}")
+        return 1
+    if not runs:
+        print(f"No script was loaded in {path}")
+        return 1
+    if len(runs) > 1:
+        print(f"{len(runs)} scripts were loaded in this log; this is the last one.\n")
+    print(run_report.format_report(runs[-1], path))
+    return 0
 
 
 def sync_cameras(controller: SolarEclipseController):

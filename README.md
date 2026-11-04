@@ -46,6 +46,8 @@ pip install --upgrade --pre solareclipseworkbench
       - [Datetime format](#datetime-format)
       - [Saving settings](#saving-settings)
       - [Live view](#live-view)
+      - [Script timeline](#script-timeline)
+      - [Run report](#run-report)
   - [Running the Configuration Wizard](#running-the-configuration-wizard)
   - [USB GPS device](#usb-gps-device)
     - [Supported hardware](#supported-hardware)
@@ -422,6 +424,9 @@ The following command line parameters can be used to start up gui.py.
 | -vc              | --virtual-camera      | Use a virtual camera. Only for simulation mode!                               |
 | -lc              | --low-cpu             | Disable auto update for eclipse visualization (essential for single core CPU) |
 | -scm             | --sony-cont-mode      | Specify continuous mode search keyword name for Sony cameras                  |
+|                  | --check SCRIPT        | Print the timeline of a script per camera and exit (see [Script timeline](#script-timeline)) |
+|                  | --plot PNG            | With `--check`: also draw the timeline around totality to an image file      |
+|                  | --report [LOG]        | Print the run report of a log file and exit (see [Run report](#run-report))  |
 
 ### UI functionality
 
@@ -559,6 +564,22 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - **Toggle button**: the "Disable / Enable Live View" button in the window lets you turn the preview off or on at any time — before, during, or after totality — without stopping the script or closing the window.
 - If no camera is connected when the Live View button is clicked, a warning dialog is shown.
 - **Preview size** (optional): the preview uses the live-view size set on the camera.  Canon EOS and recent Nikon bodies let it be changed (Canon `Large`/`Medium`/`Small`, Nikon `QVGA`/`VGA`/`XGA`), and the `Preview size` list in the window then selects a larger one for more detail, e.g. to check focus with the zoom.  The camera's own setting is restored when the window closes.  The size of the last frame is shown next to its time.  Sony bodies have a fixed preview size, and the list is greyed out.  A larger frame takes longer to transfer, and a scheduled shot that fires during a transfer waits for it, so during the partial phases such a shot can be a little later (typically some tens of milliseconds); the shots around totality are not affected, as live view is paused from 15 s before C2 until 15 s after C3.
+
+#### Script timeline
+
+- The **"Timeline"** icon draws a script per camera against the reference moments of the location and date that are set: every camera command is a bar from its start to the end of the time it is estimated to keep the camera busy, with C1–C4, MAX and the Baily's beads windows drawn across.  Commands that start late (because the camera is still busy) are orange, with a line back to their planned start; commands that will probably be dropped are a red cross.  Hovering over a bar shows the command, its time relative to the nearest contact, and what it is waiting for.
+- The window opens on the script loaded last, or asks for one; `Script...` draws another one, before anything is loaded or a camera is connected.  `Totality` shows from 90 s before C2 to 90 s after C3, `Whole script` everything; the toolbar under the buttons zooms and pans.  `Refresh` reads the script again after editing it, and `Save as text...` writes the timeline of every camera to a text file.
+- It uses the same estimates as the check that runs when a script is loaded (see [Commands that are too close together](#commands-that-are-too-close-together)), so a command drawn as dropped is one that check warns about, and a script fitted to a tested camera is drawn with the camera's measured timing.  Times are the real UTC times, without a simulation offset.
+- From the command line: `sew --check myscript.txt -d 2027-08-02 -lon 32.65 -lat 25.69 -alt 80` prints the same per camera, with the commands that start late or are dropped first, and exits with code 1 when a command will be dropped or a line names a reference moment that does not exist.  Add `--plot timeline.png` to also draw it.
+
+#### Run report
+
+- The **"Run report"** icon reads a log file back and shows what became of every command of a run (a run starts each time a script is loaded): `shot`, `late` (the shutter was released more than 1 s after the planned time), `dropped: camera busy`, `missed by the scheduler`, `failed`, `no shutter release`, `not reached` (the log ends before it) or, for voice prompts and shell commands, `done`.
+- The summary above the table gives, per camera, the number of commands per outcome, the median and largest delay of the shutter release per command type, the commands within 60 s of C2 and C3, and the commands that kept the camera busy longer than estimated, which is where the next command on that camera may have had to wait.  The warnings and errors logged during the run follow.
+- The newest log in which a script was loaded opens first; the other logs are in the list, and `Open...` reads one from elsewhere.  `Refresh` reads the log again during a run, and `Save as text...` writes the full report.
+- From the command line: `sew --report` prints the report of the last run in the newest log, `sew --report <log file>` of a given log.
+- Use it after rehearsing a script in simulation mode with the cameras you will use (see [Timing shots around C2 and C3](#timing-shots-around-c2-and-c3)).  With the virtual camera every shot is reported as `shot` straight away; the real delays and busy times only show with a real camera.
+- Logs written by version 2.0.0 or older have no planned commands: the report then only lists what those logs have.
 
 > **Note**: Live view via gphoto2 is tested on the Nikon Z8.  Support on other bodies depends on whether their gphoto2 driver implements `capture_preview`.  Canon EOS bodies and most modern Nikon and Sony Alpha bodies support it; some entry-level or older bodies do not.
 
@@ -881,7 +902,7 @@ The seconds around second and third contact (Baily's beads, the diamond ring, th
 - **C2 and C3 do not look the same.**  The mountains and valleys at the edge of the Moon decide where and for how long the Baily's beads show, and that is different at C2 and C3.  Use the limb-corrected contact times and the `BEADS_C2` / `BEADS_C3` windows (see [Lunar limb correction and Baily's beads](#lunar-limb-correction-and-bailys-beads)), the `Baily's beads` window, or the simulations on the Eclipse Chaser Log map, rather than mirroring your C2 lines at C3.
 - **Prepare the camera before a sequence.**  On a Sony, the first command after a change between single pictures, a burst and a bracketing mode takes about 4 seconds longer.  Put a `prepare_camera` a few seconds before the first shot of the C2 and C3 sequences (the wizard does this for you).
 - **First and fourth contact are not visible when they happen.**  The Moon's bite shows once it is a couple of pixels deep: with a 75 mm lens that took about 45 seconds after C1 in 2026, with a telescope a few seconds.  The wizard spaces its C1 and C4 shots accordingly from the focal length and the pixel size of your camera (`Test Camera...` fills in the pixel size for common Canon, Nikon and Sony bodies).
-- **Rehearse, and read the log.**  Run your script in simulation mode with the cameras you will use.  The log has, for every command, `… released the shutter at … UTC: … s after its scheduled time`, so you can see how late each sequence really starts and adjust the offsets.
+- **Rehearse, and read the log.**  Run your script in simulation mode with the cameras you will use.  The log has, for every command, `… released the shutter at … UTC: … s after its scheduled time`, so you can see how late each sequence really starts and adjust the offsets.  The [Run report](#run-report) lines this up per command, and the [Script timeline](#script-timeline) shows which commands are too close together before you run.
 
 ## Handling camera(s) disconnect(s)
 

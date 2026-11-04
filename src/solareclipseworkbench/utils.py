@@ -110,8 +110,21 @@ def camera_busy_window(start: datetime, func_name: str, script_args: list, descr
                             drive_mode(func_name, bracket), mode_switch_s(vendor))
 
 
-def find_camera_conflicts(windows: List[CameraBusyWindow],
-                          max_wait_s: float = _MAX_LOCK_WAIT_S) -> List[CameraConflict]:
+@dataclass(frozen=True)
+class ReplayedWindow:
+    """A camera command as the camera USB lock will run it (see replay_camera_windows)."""
+
+    window: CameraBusyWindow
+    start: datetime                 # when the command gets the camera (later than planned when it waits)
+    duration_s: float               # busy time, including a change of drive mode
+    wait_s: float = 0.0             # how long it waits for the camera
+    dropped: bool = False           # dropped because it would wait too long; it does not use the camera
+    blocked_by: Optional[CameraBusyWindow] = None
+    blocker_busy_s: Optional[float] = None
+
+
+def replay_camera_windows(windows: List[CameraBusyWindow],
+                          max_wait_s: float = _MAX_LOCK_WAIT_S) -> List[ReplayedWindow]:
     """Replay each camera's commands the way the camera USB lock serialises them.
 
     A command that would have to wait for the camera longer than max_wait_s is
@@ -120,9 +133,9 @@ def find_camera_conflicts(windows: List[CameraBusyWindow],
     A command in another drive mode than the one before it takes its switch_s
     longer.
 
-    Returns: The commands that will start late or be dropped, in time order.
+    Returns: Every command, per camera in time order.
     """
-    conflicts = []
+    replayed = []
     by_camera = {}
     for window in windows:
         by_camera.setdefault(window.camera, []).append(window)
@@ -135,22 +148,30 @@ def find_camera_conflicts(windows: List[CameraBusyWindow],
         for window in sorted(camera_windows, key=lambda w: w.start):
             wait_s = (busy_until - window.start).total_seconds() if busy_until is not None else 0.0
             if wait_s > max_wait_s:
-                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=True,
-                                                blocker_busy_s=busy_with_s))
+                replayed.append(ReplayedWindow(window, window.start, 0.0, wait_s, dropped=True,
+                                               blocked_by=busy_with, blocker_busy_s=busy_with_s))
                 continue
-            if wait_s > 0:
-                conflicts.append(CameraConflict(window, busy_with, wait_s, dropped=False,
-                                                blocker_busy_s=busy_with_s))
             duration_s = window.duration_s
             if window.mode is not None:
                 if mode is not None and window.mode != mode:
                     duration_s += window.switch_s
                 mode = window.mode
             actual_start = max(window.start, busy_until) if busy_until is not None else window.start
+            replayed.append(ReplayedWindow(window, actual_start, duration_s, max(0.0, wait_s),
+                                           blocked_by=busy_with if wait_s > 0 else None,
+                                           blocker_busy_s=busy_with_s if wait_s > 0 else None))
             busy_until = actual_start + timedelta(seconds=duration_s)
             busy_with = window
             busy_with_s = duration_s
 
+    return replayed
+
+
+def find_camera_conflicts(windows: List[CameraBusyWindow],
+                          max_wait_s: float = _MAX_LOCK_WAIT_S) -> List[CameraConflict]:
+    """The commands that will start late or be dropped, in time order (see replay_camera_windows)."""
+    conflicts = [CameraConflict(r.window, r.blocked_by, r.wait_s, dropped=r.dropped, blocker_busy_s=r.blocker_busy_s)
+                 for r in replay_camera_windows(windows, max_wait_s) if r.wait_s > 0]
     return sorted(conflicts, key=lambda c: c.window.start)
 
 
