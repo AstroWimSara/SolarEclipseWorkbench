@@ -8,7 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
 from solareclipseworkbench import voice_prompt, take_picture, take_burst, take_bracket, take_hdr, prepare_camera, sync_cameras, scripts, execute_command
-from solareclipseworkbench import hardware_problems
+from solareclipseworkbench import hardware_problems, run_report
 from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S, parse_prepare_mode
 from solareclipseworkbench.command_timing import (
     vendor_from_name, picture_duration_s, burst_duration_s, hdr_duration_s, bracket_duration_s,
@@ -718,10 +718,15 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
             unknown_moments[name] = unknown_moments.get(name, 0) + 1
         return None
 
-    if camera_obj is None:
-        return None
-    profile = (timing_profiles or {}).get(script_args[0].strip(), DEFAULT_PROFILE)
-    return camera_busy_window(execution_time, func_name, script_args, description, camera_obj, profile)
+    window = None
+    if camera_obj is not None:
+        profile = (timing_profiles or {}).get(script_args[0].strip(), DEFAULT_PROFILE)
+        window = camera_busy_window(execution_time, func_name, script_args, description, camera_obj, profile)
+    # The run report lines the log of the run up against this
+    run_report.log_planned(func_name, script_args[0].strip() if camera_obj is not None else None, execution_time,
+                           f"{ref_moment}{sign}{cmd_str_split[3].strip()}",
+                           window.duration_s if window is not None else None, description)
+    return window
 
 # Main
 def main():

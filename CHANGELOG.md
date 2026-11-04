@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- The log has a `Planned:` line for every scheduled command (time, camera, reference moment, estimated busy time and description), a line with how long each camera command kept the camera busy, and the scheduled time of a dropped command.  The virtual camera logs its shutter releases like a real camera, so a simulation has a run report
 - The map in the `Location` window draws the path of totality (or annularity) of the selected eclipse: the band between the northern and southern limits, and the centre line.  It zooms to the path and the observing location, has a toolbar to zoom and pan, and follows the coordinates as they are typed.  The eclipse can be changed in a drop-down above the map, which lists the same eclipses as the `Date` window (and the eclipse that is set, also when it is past); `OK` then also makes it the eclipse date.  Below the map it says how far the location is from the centre line and on which side, how far inside or outside the path it is, and how long totality lasts there compared with the centre line (Issue #68)
 
 ### Fixed
