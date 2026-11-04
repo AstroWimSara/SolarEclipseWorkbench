@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The log has a `Planned:` line for every scheduled command (time, camera, reference moment, estimated busy time and description), a line with how long each camera command kept the camera busy, and the scheduled time of a dropped command.  The virtual camera logs its shutter releases like a real camera, so a simulation has a run report
 - The map in the `Location` window draws the path of totality (or annularity) of the selected eclipse: the band between the northern and southern limits, and the centre line.  It zooms to the path and the observing location, has a toolbar to zoom and pan, and follows the coordinates as they are typed.  The eclipse can be changed in a drop-down above the map, which lists the same eclipses as the `Date` window (and the eclipse that is set, also when it is past); `OK` then also makes it the eclipse date.  Below the map it says how far the location is from the centre line and on which side, how far inside or outside the path it is, and how long totality lasts there compared with the centre line (Issue #68)
 
+### Changed
+
+- Log timestamps are ISO 8601 (`2026-08-12T17:46:38.123Z`): the log file now writes the `T` between date and time, and the console shows the same UTC time with milliseconds instead of local time.  The run report still reads the logs of 2.0.0 (Issue #191)
+
 ### Fixed
 
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
