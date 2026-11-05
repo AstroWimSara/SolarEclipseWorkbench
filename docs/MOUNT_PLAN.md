@@ -63,7 +63,29 @@ starts at the sun and moves (sky drift, nudges, pulses, park).
 - The same on the phone dashboard (`ACTION_MOUNT_*`, validated and queued like
   the live-view actions).
 
-## Step 3 — Automatic centring from the DSLR live view
+## Step 3 — Automatic centring from the DSLR live view  *(in progress)*
+
+Done: `sun_finder.find_sun()` (numpy only, ~60 ms per 1000 px frame), checked on
+663 frames of the 2026-08-12 eclipse (Canon EOS R, tests/data/sun, not in git; 21 of
+them with their expected answers in tests/data/sun_frames):
+
+- Otsu threshold on the brightest channel (a low, red sun has a dark limb in
+  luminance), largest bright region, RANSAC circles on its edge where the image
+  gets darker outward (the moon's limb gets brighter outward: without this, thin
+  crescents gave circles half on each limb), sub-pixel limb on radial profiles in
+  the full frame.  Thin crescents (1-2 px wide) are searched in the full frame.
+- With the radius known (`radius_hint`, ±8 %), short arcs (≥ 60°) are fitted with the
+  radius held.  Without it, at least 120° of limb is needed.
+- Rejected: an edge wider than 8 % of the radius (the corona fades over 8-10 px, the
+  limb drops in 1-3 px of 60), a short saturated arc (beads, diamond ring glare), a
+  disk with an enclosed hole.
+- Result with the radius known: found from the full disk to C2 - 17 s and from
+  C3 + 20 s to sunset; nothing from C2 - 12 s to C3 + 12 s (the centring pauses from
+  C2 - 15 s to C3 + 15 s anyway); no wrong fix seen.  Frame-to-frame scatter on a
+  tracked mount: median 0.16 px, 90 % under 0.3 px (partial phases before C2).
+
+Next: calibration (guide pulses → pixel shift), the control loop (between scheduled
+shots, keeping a running radius), and the GUI.
 
 - Sun detection: threshold, edge pixels, circle fit with a radius constraint,
   rejecting the concave lunar edge (a crescent's centroid would drift).
