@@ -18,6 +18,8 @@ from solareclipseworkbench.notifications import check_notification
 from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.hardware_registry import HARDWARE, HARDWARE_COMMANDS
+from solareclipseworkbench.mounts import (mount_goto_sun, mount_park, mount_stop, mount_track_sun, mount_tracking,
+                                          mount_unpark)
 from solareclipseworkbench.relay_trigger import relay_shoot, relay_burst, relay_bulb, relay_arm, relay_release
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
@@ -35,6 +37,12 @@ COMMANDS = {
     'relay_bulb': relay_bulb,
     'relay_arm': relay_arm,
     'relay_release': relay_release,
+    'mount_track_sun': mount_track_sun,
+    'mount_goto_sun': mount_goto_sun,
+    'mount_tracking': mount_tracking,
+    'mount_park': mount_park,
+    'mount_unpark': mount_unpark,
+    'mount_stop': mount_stop,
 }
 
 #: Name under which relay commands appear in the load-time timing warnings.
@@ -468,7 +476,7 @@ def _hdr_is_valid(args: list, cmd_str: str) -> bool:
 
 
 class DeviceAtRuntime:
-    """Stands in for a relay (or other registered device) until the job fires.
+    """Stands in for a relay or a mount (or other registered device) until the job fires.
 
     The registry is consulted on every attribute access, so a device connected
     any time before the job runs is the one used, and a reconnected device
@@ -491,7 +499,8 @@ class DeviceAtRuntime:
 def _relay_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
     """Check the arguments of a relay command now, so a typo shows up when the script is loaded."""
     values = [arg.strip() for arg in args if arg.strip()]
-    if func_name in ("relay_shoot", "relay_arm", "relay_release"):
+    if func_name not in ("relay_burst", "relay_bulb"):
+        # The other relay commands, and the mount commands, need no duration
         return True
     problem = None
     try:
@@ -513,7 +522,9 @@ def _relay_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
 
 #: Commands that leave the camera alone, so a job running one of them is not
 #: holding the shutter when the next contact needs it.
-CAMERA_FREE_COMMANDS = frozenset({'voice_prompt'})
+CAMERA_FREE_COMMANDS = frozenset(
+    {'voice_prompt'} | {name for name, kind in HARDWARE_COMMANDS.items() if kind == 'mount'}
+)
 
 #: Which script command each scheduled job runs, by job id.  Filled in as the
 #: script is scheduled: the scheduler itself only knows times, not what a job
@@ -663,9 +674,9 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     camera_obj = None
 
     if func_name in HARDWARE_COMMANDS:
-        # A relay command takes its device as the first argument, the way a
-        # camera command takes a camera, but the device is looked up when the
-        # job fires (see DeviceAtRuntime).
+        # A relay or mount command takes its device as the first argument, the
+        # way a camera command takes a camera, but the device is looked up when
+        # the job fires (see DeviceAtRuntime).
         if not _relay_args_are_valid(func_name, args, cmd_str):
             return
         kind = HARDWARE_COMMANDS[func_name]

@@ -138,6 +138,23 @@ def _relay_command(name: str, values: list) -> Optional[str]:
     return None
 
 
+def _mount_command(name: str, values: list) -> Optional[str]:
+    if name == "mount_goto_sun":
+        return "Mount: go to the Sun"
+    if name == "mount_track_sun":
+        return "Mount: track the Sun at the solar rate"
+    if name == "mount_tracking":
+        state = values[0].lower() if values else "on"
+        return "Mount: start tracking" if state in ("on", "1", "true", "yes") else "Mount: stop tracking"
+    if name == "mount_park":
+        return "Mount: park"
+    if name == "mount_unpark":
+        return "Mount: unpark"
+    if name == "mount_stop":
+        return "Mount: stop all motion"
+    return None
+
+
 def _describe_job(job, ev: int) -> Optional[str]:
     name = job.func.__name__
     args = list(job.args or ())
@@ -148,6 +165,10 @@ def _describe_job(job, ev: int) -> Optional[str]:
     if name.startswith("relay_"):
         # The first argument is the relay itself, the others are the values from the script
         return _relay_command(name, [str(arg).strip() for arg in args[1:]])
+
+    if name.startswith("mount_"):
+        # The first argument is the mount itself, the others are the values from the script
+        return _mount_command(name, [str(arg).strip() for arg in args[1:]])
 
     if name == "sync_cameras":
         return "Check the cameras and set their clocks"

@@ -9,6 +9,8 @@ from solareclipseworkbench.camera import (CameraSettings, prepare_camera, set_ex
                                           take_burst, take_hdr, take_picture)
 from solareclipseworkbench.commands import execute_command
 from solareclipseworkbench.gui import sync_cameras
+from solareclipseworkbench.mounts import (mount_goto_sun, mount_park, mount_stop, mount_track_sun, mount_tracking,
+                                          mount_unpark)
 from solareclipseworkbench.notifications import voice_prompt
 from solareclipseworkbench.relay_trigger import relay_arm, relay_bulb, relay_burst, relay_release, relay_shoot
 
@@ -61,6 +63,13 @@ def _no_compensation():
     (_job(relay_bulb, object(), "2.0"), "Relay: bulb exposure of 2 s"),
     (_job(relay_arm, object()), "Relay: hold the half press"),
     (_job(relay_release, object()), "Relay: release the shutter"),
+    (_job(mount_goto_sun, object()), "Mount: go to the Sun"),
+    (_job(mount_track_sun, object()), "Mount: track the Sun at the solar rate"),
+    (_job(mount_tracking, object(), "off"), "Mount: stop tracking"),
+    (_job(mount_tracking, object(), "on"), "Mount: start tracking"),
+    (_job(mount_park, object()), "Mount: park"),
+    (_job(mount_unpark, object()), "Mount: unpark"),
+    (_job(mount_stop, object()), "Mount: stop all motion"),
 ])
 def test_each_command_in_words(job, expected):
     assert job_text.describe_job(job) == expected
@@ -81,10 +90,10 @@ def test_a_speed_that_is_not_a_number_is_shown_as_written():
 
 
 def test_unknown_commands_and_unreadable_jobs_have_no_words():
-    def mount_park():
+    def dome_open():
         pass
 
-    for job in (_job(mount_park),                       # a command without words
+    for job in (_job(dome_open),                        # a command without words
                 _job(take_picture),                     # no arguments
                 _job(take_hdr, object(), _settings(), "many"),
                 SimpleNamespace(func=None, args=()),

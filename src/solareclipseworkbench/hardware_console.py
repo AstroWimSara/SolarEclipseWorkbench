@@ -1,4 +1,4 @@
-"""Bench console for the USB relay shutter trigger.
+"""Bench console for the USB relay shutter trigger and the telescope mount.
 
 For building and testing the hardware, not for running an eclipse.  Every
 command does one step, so a fault can be isolated to one wire, one contact or
@@ -19,6 +19,9 @@ connected:
     relay timing         how much jitter the host adds
 
 Then connect the camera, lens cap on, and use ``relay shoot`` and ``relay burst``.
+
+For a mount, ``mount probe`` finds the port and the baud rate of the controller,
+and ``mount connect`` opens it.
 """
 
 import argparse
@@ -28,7 +31,9 @@ import sys
 import time
 from typing import Optional
 
+from solareclipseworkbench import mounts as mount_mod
 from solareclipseworkbench import relay_trigger as relay_mod
+from solareclipseworkbench.mounts.onstepx import DEFAULT_TCP_PORT, probe_serial
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,26 @@ Relay trigger
   relay bulb <seconds>          hold a bulb exposure
   relay timing [samples]        measure host-to-contact latency and spread
   relay events [n]              show the last n contact transitions
+
+Mount
+  mount drivers                 list installed mount drivers
+  mount find                    ask every driver where its mounts can be
+  mount connect [port] [driver] open the mount (driver: onstepx, or simulator with --simulate)
+  mount tcp <host> [port]       open an OnStepX mount over the network
+  mount probe [port]            find the baud rate at which the controller answers
+  mount info                    driver, product name and capabilities
+  mount status                  decoded status of the mount
+  mount pos                     current RA/Dec and Alt/Az
+  mount sun                     where the Sun is now
+  mount goto <ra_h> <dec_deg>   slew to coordinates
+  mount gotosun [wait]          slew to the Sun
+  mount track <rate>            sidereal | solar | lunar | king
+  mount tracking <on|off>       start or stop tracking
+  mount move <dir> [seconds]    move north|south|east|west, then stop
+  mount rate <preset>           guide | center | find | fast | slew
+  mount park / unpark
+  mount stop                    stop all motion
+  mount raw <cmd> [kind]        send any command (kind: terminated|bool|char|none)
 """
 
 
@@ -63,6 +88,7 @@ class Console:
     def __init__(self, simulate: bool = False):
         self.simulate = simulate
         self.trigger: Optional[relay_mod.RelayTrigger] = None
+        self.mount: Optional[mount_mod.MountDriver] = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -72,6 +98,12 @@ class Console:
     def need_trigger(self) -> bool:
         if self.trigger is None:
             self.out("No relay connected.  Run 'relay connect' first.")
+            return False
+        return True
+
+    def need_mount(self) -> bool:
+        if self.mount is None:
+            self.out("No mount connected.  Run 'mount connect' first.")
             return False
         return True
 
@@ -93,13 +125,21 @@ class Console:
     def cmd_status(self, args) -> None:
         if self.trigger is None:
             self.out("Relay:  not connected")
-            return
-        wiring = self.trigger.wiring
-        layout = ("single channel, S2 on %d" % wiring.s2_channel if wiring.is_single_channel
-                  else "dual channel, S1 on %d, S2 on %d" % (wiring.s1_channel, wiring.s2_channel))
-        self.out(f"Relay:  {self.trigger.describe()}")
-        self.out(f"        {layout}")
-        self.out(f"        closed channels: {sorted(self.trigger.closed_channels) or 'none'}")
+        else:
+            wiring = self.trigger.wiring
+            layout = ("single channel, S2 on %d" % wiring.s2_channel if wiring.is_single_channel
+                      else "dual channel, S1 on %d, S2 on %d" % (wiring.s1_channel, wiring.s2_channel))
+            self.out(f"Relay:  {self.trigger.describe()}")
+            self.out(f"        {layout}")
+            self.out(f"        closed channels: {sorted(self.trigger.closed_channels) or 'none'}")
+        if self.mount is None:
+            self.out("Mount:  not connected")
+        else:
+            self.out(f"Mount:  {self.mount.describe()}")
+            try:
+                self.out(f"        {self.mount.status().summary()}")
+            except mount_mod.MountError as exc:
+                self.out(f"        status not available: {exc}")
 
     # -------------------------------------------------------------------- relay
 
@@ -255,6 +295,191 @@ class Console:
             flag = f"  ERROR: {event.error}" if event.error else ""
             self.out(f"  {stamp}  {event.channel:>2}  {state:<6}  {event.elapsed_ms:6.2f} ms{flag}")
 
+    # -------------------------------------------------------------------- mount
+
+    def cmd_mount(self, args) -> None:
+        if not args:
+            self.out("Missing mount subcommand.  See 'help'.")
+            return
+        sub, rest = args[0], args[1:]
+        handler = getattr(self, f"_mount_{sub}", None)
+        if handler is None:
+            self.out(f"Unknown mount subcommand: {sub}")
+            return
+        handler(rest)
+
+    def _mount_drivers(self, args) -> None:
+        self.out("Installed mount drivers:")
+        for driver in mount_mod.list_drivers():
+            self.out(f"  {driver.name:<12} {driver.description or driver.display_name}")
+
+    def _mount_find(self, args) -> None:
+        candidates = mount_mod.discover_mounts()
+        if not candidates:
+            self.out("Nothing found.  Connect the mount, or use 'mount connect - simulator'.")
+            return
+        for candidate in candidates:
+            self.out(f"  {candidate}")
+        self.out()
+        self.out("A USB serial adapter is a reason to probe, not proof of what is behind it.")
+        self.out("'mount probe <port>' asks the port for an LX200 answer.")
+
+    def _mount_connect(self, args) -> None:
+        port = args[0] if args and args[0] not in ("-", "auto") else None
+        driver = args[1] if len(args) > 1 else ("simulator" if self.simulate else "onstepx")
+        config = {"port": port} if port else {}
+        self.mount = mount_mod.connect(driver=driver, **config)
+        self.out(f"Connected: {self.mount.describe()}")
+
+    def _mount_tcp(self, args) -> None:
+        if not args:
+            self.out("Usage: mount tcp <host> [port]")
+            return
+        tcp_port = int(args[1]) if len(args) > 1 else DEFAULT_TCP_PORT
+        self.mount = mount_mod.connect(driver="onstepx", host=args[0], tcp_port=tcp_port)
+        self.out(f"Connected: {self.mount.describe()}")
+
+    def _mount_probe(self, args) -> None:
+        ports = [args[0]] if args else [c.target for c in mount_mod.discover_mounts("onstepx")]
+        if not ports:
+            self.out("No USB serial ports to probe.")
+            return
+        for port in ports:
+            self.out(f"Probing {port}...")
+            baudrate = probe_serial(port)
+            if baudrate:
+                self.out(f"  the controller answers at {baudrate} baud")
+            else:
+                self.out("  no answer at any baud rate")
+
+    def _mount_info(self, args) -> None:
+        if not self.need_mount():
+            return
+        capabilities = self.mount.capabilities
+        self.out(f"  {self.mount.describe()}")
+        self.out(f"  driver:   {self.mount.name}")
+        self.out(f"  rates:    {', '.join(capabilities.tracking_rates)}")
+        self.out(f"  can:      {'goto ' if capabilities.goto else ''}{'sync ' if capabilities.sync else ''}"
+                 f"{'park ' if capabilities.park else ''}{'guide ' if capabilities.pulse_guide else ''}"
+                 f"{'site-and-time' if capabilities.site_time else ''}")
+
+    def _mount_status(self, args) -> None:
+        if not self.need_mount():
+            return
+        status = self.mount.status()
+        self.out(f"  raw:      {status.raw}")
+        self.out(f"  summary:  {status.summary()}")
+        self.out(f"  tracking: {status.tracking} ({status.tracking_rate})")
+        self.out(f"  slewing:  {status.slewing}")
+        self.out(f"  parked:   {status.parked}")
+        self.out(f"  at home:  {status.at_home}")
+        self.out(f"  type:     {status.mount_type}")
+        if status.error_code and status.error_code != "0":
+            self.out(f"  error:    {status.error_code}")
+
+    def _mount_pos(self, args) -> None:
+        if not self.need_mount():
+            return
+        ra, dec = self.mount.get_radec()
+        self.out(f"  RA  {mount_mod.format_ra(ra)}  ({ra:.5f} h)")
+        self.out(f"  Dec {mount_mod.format_dec(dec)}  ({dec:.5f}°)")
+        try:
+            alt, az = self.mount.get_altaz()
+            self.out(f"  Alt {alt:.4f}°  Az {az:.4f}°")
+        except mount_mod.MountError as exc:
+            self.out(f"  Alt/Az not available: {exc}")
+
+    def _mount_sun(self, args) -> None:
+        ra, dec = mount_mod.sun_radec()
+        self.out(f"  The Sun is at RA {mount_mod.format_ra(ra)}  Dec {mount_mod.format_dec(dec)}")
+
+    def _mount_goto(self, args) -> None:
+        if not self.need_mount():
+            return
+        if len(args) < 2:
+            self.out("Usage: mount goto <ra_hours> <dec_degrees>")
+            return
+        self.mount.goto(float(args[0]), float(args[1]))
+        self.out("Slew accepted.")
+
+    def _mount_gotosun(self, args) -> None:
+        if not self.need_mount():
+            return
+        wait = bool(args) and args[0].lower() in ("wait", "true", "1", "yes")
+        ra, dec = self.mount.goto_sun(wait=wait)
+        self.out(f"Slewing to the Sun: RA {mount_mod.format_ra(ra)} Dec {mount_mod.format_dec(dec)}")
+        if wait:
+            self.out("Slew complete.")
+
+    def _mount_track(self, args) -> None:
+        if not self.need_mount():
+            return
+        if not args:
+            self.out("Usage: mount track <sidereal|solar|lunar|king>")
+            return
+        self.mount.set_tracking_rate(args[0])
+        self.out(f"Tracking rate set to {args[0]}.")
+
+    def _mount_tracking(self, args) -> None:
+        if not self.need_mount():
+            return
+        if not args:
+            self.out("Usage: mount tracking <on|off>")
+            return
+        if args[0].lower() in ("on", "1", "true", "yes"):
+            self.out("Tracking started." if self.mount.tracking_on() else "The mount did not start tracking.")
+        else:
+            self.out("Tracking stopped." if self.mount.tracking_off() else "The mount did not stop tracking.")
+
+    def _mount_move(self, args) -> None:
+        if not self.need_mount():
+            return
+        if not args:
+            self.out("Usage: mount move <north|south|east|west> [seconds]")
+            return
+        direction = args[0]
+        seconds = float(args[1]) if len(args) > 1 else 1.0
+        self.mount.move(direction)
+        try:
+            time.sleep(seconds)
+        finally:
+            self.mount.stop_move(direction)
+        self.out(f"Moved {direction} for {seconds:.2f} s.")
+
+    def _mount_rate(self, args) -> None:
+        if not self.need_mount():
+            return
+        if not args:
+            self.out("Usage: mount rate <guide|center|find|fast|slew>")
+            return
+        self.mount.set_rate(args[0])
+        self.out(f"Rate preset set to {args[0]}.")
+
+    def _mount_park(self, args) -> None:
+        if not self.need_mount():
+            return
+        self.out("Parked." if self.mount.park() else "The mount did not park.")
+
+    def _mount_unpark(self, args) -> None:
+        if not self.need_mount():
+            return
+        self.out("Unparked." if self.mount.unpark() else "The mount did not unpark.")
+
+    def _mount_stop(self, args) -> None:
+        if not self.need_mount():
+            return
+        self.mount.abort()
+        self.out("All motion stopped.")
+
+    def _mount_raw(self, args) -> None:
+        if not self.need_mount():
+            return
+        if not args:
+            self.out("Usage: mount raw <command> [terminated|bool|char|none]")
+            return
+        kind = args[1] if len(args) > 1 else "terminated"
+        self.out(f"  -> {self.mount.raw(args[0], kind)!r}")
+
     # --------------------------------------------------------------------- loop
 
     def dispatch(self, line: str) -> bool:
@@ -283,7 +508,7 @@ class Console:
 
         try:
             handler(args)
-        except relay_mod.RelayError as exc:
+        except (relay_mod.RelayError, mount_mod.MountError) as exc:
             self.out(f"Error: {exc}")
         except (ValueError, IndexError) as exc:
             self.out(f"Bad arguments: {exc}")
@@ -313,16 +538,20 @@ class Console:
         if self.trigger is not None:
             self.trigger.close()
             self.out("Relay contacts released.")
+        if self.mount is not None:
+            self.mount.close()
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Bench console for the USB relay shutter trigger")
+    parser = argparse.ArgumentParser(description="Bench console for the USB relay shutter trigger and the mount")
     parser.add_argument("--simulate", action="store_true",
-                        help="use a simulated relay, to try the console with nothing connected")
+                        help="use a simulated relay and mount, to try the console with nothing connected")
     parser.add_argument("--relay-port", help="connect the relay on this port at startup")
     parser.add_argument("--relay-kind", default="auto",
                         help="relay backend: auto, lcus, dsd, numato, hid, simulated")
-    parser.add_argument("--debug", action="store_true", help="log every contact change")
+    parser.add_argument("--mount-port", help="connect the mount on this port at startup")
+    parser.add_argument("--mount-driver", default="onstepx", help="mount driver (see 'mount drivers')")
+    parser.add_argument("--debug", action="store_true", help="log every contact change and mount command")
     parser.add_argument("command", nargs="*",
                         help="run a single command and exit, instead of starting the prompt")
     args = parser.parse_args(argv)
@@ -338,6 +567,8 @@ def main(argv=None) -> int:
     # port would otherwise shift the remaining words into the wrong argument.
     if args.relay_port:
         console._relay_connect([args.relay_port, args.relay_kind])
+    if args.mount_port:
+        console.dispatch(f"mount connect {shlex.quote(args.mount_port)} {shlex.quote(args.mount_driver)}")
 
     if args.command:
         try:

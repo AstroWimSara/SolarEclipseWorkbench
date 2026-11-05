@@ -65,8 +65,9 @@ def convert_command(line, ref_moment, sign, time_delta, extra_comment, output_fi
         comment = command_parts[5] if len(command_parts) > 5 else ""
         command = "command"
     elif command_parts[0] in HARDWARE_COMMANDS:
-        # Relay commands take a variable number of arguments (none, a duration,
-        # a duration and an interval), always followed by the description.
+        # Relay and mount commands take a variable number of arguments (for a
+        # relay: none, a duration, a duration and an interval), always followed
+        # by the description.
         command = command_parts[0]
         hardware_args = [part.strip() for part in command_parts[4:-1]] if len(command_parts) > 4 else []
         comment = command_parts[-1] if len(command_parts) > 4 else ""

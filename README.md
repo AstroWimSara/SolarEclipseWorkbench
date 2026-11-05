@@ -61,6 +61,7 @@ More background, eclipse reports and the story behind SEW are on the [Deep Sky W
     - [How to use](#how-to-use)
     - [GPS time correction](#gps-time-correction)
   - [USB relay shutter trigger](#usb-relay-shutter-trigger)
+  - [Telescope mount](#telescope-mount)
   - [Using two cameras of the same model, or one camera with multiple setups](#using-two-cameras-of-the-same-model-or-one-camera-with-multiple-setups)
     - [Step-by-step setup](#step-by-step-setup)
   - [Script file format](#script-file-format)
@@ -800,6 +801,42 @@ shoot slowly over USB or cannot shoot a burst over USB at all.
 how to wire the board, and what was measured on a Fujifilm X-T4: latency, pulse length, burst rate
 and how the drive mode changes what a held contact does.
 
+## Telescope mount
+
+Solar Eclipse Workbench can point a telescope mount at the Sun and track it at the solar rate,
+from the GUI or from the script.
+
+- Supported mounts: OnStep and OnStepX controllers (LX200 protocol), over the USB cable or over
+  the network (WiFi or Ethernet builds).  The `simulator` driver is a mount without hardware, to
+  rehearse a script.
+- Set the location before you connect the mount.  When the mount connects, it gets the clock of
+  the computer and the location.  An OnStepX does not track until it knows both.
+- Connect the mount with the **Mount** button in the toolbar.  Select the driver, then select
+  the port, or type the network address in **Host**.  **Scan** asks each USB serial port for an
+  LX200 answer and selects the port of the mount.  The baud rate is found automatically.
+- **Go to Sun**, **Track Sun**, **Stop**, **Park** and **Unpark** control the mount.  Put the
+  solar filter on before a goto.
+- In a script, use `mount_goto_sun`, `mount_track_sun`, `mount_tracking`, `mount_park`,
+  `mount_unpark` and `mount_stop` (see [Commands](#commands)).
+- To run a script without the GUI, `python -m solareclipseworkbench.sew` opens the mount with
+  `--mount <port>`, `--mount auto` or `--mount-host <address>`.  `--mount-driver simulator --mount
+  auto` uses the simulator.
+- `sew_hardware` has `mount` commands to find, probe and test a mount without the GUI.  Type
+  `help` in the console for the list.
+
+Other packages can add a mount driver.  A driver is a subclass of
+`solareclipseworkbench.mounts.MountDriver` with a `name`, and it declares what the mount can do
+in `capabilities`.  Publish the class in the entry-point group
+`solareclipseworkbench.mount_drivers` of the package:
+
+```toml
+[project.entry-points."solareclipseworkbench.mount_drivers"]
+mymount = "my_package.my_module:MyMount"
+```
+
+The driver then shows in the **Mount** window, and `--mount-driver` and `sew_hardware` can use it.
+The docstring of `solareclipseworkbench/mounts/__init__.py` lists the methods to implement.
+
 ## Using two cameras of the same model, or one camera with multiple setups
 
 SEW's default camera identification uses the gphoto2 model name (e.g. `Canon EOS 80D`) as
@@ -940,6 +977,14 @@ This command will take a picture 1 minutes and 2 seconds before first contact (C
 ```relay_burst, C3, -, 00:00:01.0, 2, 0.25, "Eight frames, 0.25 s apart"```
 
 ```relay_release, C2, +, 00:00:01.0, "Release the half press"```
+
+- **mount_goto_sun**, **mount_track_sun**, **mount_tracking**, **mount_park**, **mount_unpark**, **mount_stop** - Control a telescope mount (see [Telescope mount](#telescope-mount)).  `mount_goto_sun` slews to the Sun; with `wait` as argument, the command waits until the slew is complete.  `mount_track_sun` tracks at the solar rate.  `mount_tracking` starts (`on`) or stops (`off`) tracking.  `mount_stop` stops all motion.  The mount is looked up when the command fires, so it can be connected after the script is loaded.
+
+```mount_goto_sun, C1, -, 00:15:00.0, wait, "Point at the Sun"```
+
+```mount_track_sun, C1, -, 00:14:00.0, "Track the Sun"```
+
+```mount_park, C4, +, 00:05:00.0, "Park the mount"```
 
 - **voice_prompt** - Play a sound file.
 

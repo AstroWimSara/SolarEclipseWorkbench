@@ -53,6 +53,9 @@ from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
+from solareclipseworkbench.mounts import (MountDriver, MountError, MountNotSupported, connect as connect_mount,
+                                          discover_mounts, list_drivers, mount_track_sun, push_site_and_time)
+from solareclipseworkbench.mounts.onstepx import probe_serial as probe_mount_serial
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
                                                    set_enabled as set_limb_correction_enabled,
                                                    ensure_limb_profile)
@@ -470,6 +473,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.live_view_action = QAction("Live View", self)
         self.beads_action = QAction("Baily's beads", self)
         self.relay_action = QAction("Relay", self)
+        self.mount_action = QAction("Mount", self)
         self.timeline_action = QAction("Timeline", self)
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
@@ -1021,6 +1025,13 @@ class SolarEclipseView(QMainWindow, Observable):
         self.relay_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.relay_action)
 
+        # Telescope mount
+
+        self.mount_action.setStatusTip("Connect the telescope mount, go to the Sun and track it")
+        self.mount_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
+        self.mount_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.mount_action)
+
         # Refresh Plot
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
@@ -1339,6 +1350,9 @@ class SolarEclipseController(Observer):
         self.relay_popup: Union['RelayPopup', None] = None
         # The connected relay, also registered for the relay_* script commands
         self.relay_trigger: Union[RelayTrigger, None] = None
+        self.mount_popup: Union['MountPopup', None] = None
+        # The connected mount, also registered for the mount_* script commands
+        self.mount: Union[MountDriver, None] = None
         self._timeline_window = None
         self._run_report_window = None
         self._sites_window = None
@@ -1769,12 +1783,21 @@ class SolarEclipseController(Observer):
             # The popup has already stored and registered the relay
             return
 
+        elif isinstance(changed_object, MountPopup):
+            # The popup has already stored and registered the mount
+            return
+
         elif isinstance(changed_object, QCloseEvent):
 
             if self.relay_trigger is not None:
                 self.relay_trigger.close()
                 self.relay_trigger = None
                 register_hardware('relay', None)
+
+            if self.mount is not None:
+                self.mount.close()
+                self.mount = None
+                register_hardware('mount', None)
 
             if self._keep_alive_thread is not None:
                 self._keep_alive_thread.stop()
@@ -1981,6 +2004,10 @@ class SolarEclipseController(Observer):
         elif text == "Relay":
             self.relay_popup = RelayPopup(self)
             self.relay_popup.show()
+
+        elif text == "Mount":
+            self.mount_popup = MountPopup(self)
+            self.mount_popup.show()
 
         elif text == "Timeline":
             self._open_timeline_window()
@@ -3161,6 +3188,307 @@ class RelayPopup(QWidget, Observable):
         """ Open every contact now. """
 
         self.controller.relay_trigger.release_all()
+
+
+def identify_mount_port(port: str) -> tuple:
+    """Ask a serial port whether a mount controller is behind it: ``(kind, detail)``.
+
+    ``kind`` is "mount", "busy" or "silent".  The probe only reads: it asks for
+    the firmware version and the status of the controller.
+    """
+    try:
+        pyserial.Serial(port, 9600, timeout=0.1, exclusive=True).close()
+    except pyserial.SerialException as exc:
+        text = str(exc).lower()
+        if "busy" in text or "errno 16" in text:
+            return "busy", "in use (already connected here, or by another program)"
+        return "busy", str(exc)
+
+    baudrate = probe_mount_serial(port, timeout=0.6)
+    if baudrate:
+        return "mount", f"answers LX200 at {baudrate} baud (a mount)"
+    return "silent", "no LX200 answer"
+
+
+class MountPopup(QWidget, Observable):
+
+    #: One probed port coming home from the scan worker:
+    #: (generation, row, label, kind).
+    port_probed = pyqtSignal(int, int, str, str)
+    #: The result of a connection attempt: (mount or None, error text).
+    connected = pyqtSignal(object, str)
+
+    def __init__(self, observer: 'SolarEclipseController'):
+        """ Panel to connect the telescope mount, go to the Sun and track it.
+
+        The connected mount is registered with the hardware registry, so the
+        mount_* commands in a script use it when they fire.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified when the
+                        mount is connected or disconnected
+        """
+
+        QWidget.__init__(self)
+        self.setWindowTitle("Telescope mount")
+        self.setGeometry(QRect(100, 100, 460, 260))
+        self.add_observer(observer)
+        self.controller = observer
+        self.port_probed.connect(self._on_port_probed)
+        self.connected.connect(self._on_connected)
+        self._scan_generation = 0
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+
+        layout = QVBoxLayout()
+
+        # Connection
+
+        connection_group_box = QGroupBox("Connection")
+        connection_layout = QGridLayout()
+
+        connection_layout.addWidget(QLabel("Driver"), 0, 0)
+        self.driver_combobox = QComboBox()
+        for driver in list_drivers():
+            self.driver_combobox.addItem(driver.display_name or driver.name, driver.name)
+            self.driver_combobox.setItemData(self.driver_combobox.count() - 1,
+                                             driver.description, Qt.ItemDataRole.ToolTipRole)
+        saved_driver = self.driver_combobox.findData(settings.value("mount/driver", "onstepx", type=str))
+        if saved_driver >= 0:
+            self.driver_combobox.setCurrentIndex(saved_driver)
+        connection_layout.addWidget(self.driver_combobox, 0, 1)
+
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.clicked.connect(self.connect_or_disconnect)
+        connection_layout.addWidget(self.connect_button, 0, 2)
+
+        connection_layout.addWidget(QLabel("Port"), 1, 0)
+        self.port_combobox = QComboBox()
+        self.port_combobox.setEditable(True)
+        self.port_combobox.setToolTip("Serial port of the mount controller (USB cable)")
+        connection_layout.addWidget(self.port_combobox, 1, 1)
+        scan_button = QPushButton("Scan")
+        scan_button.clicked.connect(self.scan_ports)
+        connection_layout.addWidget(scan_button, 1, 2)
+
+        connection_layout.addWidget(QLabel("Host"), 2, 0)
+        self.host_edit = QLineEdit(settings.value("mount/host", "", type=str))
+        self.host_edit.setPlaceholderText("network address; empty for the USB cable")
+        self.host_edit.setToolTip("Network address of a WiFi or Ethernet controller.  When it is set, "
+                                  "the port is not used.")
+        connection_layout.addWidget(self.host_edit, 2, 1)
+
+        connection_group_box.setLayout(connection_layout)
+        layout.addWidget(connection_group_box)
+
+        # Sun
+
+        sun_group_box = QGroupBox("Sun")
+        sun_layout = QGridLayout()
+        self.goto_sun_button = QPushButton("Go to Sun")
+        self.goto_sun_button.setToolTip("Slew to the Sun.  Put the solar filter on first.")
+        self.goto_sun_button.clicked.connect(self.goto_sun)
+        sun_layout.addWidget(self.goto_sun_button, 0, 0)
+        self.track_button = QPushButton("Track Sun")
+        self.track_button.setToolTip("Track at the solar rate")
+        self.track_button.clicked.connect(self.track_sun)
+        sun_layout.addWidget(self.track_button, 0, 1)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setToolTip("Stop all motion now")
+        self.stop_button.clicked.connect(self.stop)
+        sun_layout.addWidget(self.stop_button, 0, 2)
+        self.park_button = QPushButton("Park")
+        self.park_button.clicked.connect(self.park)
+        sun_layout.addWidget(self.park_button, 1, 0)
+        self.unpark_button = QPushButton("Unpark")
+        self.unpark_button.clicked.connect(self.unpark)
+        sun_layout.addWidget(self.unpark_button, 1, 1)
+        sun_group_box.setLayout(sun_layout)
+        layout.addWidget(sun_group_box)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)
+
+        self.scan_ports()
+        saved_port = settings.value("mount/port", "", type=str)
+        if saved_port:
+            self.port_combobox.setCurrentText(saved_port)
+        self.show_state()
+
+    def scan_ports(self):
+        """ Fill the port list from mount discovery, then probe each serial port in the background.
+
+        The device names of USB serial adapters change on replug, so each row
+        says what answered there.  The port path stays first in the row,
+        because the text of this combo box is the port that Connect opens.
+        """
+
+        typed = self.port_combobox.currentText()
+        self.port_combobox.clear()
+        try:
+            candidates = list(discover_mounts())
+        except MountError as exc:
+            logging.warning("Mount discovery failed: %s", exc)
+            candidates = []
+        for candidate in candidates:
+            self.port_combobox.addItem(candidate.target)
+            self.port_combobox.setItemData(self.port_combobox.count() - 1,
+                                           candidate.description, Qt.ItemDataRole.ToolTipRole)
+        if typed:
+            self.port_combobox.setCurrentText(typed)
+
+        self._scan_generation += 1
+        generation = self._scan_generation
+        marks = {"mount": "✓", "busy": "⛔", "silent": "?"}
+        rows = [(row, c.target) for row, c in enumerate(candidates) if "port" in c.config]
+
+        def worker():
+            for row, port in rows:
+                kind, detail = identify_mount_port(port)
+                try:
+                    self.port_probed.emit(generation, row, f"{port} — {marks[kind]} {detail}", kind)
+                except RuntimeError:
+                    return      # The popup was closed
+
+        threading.Thread(target=worker, daemon=True, name="mount-scan").start()
+
+    def _on_port_probed(self, generation: int, row: int, label: str, kind: str) -> None:
+        """ Show the answer of one probed port, and select a port that answered as a mount. """
+        if generation != self._scan_generation or row >= self.port_combobox.count():
+            return
+        self.port_combobox.setItemText(row, label)
+        if kind == "mount":
+            self.port_combobox.setCurrentIndex(row)
+
+    def show_state(self, message: str = ""):
+        """ Show the connection state in the buttons and the status label. """
+
+        mount = self.controller.mount
+        connected = mount is not None
+        capabilities = mount.capabilities if connected else None
+        self.connect_button.setText("Disconnect" if connected else "Connect")
+        self.connect_button.setEnabled(True)
+        self.goto_sun_button.setEnabled(connected and capabilities.goto)
+        self.track_button.setEnabled(connected and capabilities.tracking_toggle)
+        self.stop_button.setEnabled(connected)
+        self.park_button.setEnabled(connected and capabilities.park)
+        self.unpark_button.setEnabled(connected and capabilities.park)
+        if message:
+            self.status_label.setText(message)
+        elif not connected:
+            self.status_label.setText("Not connected")
+        else:
+            try:
+                self.status_label.setText(f"{mount.describe()}: {mount.status().summary()}")
+            except (MountError, OSError) as exc:
+                self.status_label.setText(f"{mount.describe()}: no status ({exc})")
+
+    def connect_or_disconnect(self):
+        """ Open the configured mount and register it, or close the open one. """
+
+        if self.controller.mount is not None:
+            self.controller.mount.close()
+            self.controller.mount = None
+            register_hardware('mount', None)
+            self.show_state()
+            self.notify_observers(self)
+            return
+
+        driver = self.driver_combobox.currentData()
+        host = self.host_edit.text().strip()
+        # A probed row reads "port — ✓ what answered"; the port is the part before the dash
+        port = self.port_combobox.currentText().split(" — ")[0].strip()
+        config = {"host": host} if host else ({"port": port} if port else {})
+
+        # The baud rate probe can take some seconds, so the connection is made on a worker thread
+        self.connect_button.setEnabled(False)
+        self.status_label.setText("Connecting...")
+
+        def worker():
+            try:
+                mount = connect_mount(driver, **config)
+            except Exception as exc:
+                mount, error = None, str(exc)
+            else:
+                error = ""
+            try:
+                self.connected.emit(mount, error)
+            except RuntimeError:
+                # The popup was closed
+                if mount is not None:
+                    mount.close()
+
+        threading.Thread(target=worker, daemon=True, name="mount-connect").start()
+
+    def _on_connected(self, mount, error: str) -> None:
+        """ Register the mount that was opened, or say why it could not be opened. """
+
+        if mount is None:
+            logging.warning("Mount connection failed: %s", error)
+            self.show_state()
+            QMessageBox.warning(self, "Mount", f"Could not connect:\n\n{error}")
+            return
+
+        self.controller.mount = mount
+        register_hardware('mount', mount)
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        settings.setValue("mount/driver", self.driver_combobox.currentData())
+        settings.setValue("mount/port", self.port_combobox.currentText().split(" — ")[0].strip())
+        settings.setValue("mount/host", self.host_edit.text().strip())
+
+        # The controller needs the time and the site before it tracks.  Five serial
+        # round trips, so on a worker thread.
+        model = self.controller.model
+
+        def worker():
+            try:
+                push_site_and_time(mount, model.latitude, model.longitude)
+            except (MountError, OSError) as exc:
+                logging.warning("The site and clock of the mount could not be set: %s", exc)
+
+        threading.Thread(target=worker, daemon=True, name="mount-site").start()
+
+        self.show_state()
+        self.notify_observers(self)
+
+    def _run(self, what: str, action) -> None:
+        """ Run one mount command, and show a refusal as a message. """
+
+        if self.controller.mount is None:
+            return
+        try:
+            action(self.controller.mount)
+        except MountNotSupported as exc:
+            self.show_state(str(exc))
+            return
+        except (MountError, OSError) as exc:
+            logging.warning("Mount: %s failed: %s", what, exc)
+            QMessageBox.warning(self, "Mount", f"{what} failed:\n\n{exc}")
+        self.show_state()
+
+    def goto_sun(self):
+        """ Slew to the Sun. """
+        self._run("Go to Sun", lambda mount: mount.goto_sun(wait=False))
+
+    def track_sun(self):
+        """ Track at the solar rate. """
+        self._run("Track Sun", mount_track_sun)
+
+    def stop(self):
+        """ Stop all motion. """
+        self._run("Stop", lambda mount: mount.abort())
+
+    def park(self):
+        """ Park the mount. """
+        self._run("Park", lambda mount: mount.park())
+
+    def unpark(self):
+        """ Unpark the mount. """
+        self._run("Unpark", lambda mount: mount.unpark())
 
 
 class SettingsPopup(QWidget, Observable):

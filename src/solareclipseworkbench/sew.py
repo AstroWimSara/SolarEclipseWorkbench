@@ -11,6 +11,8 @@ from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench import solar_radius
 from solareclipseworkbench.location_ui import ConfigManager
 from solareclipseworkbench.logging_setup import setup_logging
+from solareclipseworkbench.mounts import MountError, connect as connect_mount, push_site_and_time
+from solareclipseworkbench.mounts.onstepx import DEFAULT_TCP_PORT
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.relay_trigger import RelayError, open_trigger
 from solareclipseworkbench.utils import observe_solar_eclipse
@@ -34,6 +36,36 @@ def open_relay(args) -> None:
         print(f"WARNING: no relay could be opened: {exc}")
         return
     register_hardware('relay', trigger)
+
+
+def open_mount(args) -> None:
+    """Open and register the mount asked for with --mount or --mount-host, for the mount_* script commands.
+
+    The GUI connects the mount from its toolbar.  On the command line nothing
+    is opened unless --mount or --mount-host is given: 'auto' tries every USB
+    serial port, and those can be a GPS receiver or another device.  The mount
+    gets the time of this computer and the location of the command line.
+    """
+    if not args.mount and not args.mount_host:
+        return
+    config = {}
+    if args.mount_host:
+        config = {"host": args.mount_host, "tcp_port": args.mount_tcp_port}
+    elif args.mount != "auto":
+        config = {"port": args.mount}
+    # With no driver and no address, every driver is asked where its mounts are
+    driver = args.mount_driver or ("onstepx" if config else None)
+    try:
+        mount = connect_mount(driver, **config)
+    except MountError as exc:
+        logging.error("No mount could be opened, the mount commands in the script will fail: %s", exc)
+        print(f"WARNING: no mount could be opened: {exc}")
+        return
+    try:
+        push_site_and_time(mount, args.latitude, args.longitude)
+    except (MountError, OSError) as exc:
+        logging.warning("The site and clock of the mount could not be set: %s", exc)
+    register_hardware('mount', mount)
 
 
 def main(args):
@@ -63,6 +95,7 @@ def main(args):
             )
 
             open_relay(args)
+            open_mount(args)
 
             # Only do a simulation if args.c1 is set
             if args.ref_moment:
@@ -155,6 +188,31 @@ if __name__ == "__main__":
         help="relay channel wired to S1, the half press (default: S1 shares the S2 contact)",
         default=None,
         type=int,
+    )
+
+    parser.add_argument(
+        "--mount",
+        help="open a telescope mount for the mount_* commands: a serial port, or 'auto'",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--mount-host",
+        help="open a telescope mount over the network at this host, instead of a serial port",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--mount-tcp-port",
+        help=f"network port of the mount (default {DEFAULT_TCP_PORT})",
+        default=DEFAULT_TCP_PORT,
+        type=int,
+    )
+
+    parser.add_argument(
+        "--mount-driver",
+        help="mount driver: onstepx or simulator, or a driver from another package (default: onstepx)",
+        default=None,
     )
 
     parser.add_argument(

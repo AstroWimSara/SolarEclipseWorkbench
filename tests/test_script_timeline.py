@@ -79,6 +79,15 @@ def test_relay_commands_share_one_row(tmp_path):
     assert burst.replay is not None and burst.replay.window.duration_s >= 4.5
 
 
+def test_mount_commands_have_no_camera(tmp_path):
+    script = tmp_path / "mount.txt"
+    script.write_text('mount_tracking, C1, -, 0:10:00.0, on, "Track"\n'
+                      'mount_track_sun, C1, -, 0:05:00.0, "Solar rate"\n')
+    timeline = build_timeline(str(script), _moments())
+    assert timeline.cameras == []
+    assert [c.camera for c in timeline.commands] == [None, None]
+
+
 def test_replay_agrees_with_the_load_time_check():
     start = C2 - timedelta(seconds=10)
     windows = [CameraBusyWindow("Canon", start, 8.0, "burst", "burst"),

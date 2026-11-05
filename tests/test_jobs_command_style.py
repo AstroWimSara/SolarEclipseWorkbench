@@ -39,14 +39,14 @@ def _no_compensation():
 
 
 def test_unknown_commands_fall_back_to_the_script_text():
-    def mount_park():
+    def dome_open():
         pass
 
     voice = _job(voice_prompt, "C2")
     assert job_command_text(voice, "words") == "Voice prompt: C2"
     assert job_command_text(voice, "script") == job_command_string(voice) == "voice_prompt(C2)"
 
-    unknown = _job(mount_park)
+    unknown = _job(dome_open)
     assert job_command_text(unknown, "words") == job_command_string(unknown)
 
 
