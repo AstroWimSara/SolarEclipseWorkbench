@@ -23,6 +23,9 @@ from test_camera_check import FakeCanon
     ("Nikon Z 8", 4.35),
     ("Nikon Z 6_2", 5.94),
     ("Nikon DSC D850", 4.35),
+    ("Fuji Fujifilm X-T4", 3.77),
+    ("Fuji Fujifilm X-H2S", 3.77),
+    ("Fuji Fujifilm X-T5", 3.04),
 ])
 def test_known_models(model, pixel_size):
     assert pixel_size_for_model(model) == pixel_size
@@ -33,7 +36,7 @@ def test_known_models(model, pixel_size):
     "Canon EOS R5 Mark II",
     "Sony ILCE-9M3",            # not an A9
     "Nikon DSC D7100",
-    "Fuji X-T4",
+    "Fuji Fujifilm X-T50",      # not an X-T5
     "",
 ])
 def test_a_model_that_is_not_listed_gets_no_value(model):

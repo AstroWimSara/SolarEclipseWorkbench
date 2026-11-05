@@ -159,18 +159,16 @@ def _disc_jpeg() -> bytes:
     return bytes(buf.data())
 
 
-def test_the_window_renders_a_frame_with_every_tool_on(qapp):
-    camera = _FakeSdkCamera(frames=(_disc_jpeg(),))
-    window = gui.LiveViewWindow(camera)
+def test_the_window_renders_a_frame_with_every_tool_on(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
     try:
         for box in (window._peaking_box, window._loupe_box, window._histogram_box, window._crosshair_box):
             box.setChecked(True)
 
-        def rendered():
-            window._poll_frame()
-            return window._last_image is not None
+        window._on_frame(_disc_jpeg())
+        window._poll_frame()
 
-        assert _wait_for(rendered)
+        assert window._last_image is not None
         assert window._focus_graph.scores and window._focus_graph.scores[-1] > 0
         assert window._histogram._bins is not None
         assert window._loupe._pixmap is not None
@@ -182,5 +180,20 @@ def test_the_window_renders_a_frame_with_every_tool_on(qapp):
         # A click on its top-left corner moves the zoom centre there
         window._on_image_clicked(0.0, 0.0)
         assert (window._zoom_centre.x(), window._zoom_centre.y()) == pytest.approx((0.4, 0.4))
+    finally:
+        window.close()
+
+
+def test_the_tool_boxes_show_and_hide_their_widgets(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        assert window._crosshair_box.isChecked()
+        assert not window._peaking_colour_combo.isEnabled()
+        window._peaking_box.setChecked(True)
+        assert window._peaking_colour_combo.isEnabled()
+        window._loupe_box.setChecked(True)
+        assert not window._loupe.isHidden()
+        window._loupe_box.setChecked(False)
+        assert window._loupe.isHidden()
     finally:
         window.close()

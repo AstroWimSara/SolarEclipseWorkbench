@@ -23,7 +23,7 @@ import pandas as pd
 import pytz
 from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
                          QSettings, QSignalBlocker, pyqtSignal)
-from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor, \
+from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
@@ -48,7 +48,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size, get_exposure_compensation, \
     set_exposure_compensation, compensated_shutter_speed, EXPOSURE_COMPENSATION_STEP_EV, \
     MAX_EXPOSURE_COMPENSATION_EV, has_preview_source
-from solareclipseworkbench import hardware_problems, live_view_tools
+from solareclipseworkbench import hardware_problems, job_text, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
@@ -110,6 +110,15 @@ BEFORE_AFTER = {
 REFERENCE_MOMENTS = ["C1", "C2", "MAX", "C3", "C4", "sunset", "sunrise"]
 
 SAVE_MESSAGE_TIMEOUT = 10000  # How long the outcome of `Save` stays in the status bar [ms]
+
+# How the jobs table shows the commands: in words, or as they are written in the script.
+# The keys are saved in the settings file, the values are shown in the UI.
+JOBS_COMMAND_STYLES = {
+    "words": "In words",
+    "script": "As in the script",
+}
+DEFAULT_JOBS_COMMAND_STYLE = "words"
+JOBS_COMMAND_STYLE_KEY = "jobs_command_style"
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 
@@ -603,6 +612,16 @@ class SolarEclipseView(QMainWindow, Observable):
         self.exposure_compensation_label = QLabel()
         self.show_exposure_compensation(get_exposure_compensation())
 
+        # How the jobs table shows the commands
+        self.jobs_command_style_combo = QComboBox()
+        for key, text in JOBS_COMMAND_STYLES.items():
+            self.jobs_command_style_combo.addItem(text, key)
+        self.jobs_command_style_combo.setCurrentIndex(
+            self.jobs_command_style_combo.findData(DEFAULT_JOBS_COMMAND_STYLE))
+        self.jobs_command_style_combo.setToolTip(
+            "Show the commands in the jobs table in words, or as they are written in the script.\n"
+            "The tooltip of a command shows the other form.")
+
         # Banner with camera settings to check (hidden by default; shown for Sony and Nikon cameras)
         self.camera_banner = BannerNotification()
         self.camera_banner.setVisible(False)
@@ -620,7 +639,8 @@ class SolarEclipseView(QMainWindow, Observable):
             - Eclipse date;
             - Date format;
             - Time format;
-            - Position of the splitter between the eclipse plot and the jobs table.
+            - Position of the splitter between the eclipse plot and the jobs table;
+            - How the jobs table shows the commands (in words or as in the script).
 
         The outcome is shown in the status bar and logged (Issue #181).
 
@@ -675,14 +695,17 @@ class SolarEclipseView(QMainWindow, Observable):
         return True
 
     def save_layout_settings(self):
-        """ Save the position of the splitter between the eclipse plot and the jobs table. """
+        """ Save the position of the splitter between the eclipse plot and the jobs table, and how the jobs
+        table shows the commands. """
 
         settings = getattr(self, "settings", None)
         if settings is not None:
             settings.setValue("output_splitter_state", self.output_splitter.saveState())
+            settings.setValue(JOBS_COMMAND_STYLE_KEY, self.jobs_command_style)
 
     def restore_layout_settings(self):
-        """ Restore the position of the splitter between the eclipse plot and the jobs table. """
+        """ Restore the position of the splitter between the eclipse plot and the jobs table, and how the jobs
+        table shows the commands. """
 
         settings = getattr(self, "settings", None)
         if settings is None:
@@ -690,6 +713,7 @@ class SolarEclipseView(QMainWindow, Observable):
         state = settings.value("output_splitter_state", None)
         if state is not None:
             self.output_splitter.restoreState(state)
+        self.set_jobs_command_style(settings.value(JOBS_COMMAND_STYLE_KEY, DEFAULT_JOBS_COMMAND_STYLE, type=str))
 
     def init_ui(self):
         """ Add all components to the UI. """
@@ -836,6 +860,8 @@ class SolarEclipseView(QMainWindow, Observable):
         exposure_hbox.addWidget(self.exposure_brighter_button)
         exposure_hbox.addWidget(self.exposure_reset_button)
         exposure_hbox.addStretch(1)
+        exposure_hbox.addWidget(QLabel("Commands:"))
+        exposure_hbox.addWidget(self.jobs_command_style_combo)
         for button in (self.exposure_darker_button, self.exposure_brighter_button, self.exposure_reset_button):
             button.clicked.connect(self.on_toolbar_button_click)
         jobs_vbox = QVBoxLayout()
@@ -990,6 +1016,25 @@ class SolarEclipseView(QMainWindow, Observable):
             self.refresh_plot_action.setIcon(QIcon(str(ICON_PATH / "refresh.png")))
             self.refresh_plot_action.triggered.connect(self.on_toolbar_button_click)
             self.toolbar.addAction(self.refresh_plot_action)
+
+    @property
+    def jobs_command_style(self) -> str:
+        """ Return how the jobs table shows the commands: "words" or "script" (see JOBS_COMMAND_STYLES). """
+
+        return self.jobs_command_style_combo.currentData() or DEFAULT_JOBS_COMMAND_STYLE
+
+    def set_jobs_command_style(self, style: str):
+        """ Select how the jobs table shows the commands, without notifying the controller.
+
+        An unknown style selects the default style.
+        """
+
+        index = self.jobs_command_style_combo.findData(style)
+        if index < 0:
+            index = self.jobs_command_style_combo.findData(DEFAULT_JOBS_COMMAND_STYLE)
+        blocker = QSignalBlocker(self.jobs_command_style_combo)
+        self.jobs_command_style_combo.setCurrentIndex(index)
+        del blocker
 
     def show_exposure_compensation(self, ev: int):
         """ Show the exposure compensation applied to all following shots.
@@ -1321,6 +1366,17 @@ class SolarEclipseController(Observer):
         self._show_solar_radius()
         self.view.solar_radius_combo.currentIndexChanged.connect(self.on_solar_radius_choice_changed)
         self.view.solar_radius_spinbox.valueChanged.connect(self.on_solar_radius_value_changed)
+
+        # The style itself was restored with the layout, in load_settings
+        self.view.jobs_command_style_combo.currentIndexChanged.connect(self.on_jobs_command_style_changed)
+
+    def on_jobs_command_style_changed(self, index: int):
+        """ Show the commands in the jobs table in the selected style, and remember the choice. """
+
+        self.view.save_layout_settings()
+        if self.jobs_model:
+            self.jobs_model.update_commands()
+            self.view.jobs_table.resizeColumnToContents(self.jobs_model.command_column)
 
     def _show_solar_radius(self):
         """Show the solar radius in use, without triggering a recalculation."""
@@ -2132,7 +2188,8 @@ class SolarEclipseController(Observer):
             - Time format (always present);
             - Location (longitude, latitude, altitude);
             - Eclipse date;
-            - Position of the splitter between the eclipse plot and the jobs table.
+            - Position of the splitter between the eclipse plot and the jobs table;
+            - How the jobs table shows the commands (in words or as in the script).
 
         If the location and eclipse date are present in the settings file, the reference moments will be updated
         automatically.
@@ -3470,7 +3527,7 @@ class LiveViewWindow(QWidget):
         image_area.addWidget(self._image_label, stretch=1)
         image_area.addWidget(self._v_slider)
         image_area.addWidget(self._loupe, alignment=Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(image_area)
+        layout.addLayout(image_area, stretch=1)
         layout.addWidget(self._h_slider)
         layout.addWidget(self._focus_graph)
         layout.addWidget(self._histogram)
@@ -3566,11 +3623,11 @@ class LiveViewWindow(QWidget):
             self._status_label.setStyleSheet("color: gray;")
         elif self._totality_paused:
             self._status_label.setText(
-                "⏸  Paused during totality — script has full USB control"
+                "\u23f8  Paused during totality — script has full USB control"
             )
             self._status_label.setStyleSheet("color: #856404; background: #FFF3CD; padding: 3px; border-radius: 3px;")
         else:
-            self._status_label.setText("●  Active")
+            self._status_label.setText("\u25cf  Active")
             self._status_label.setStyleSheet("color: green;")
 
     # ------------------------------------------------------------------
@@ -3752,7 +3809,7 @@ class LiveViewWindow(QWidget):
 
         self._image_label.setPixmap(disp)
         self._timestamp_label.setText("Last frame: " + ts.strftime("%Y-%m-%d  %H:%M:%S")
-                                      + f"  ({image.width()}×{image.height()})")
+                                      + f"  ({image.width()}\u00d7{image.height()})")
 
     def closeEvent(self, event):
         self._poll_timer.stop()
@@ -4345,6 +4402,24 @@ def job_command_string(job: Job) -> str:
     return ""
 
 
+def job_command_text(job: Job, style: str) -> str:
+    """ Return the command of a scheduled job in the given style of the jobs table.
+
+    Args:
+        - job: Scheduled job
+        - style: "words" or "script" (see JOBS_COMMAND_STYLES)
+
+    Returns: The command in words, or as written in the script.  A command that has
+             no words is shown as written in the script.
+    """
+
+    if style == "words":
+        words = job_text.describe_job(job)
+        if words:
+            return words
+    return job_command_string(job)
+
+
 class JobsTableModel(QAbstractTableModel, Observable):
     def __init__(self, scheduler: BackgroundScheduler, controller: SolarEclipseController):
         """ Initialisation of the model for the table with the scheduled jobs.
@@ -4357,6 +4432,7 @@ class JobsTableModel(QAbstractTableModel, Observable):
         super().__init__()
         self.controller = controller
         self.time_format = self.controller.view.time_format
+        self.command_style = self._selected_command_style()
 
         # The jobs were scheduled on the computer clock, shifted by this GPS–computer offset.
         # Adding it back shows the true (GPS) UTC execution times.  It is captured here, not
@@ -4386,7 +4462,7 @@ class JobsTableModel(QAbstractTableModel, Observable):
                     countdown = format_countdown(execution_time_utc - now_utc)
                 description: str = job.name
 
-                job_string = job_command_string(job)
+                job_string = job_command_text(job, self.command_style)
                 self.jobs.append(job)
 
                 self.execution_times_utc_as_datetime.append(execution_time_utc)
@@ -4433,12 +4509,24 @@ class JobsTableModel(QAbstractTableModel, Observable):
 
             self.endResetModel()
 
+    @property
+    def command_column(self) -> int:
+        """ Return the index of the column with the commands. """
+
+        return self._data.columns.get_loc(JobsTableColumnNames.COMMAND.value)
+
+    def _selected_command_style(self) -> str:
+        """ Return the style of the commands that is selected in the view. """
+
+        return getattr(self.controller.view, "jobs_command_style", DEFAULT_JOBS_COMMAND_STYLE)
+
     def update_commands(self):
-        """ Show the shutter speeds with the current exposure compensation. """
+        """ Show the commands in the selected style, with the current exposure compensation. """
 
         self.beginResetModel()
+        self.command_style = self._selected_command_style()
         for row, job in enumerate(self.jobs):
-            self._data.loc[row, JobsTableColumnNames.COMMAND.value] = job_command_string(job)
+            self._data.loc[row, JobsTableColumnNames.COMMAND.value] = job_command_text(job, self.command_style)
         self.endResetModel()
 
     def clear_jobs_overview(self):
@@ -4475,6 +4563,12 @@ class JobsTableModel(QAbstractTableModel, Observable):
             if isinstance(value, datetime.datetime):
                 return format_time(value, self.controller.view.time_format)
             return value
+
+        if role == Qt.ItemDataRole.ToolTipRole and index.column() == self.command_column:
+            # The other style, so both are always at hand
+            if index.row() < len(self.jobs):
+                other_style = "script" if self.command_style == "words" else "words"
+                return job_command_text(self.jobs[index.row()], other_style) or None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if index.column() == 0:
