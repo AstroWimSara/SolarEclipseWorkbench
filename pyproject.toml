@@ -38,6 +38,7 @@ Repository = "https://github.com/AstroWimSara/SolarEclipseWorkbench"
 [project.scripts]
 sew = "solareclipseworkbench.gui:main"
 sew_wizard = "solareclipseworkbench.wizard:main"
+sew_hardware = "solareclipseworkbench.hardware_console:main"
 
 # Relay backends for the USB relay shutter trigger.  The built-in backends
 # register themselves on import; this group lets a board type ship in its own
