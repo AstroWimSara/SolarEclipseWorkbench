@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- Fujifilm X cameras, through the Fujifilm Shooting SDK instead of gphoto2 (which cannot control them tethered): `take_picture`, `take_bracket`, `take_hdr`, `take_burst` and `prepare_camera`.  The body settings that cost frames (auto ISO, autofocus, JPEG, drive mode, ...) are reported when the camera is detected, and gphoto2 leaves Fuji bodies alone when the SDK is installed.  The SDK itself must be installed separately; see [Fujifilm X cameras](docs/FUJI.md) - by @mrosseel
+
 ## [2.0.0] - 2026-11-03
 
 ### Added
