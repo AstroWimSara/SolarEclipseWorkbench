@@ -6,7 +6,7 @@ import pytz
 from matplotlib.figure import Figure
 
 from solareclipseworkbench.script_timeline import build_timeline, command_at, describe, draw_timeline, format_timeline
-from solareclipseworkbench.utils import CameraBusyWindow, find_camera_conflicts, replay_camera_windows
+from solareclipseworkbench.utils import RELAY_BUSY_NAME, CameraBusyWindow, find_camera_conflicts, replay_camera_windows
 
 C2 = datetime(2026, 8, 12, 18, 28, 25, 600000, tzinfo=pytz.utc)
 C3 = C2 + timedelta(seconds=104)
@@ -66,6 +66,17 @@ def test_relative_to_the_nearest_contact(tmp_path):
     timeline = _timeline(tmp_path)
     assert timeline.relative(C2 - timedelta(seconds=6)) == "C2-6.0 s"
     assert timeline.relative(C3 + timedelta(minutes=20)) == "C3+20.0 min"
+
+
+def test_relay_commands_share_one_row(tmp_path):
+    script = tmp_path / "relay.txt"
+    script.write_text('relay_burst, C2, -, 0:00:05.0, 4.5, "Diamond ring"\n'
+                      'relay_shoot, C3, +, 0:00:10.0, "One frame"\n')
+    timeline = build_timeline(str(script), _moments())
+    assert timeline.cameras == [RELAY_BUSY_NAME]
+    burst = next(c for c in timeline.commands if c.func_name == "relay_burst")
+    assert burst.camera == RELAY_BUSY_NAME
+    assert burst.replay is not None and burst.replay.window.duration_s >= 4.5
 
 
 def test_replay_agrees_with_the_load_time_check():

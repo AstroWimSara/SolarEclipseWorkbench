@@ -37,6 +37,7 @@ from astropy.time import Time
 from gphoto2 import GPhoto2Error, Camera
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import serial as pyserial
 from skyfield.api import load, wgs84
 
 import threading
@@ -49,6 +50,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     MAX_EXPOSURE_COMPENSATION_EV
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
+from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
@@ -57,6 +59,8 @@ from solareclipseworkbench.limb_correction import (is_enabled as limb_correction
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
+from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
+                                                 discover_relays, list_backends, make_backend)
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget
 from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
 from solareclipseworkbench.constants import MOON_RADIUS
@@ -454,6 +458,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.save_action = QAction("Save", self)
         self.live_view_action = QAction("Live View", self)
         self.beads_action = QAction("Baily's beads", self)
+        self.relay_action = QAction("Relay", self)
         self.timeline_action = QAction("Timeline", self)
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
@@ -971,6 +976,13 @@ class SolarEclipseView(QMainWindow, Observable):
         self.compare_sites_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.compare_sites_action)
 
+        # Relay shutter trigger
+
+        self.relay_action.setStatusTip("Connect and test the USB relay shutter trigger")
+        self.relay_action.setIcon(QIcon(str(ICON_PATH / "relay.png")))
+        self.relay_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.relay_action)
+
         # Refresh Plot
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
@@ -1267,6 +1279,9 @@ class SolarEclipseController(Observer):
 
         self._live_view_window: Union[LiveViewWindow, None] = None
         self._beads_window: Union[BeadsPanel, None] = None
+        self.relay_popup: Union['RelayPopup', None] = None
+        # The connected relay, also registered for the relay_* script commands
+        self.relay_trigger: Union[RelayTrigger, None] = None
         self._timeline_window = None
         self._run_report_window = None
         self._sites_window = None
@@ -1679,7 +1694,16 @@ class SolarEclipseController(Observer):
 
             return
 
+        elif isinstance(changed_object, RelayPopup):
+            # The popup has already stored and registered the relay
+            return
+
         elif isinstance(changed_object, QCloseEvent):
+
+            if self.relay_trigger is not None:
+                self.relay_trigger.close()
+                self.relay_trigger = None
+                register_hardware('relay', None)
 
             if self._keep_alive_thread is not None:
                 self._keep_alive_thread.stop()
@@ -1883,6 +1907,10 @@ class SolarEclipseController(Observer):
 
         elif text == "Baily's beads":
             self._open_beads_window()
+
+        elif text == "Relay":
+            self.relay_popup = RelayPopup(self)
+            self.relay_popup.show()
 
         elif text == "Timeline":
             self._open_timeline_window()
@@ -2580,6 +2608,241 @@ class SimulatorPopup(QWidget, Observable):
         """ Close the pop-up window. """
 
         self.close()
+
+
+def identify_relay_port(port: str) -> tuple:
+    """Ask a serial port whether a relay board is behind it: ``(kind, detail)``.
+
+    ``kind`` is "relay", "busy" or "silent".  Only a DSD TECH board can answer:
+    its open sequence asks the board to open channel 1, which is the state every
+    relay connect starts from anyway.  LCUS and Numato boards answer nothing, so
+    for them "silent" is normal.
+    """
+    try:
+        pyserial.Serial(port, 9600, timeout=0.1, exclusive=True).close()
+    except pyserial.SerialException as exc:
+        text = str(exc).lower()
+        if "busy" in text or "errno 16" in text:
+            return "busy", "in use (already connected here, or by another program)"
+        return "busy", str(exc)
+
+    try:
+        DsdSerialBackend(port=port).close()
+        return "relay", "answers AT commands (a DSD TECH relay)"
+    except RelayError:
+        pass
+
+    return "silent", "no answer (normal for LCUS and Numato boards)"
+
+
+class RelayPopup(QWidget, Observable):
+
+    #: One probed port coming home from the scan worker:
+    #: (generation, row, label, kind).
+    port_probed = pyqtSignal(int, int, str, str)
+
+    def __init__(self, observer: 'SolarEclipseController'):
+        """ Panel to connect, configure and test the USB relay shutter trigger.
+
+        The connected trigger is registered with the hardware registry, so the
+        relay_* commands in a script use it when they fire.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified when the
+                        relay is connected or disconnected
+        """
+
+        QWidget.__init__(self)
+        self.setWindowTitle("Relay shutter trigger")
+        self.setGeometry(QRect(100, 100, 460, 240))
+        self.add_observer(observer)
+        self.controller = observer
+        self.port_probed.connect(self._on_port_probed)
+        self._scan_generation = 0
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+
+        layout = QVBoxLayout()
+
+        # Connection
+
+        connection_group_box = QGroupBox("Connection")
+        connection_layout = QGridLayout()
+
+        connection_layout.addWidget(QLabel("Board"), 0, 0)
+        self.backend_combobox = QComboBox()
+        self.backend_combobox.addItem("auto")
+        for backend in list_backends():
+            self.backend_combobox.addItem(backend.name)
+            self.backend_combobox.setItemData(self.backend_combobox.count() - 1,
+                                              backend.description, Qt.ItemDataRole.ToolTipRole)
+        self.backend_combobox.setCurrentText(settings.value("relay/backend", "auto", type=str))
+        connection_layout.addWidget(self.backend_combobox, 0, 1)
+
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.clicked.connect(self.connect_or_disconnect)
+        connection_layout.addWidget(self.connect_button, 0, 2)
+
+        connection_layout.addWidget(QLabel("Port"), 1, 0)
+        self.port_combobox = QComboBox()
+        self.port_combobox.setEditable(True)
+        self.port_combobox.setToolTip("Serial port of the relay board.  HID boards need no port.")
+        connection_layout.addWidget(self.port_combobox, 1, 1)
+        scan_button = QPushButton("Scan")
+        scan_button.clicked.connect(self.scan_ports)
+        connection_layout.addWidget(scan_button, 1, 2)
+
+        connection_group_box.setLayout(connection_layout)
+        layout.addWidget(connection_group_box)
+
+        # Wiring
+
+        wiring_group_box = QGroupBox("Wiring")
+        wiring_layout = QGridLayout()
+
+        wiring_layout.addWidget(QLabel("Shutter (S2) channel"), 0, 0)
+        self.s2_channel = QLineEdit(settings.value("relay/s2_channel", "1", type=str))
+        self.s2_channel.setValidator(QIntValidator(1, 64))
+        wiring_layout.addWidget(self.s2_channel, 0, 1)
+
+        self.s1_checkbox = QCheckBox("Half press (S1) on its own channel")
+        self.s1_checkbox.setChecked(settings.value("relay/s1_enabled", False, type=bool))
+        wiring_layout.addWidget(self.s1_checkbox, 1, 0)
+        self.s1_channel = QLineEdit(settings.value("relay/s1_channel", "2", type=str))
+        self.s1_channel.setValidator(QIntValidator(1, 64))
+        wiring_layout.addWidget(self.s1_channel, 1, 1)
+
+        wiring_group_box.setLayout(wiring_layout)
+        layout.addWidget(wiring_group_box)
+
+        # Test and status
+
+        test_layout = QHBoxLayout()
+        self.test_button = QPushButton("Test fire")
+        self.test_button.setToolTip("Take one frame through the relay")
+        self.test_button.clicked.connect(self.test_fire)
+        test_layout.addWidget(self.test_button)
+        self.release_button = QPushButton("Release contacts")
+        self.release_button.setToolTip("Open every contact now")
+        self.release_button.clicked.connect(self.release_contacts)
+        test_layout.addWidget(self.release_button)
+        layout.addLayout(test_layout)
+
+        self.status_label = QLabel()
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)
+
+        self.scan_ports()
+        saved_port = settings.value("relay/port", "", type=str)
+        if saved_port:
+            self.port_combobox.setCurrentText(saved_port)
+        self.show_state()
+
+    def scan_ports(self):
+        """ Fill the port list from relay discovery, then probe each serial port in the background.
+
+        The device names of USB serial adapters change on replug, so each row
+        says what answered there.  The port path stays first in the row,
+        because the text of this combo box is the port that Connect opens.
+        """
+
+        typed = self.port_combobox.currentText()
+        self.port_combobox.clear()
+        candidates = list(discover_relays())
+        for candidate in candidates:
+            self.port_combobox.addItem(candidate.target)
+            self.port_combobox.setItemData(self.port_combobox.count() - 1,
+                                           candidate.description, Qt.ItemDataRole.ToolTipRole)
+        if typed:
+            self.port_combobox.setCurrentText(typed)
+
+        self._scan_generation += 1
+        generation = self._scan_generation
+        marks = {"relay": "✓", "busy": "⛔", "silent": "?"}
+        # A HID board has no serial port to probe
+        rows = [(row, c.target) for row, c in enumerate(candidates) if "port" in c.config]
+
+        def worker():
+            for row, port in rows:
+                kind, detail = identify_relay_port(port)
+                try:
+                    self.port_probed.emit(generation, row, f"{port} — {marks[kind]} {detail}", kind)
+                except RuntimeError:
+                    return      # The popup was closed
+
+        threading.Thread(target=worker, daemon=True, name="relay-scan").start()
+
+    def _on_port_probed(self, generation: int, row: int, label: str, kind: str) -> None:
+        """ Show the answer of one probed port, and select a port that answered as a relay. """
+        if generation != self._scan_generation or row >= self.port_combobox.count():
+            return
+        self.port_combobox.setItemText(row, label)
+        if kind == "relay":
+            self.port_combobox.setCurrentIndex(row)
+
+    def show_state(self):
+        """ Show the connection state in the buttons and the status label. """
+
+        trigger = self.controller.relay_trigger
+        connected = trigger is not None
+        self.connect_button.setText("Disconnect" if connected else "Connect")
+        self.test_button.setEnabled(connected)
+        self.release_button.setEnabled(connected)
+        self.status_label.setText(trigger.describe() if connected else "Not connected")
+
+    def connect_or_disconnect(self):
+        """ Open the configured relay and register it, or close the open one. """
+
+        if self.controller.relay_trigger is not None:
+            self.controller.relay_trigger.close()
+            self.controller.relay_trigger = None
+            register_hardware('relay', None)
+            self.show_state()
+            self.notify_observers(self)
+            return
+
+        kind = self.backend_combobox.currentText()
+        # A probed row reads "port — ✓ what answered"; the port is the part before the dash
+        port = self.port_combobox.currentText().split(" — ")[0].strip() or None
+        s2 = int(self.s2_channel.text() or "1")
+        s1 = int(self.s1_channel.text() or "2") if self.s1_checkbox.isChecked() else None
+        if s1 == s2:
+            QMessageBox.warning(self, "Relay", "S1 and S2 must be on different channels.")
+            return
+
+        try:
+            backend = make_backend(kind, port)
+            trigger = RelayTrigger(backend, Wiring(s2_channel=s2, s1_channel=s1))
+        except RelayError as exc:
+            QMessageBox.warning(self, "Relay", str(exc))
+            return
+
+        self.controller.relay_trigger = trigger
+        register_hardware('relay', trigger)
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        settings.setValue("relay/backend", kind)
+        settings.setValue("relay/port", port or "")
+        settings.setValue("relay/s2_channel", str(s2))
+        settings.setValue("relay/s1_enabled", self.s1_checkbox.isChecked())
+        settings.setValue("relay/s1_channel", self.s1_channel.text() or "2")
+
+        self.show_state()
+        self.notify_observers(self)
+
+    def test_fire(self):
+        """ Take one frame through the relay, to check the wiring. """
+
+        try:
+            self.controller.relay_trigger.shoot()
+        except RelayError as exc:
+            QMessageBox.warning(self, "Relay", str(exc))
+
+    def release_contacts(self):
+        """ Open every contact now. """
+
+        self.controller.relay_trigger.release_all()
 
 
 class SettingsPopup(QWidget, Observable):

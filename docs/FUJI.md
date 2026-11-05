@@ -18,15 +18,18 @@ gphoto2.  The SDK was tested with an X-T4.
 The exposure compensation of the main window applies to Fuji bodies as to the
 other brands.
 
+When a USB relay is connected, the relay fires every frame of these commands.
+See [Fire the body through a relay](#fire-the-body-through-a-relay).
+
 ## Limits
 
-- **Bursts are slow.**  The SDK releases one frame at a time, and it cannot start
-  the body's own continuous drive.  On an X-T4 this gives about 0.5 to 1.8 frames
-  per second.  A fast burst at C2 and C3 needs a release cable on the remote
-  socket of the body.  That is not part of this release.
-- **The drive dial must be on S.**  With the dial on CH, the body refuses the SDK
-  release (error 0x1008), and every frame of the script is lost.  The SDK
-  cannot read the dial: it reports "stills" for S, CL and CH.
+- **Bursts are slow without a relay.**  The SDK releases one frame at a time, and
+  it cannot start the body's own continuous drive.  On an X-T4 this gives about
+  0.5 to 1.8 frames per second.  For a fast burst at C2 and C3, fire the body
+  through a USB relay (see below).
+- **Without a relay, the drive dial must be on S.**  With the dial on CH, the
+  body refuses the SDK release (error 0x1008), and every frame of the script is
+  lost.  The SDK cannot read the dial: it reports "stills" for S, CL and CH.
 - **The camera clock cannot be set from the computer.**  The SDK has no date and
   time call.  Set the clock on the body by hand.  Each run log has the time at
   which each command released the shutter, in UTC.
@@ -76,7 +79,7 @@ them on the body.
 | ISO dial | **C** | The SDK sets the ISO.  On A, the ISO is automatic. |
 | Aperture ring of a lens | **a number** | On A the body is in aperture priority, not manual.  A telescope has no ring. |
 | Exposure compensation dial | **0** | It applies on top of the exposure of the script. |
-| Drive dial | **S** | On CH the SDK cannot release the shutter. |
+| Drive dial | **S**, or **CL** with a relay | On CH the SDK cannot release the shutter.  With a relay, see below. |
 | Focus mode switch | **M** | In S or C, the SDK release can fail, and frames are dropped or late. |
 | AF/MF Setting → AF+MF, PRE-AF | **OFF** | AF+MF starts autofocus on each release, also in M. |
 | Image Quality | **RAW** (no JPEG) | A JPEG beside each RAW took the rate from 1.85 to 0.61 frames per second on an X-T4. |
@@ -87,9 +90,42 @@ them on the body.
 The camera appears in the workbench as `Fuji Fujifilm <model>`, for example
 `Fuji Fujifilm X-T4`.  Use that name in the script.
 
+## Fire the body through a relay
+
+Connect a USB relay to the remote jack of the body, as [USB relay shutter
+trigger](RELAY.md) tells.  When the relay is connected, the Fuji commands fire
+the body through the relay, and the SDK only sets the exposure:
+
+| Script command | Through the relay |
+|---|---|
+| `take_picture` | One tap of 0.03 s. |
+| `take_bracket`, `take_hdr` | All contacts open.  Then for each exposure, the SDK sets the speed and the relay gives one tap. |
+| `take_burst` | The relay holds the release for the duration of the command, at most 60 frames (7.8 s at 7.7 fps). |
+
+Set the drive dial to **CL**, and set CL LOW SPEED BURST to **8 fps**.  On an
+X-T4, a held release then gives 7.6 to 7.7 frames per second.  The SDK cannot
+read the dial.  With the dial on S, a burst is one frame.  With the dial on CL,
+the SDK cannot fire the body, so every frame needs the relay.
+
+The relay does not know which body it is connected to.  When a relay is
+connected, every Fuji body is fired through it.  Use the relay with one Fuji
+body only.
+
+The relay commands of a script (`relay_burst`, `relay_shoot`, `relay_arm`) also
+work with the Fuji body, when it is the only one connected:
+
+- `relay_arm` and `relay_shoot` first send the exposure settings that a busy
+  body refused, but only while S1 is open.  A body with S1 held refuses
+  exposure changes.
+- `relay_burst` deletes the queued transfers while the release is held.  When a
+  camera command still uses the body, the burst fires at once and does not
+  delete the transfers.  The body then stops after 32 frames.
+
 ## The transfer buffer
 
 The SDK keeps a PC transfer of every frame in a buffer of 32 frames on the body,
 also when the frame is on the card.  When that buffer is full, the body stops
-until its battery is removed.  The workbench deletes the queued transfers before
-the buffer is full.  The frames on the card are not touched.
+until its battery is removed.  The workbench deletes the queued transfers when
+24 of the 32 are full, and after each bracket and burst.  During a burst through
+the relay, it deletes them while the release is held.  The frames on the card
+are not touched.
