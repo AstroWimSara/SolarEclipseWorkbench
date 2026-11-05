@@ -5,9 +5,10 @@ directory that is not cleared on reboot.  A log is never overwritten or deleted
 by the application, so the log of an eclipse is still there when you look for it
 afterwards, however often the application was restarted in the meantime.
 
-Timestamps are in UTC with milliseconds, the same time base as the contact
-times and the scheduled commands, so the log can be lined up directly with the
-script and with the EXIF times of the pictures.
+Timestamps are ISO 8601 in UTC with milliseconds (2026-08-12T17:46:38.123Z),
+in the log file and on the console, the same time base as the contact times and
+the scheduled commands, so the log can be lined up directly with the script and
+with the EXIF times of the pictures.
 """
 
 import logging
@@ -21,8 +22,8 @@ from typing import Optional
 LOG_DIR = Path.home() / ".SolarEclipseWorkbench" / "logs"
 
 _FILE_FORMAT = "%(asctime)s.%(msecs)03dZ %(levelname)-8s [%(threadName)s] %(name)s: %(message)s"
-_CONSOLE_FORMAT = "%(asctime)s %(levelname)s %(message)s"
-_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+_CONSOLE_FORMAT = "%(asctime)s.%(msecs)03dZ %(levelname)s %(message)s"
+_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 # Libraries that are chatty at DEBUG level without saying anything useful about
 # the eclipse.  Their warnings and errors are still logged.
@@ -77,7 +78,9 @@ def setup_logging(prefix: str = "sew", log_dir: Optional[Path] = None,
     file_handler.setLevel(logging.DEBUG)
 
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(logging.Formatter(_CONSOLE_FORMAT))
+    console_formatter = logging.Formatter(_CONSOLE_FORMAT, datefmt=_DATE_FORMAT)
+    console_formatter.converter = time.gmtime
+    console_handler.setFormatter(console_formatter)
     console_handler.setLevel(console_level)
 
     root = logging.getLogger()
