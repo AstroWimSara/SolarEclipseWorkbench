@@ -5,6 +5,7 @@ from astropy.time import Time
 
 from solareclipseworkbench import camera
 from solareclipseworkbench import gui
+from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench import solar_radius
 from solareclipseworkbench.location_ui import ConfigManager
 from solareclipseworkbench.logging_setup import setup_logging
@@ -16,6 +17,9 @@ def main(args):
     if args.gui:
         gui.main()
     else:
+        # Before anything else: when the Fujifilm SDK libraries are not on the
+        # library path yet, the process restarts here, before a log file is made.
+        maybe_reexec_for_fuji_sdk()
         setup_logging("sew")
         solar_radius.load_saved()
         # Check for all needed parameters

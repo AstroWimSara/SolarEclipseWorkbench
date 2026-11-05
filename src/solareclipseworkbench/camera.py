@@ -15,7 +15,7 @@ import os
 
 from gphoto2 import Camera
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional
+from typing import Any, Callable, NamedTuple, Tuple, Optional
 from solareclipseworkbench import configuration, hardware_problems, wsl_usb
 from solareclipseworkbench.logging_setup import camera_log
 from solareclipseworkbench.bracketing import (
@@ -27,6 +27,27 @@ from solareclipseworkbench.bracketing import (
 
 class CameraError(Exception):
     pass
+
+
+class SdkDetection(NamedTuple):
+    """What a vendor SDK backend found (see register_sdk_backend)."""
+
+    # Camera name -> BaseCamera, for the bodies the SDK opened
+    cameras: dict
+    # Lower-case words: a gphoto2 model name that contains one is left to the SDK
+    skip_gphoto: tuple
+
+
+# Detection functions of cameras that are driven through a vendor SDK instead of
+# gphoto2 (e.g. fuji_camera.detect_for_workbench).  get_camera_dict calls them
+# before gphoto2, because the first driver that claims the USB device keeps it.
+_sdk_backends: list = []
+
+
+def register_sdk_backend(detect: Callable[[], SdkDetection]) -> None:
+    """Add a vendor SDK to camera detection."""
+    if detect not in _sdk_backends:
+        _sdk_backends.append(detect)
 
 
 def _is_sony_model(name: str) -> bool:
@@ -1772,8 +1793,12 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
 
 def __adapt_camera_settings(camera, camera_settings):
     # For virtual or non-gphoto cameras, skip gphoto configuration and
-    # return (None, None) so callers can handle capture directly.
+    # return (None, None) so callers can handle capture directly.  A camera
+    # driven through a vendor SDK applies the settings itself.
     if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
+        apply_settings = getattr(camera, 'apply_settings', None)
+        if callable(apply_settings):
+            apply_settings(camera_settings)
         return None, None
 
     context = gp.gp_context_new()
@@ -1966,6 +1991,11 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         _reset_canon_eos_ptp_session(camera)
 
     context, config = __adapt_camera_settings(camera, camera_settings)
+
+    # A camera driven through a vendor SDK shoots the burst itself, for `duration` seconds
+    if context is None and hasattr(camera, 'shoot_burst'):
+        camera.shoot_burst(duration)
+        return
 
     # If virtual camera, perform simple repeated captures
     if context is None:
@@ -2246,6 +2276,14 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
         gp.gp_widget_set_value(ss_widget, base_speed)
         _set_gp_config(camera, config, context)
         log.debug('take_bracket complete')
+
+    # A camera driven through a vendor SDK sets the shutter speed of each frame itself
+    if context is None and hasattr(camera, 'shoot_ladder'):
+        base_s = _parse_shutter_speed_seconds(camera_settings.shutter_speed)
+        if base_s <= 0:
+            raise ValueError(f"take_bracket needs a shutter speed, not '{camera_settings.shutter_speed}'")
+        camera.shoot_ladder(bracket_exposures(base_s, spec))
+        return
 
     # Virtual camera: one capture per frame
     if context is None:
@@ -2644,6 +2682,15 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int, sequen
         _reset_canon_eos_ptp_session(camera)
 
     context, config = __adapt_camera_settings(camera, camera_settings)
+
+    # A camera driven through a vendor SDK sets the shutter speed of each frame itself
+    if context is None and hasattr(camera, 'shoot_ladder'):
+        start_s = _parse_shutter_speed_seconds(camera_settings.shutter_speed)
+        if start_s <= 0:
+            raise ValueError(f"take_hdr needs a shutter speed, not '{camera_settings.shutter_speed}'")
+        camera.shoot_ladder([start_s * 2 ** offset for offset in hdr_offsets(stops, sequence)],
+                            drop_repeats=False)
+        return
 
     # Virtual camera path: just fire repeated captures
     if context is None:
@@ -3415,6 +3462,9 @@ def read_camera_clock(camera) -> Optional[ClockReading]:
 
     Returns: The reading (check .readable), or None if the camera does not expose its clock.
     """
+    # A camera driven through a vendor SDK handles its own clock, see set_time.
+    if isinstance(camera, BaseCamera) and callable(getattr(camera, 'sync_clock', None)):
+        return None
     if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
         return ClockReading('datetime', time.strftime(_TEXT_DATETIME_FORMAT), datetime.now(), 0.0)
     lock = getattr(camera, '_usb_lock', None)
@@ -3461,6 +3511,11 @@ def set_time(camera: Camera) -> bool:
 
     Returns: True if the camera clock now matches the computer clock.
     """
+    # A camera driven through a vendor SDK handles its own clock.
+    own_sync = getattr(camera, 'sync_clock', None)
+    if isinstance(camera, BaseCamera) and callable(own_sync):
+        return bool(own_sync())
+
     # Virtual or non-gphoto cameras have no clock to set.
     if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
         return True
@@ -3578,14 +3633,31 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
         vc.connect()
         return {vc.name: vc}
 
+    # Cameras driven through a vendor SDK come first: the SDK must claim the
+    # USB device before gphoto2 does.
+    cameras: dict = {}
+    skip_gphoto: list = []
+    for detect in _sdk_backends:
+        try:
+            found = detect()
+        except Exception as exc:
+            logging.exception('Camera detection through %s failed', getattr(detect, '__module__', detect))
+            hardware_problems.report('Camera detection', 'Detection through a camera SDK failed',
+                                     detail=str(exc))
+            continue
+        cameras.update(found.cameras)
+        skip_gphoto.extend(found.skip_gphoto)
+
     detected = detect_cameras()  # [(model_name, port), ...]
     try:
         logging.info('Found cameras: %s', detected)
     except Exception:
         logging.debug('Could not print found cameras to terminal')
 
-    cameras: dict = {}
     for model_name, port in detected:
+        if any(word in model_name.lower() for word in skip_gphoto):
+            logging.info('Leaving %s to its camera SDK; gphoto2 does not claim it', model_name)
+            continue
         cam = get_camera_by_port(model_name, port)
 
         key = model_name  # default: use the gphoto2 model name

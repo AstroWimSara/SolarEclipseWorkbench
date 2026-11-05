@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QPushButton, QMessageBox, QProgressDialog, QDialog, QPlainTextEdit, QProgressBar, QWidget, QScrollArea
 )
 
+from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench import solar_radius
 from solareclipseworkbench.location_ui import (ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget,
                                                SiteMapWidget)
@@ -3218,6 +3219,9 @@ class SEWConfigWizard(QWizard):
 
 def main():
     """Main entry point for the wizard application."""
+    # Before anything else: when the Fujifilm SDK libraries are not on the
+    # library path yet, the process restarts here, before a log file is made.
+    maybe_reexec_for_fuji_sdk()
     setup_logging("sew_wizard")
     # The same solar radius as chosen in sew, for the same contact times
     solar_radius.load_saved()

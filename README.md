@@ -33,6 +33,7 @@ More background, eclipse reports and the story behind SEW are on the [Deep Sky W
     - [Make cameras accessible in wsl](#make-cameras-accessible-in-wsl)
       - [Replace the Windows USB driver with WinUSB (required for gphoto2)](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2)
     - [Sony PC Remote settings discussion](#sony-pc-remote-settings-discussion)
+    - [Fujifilm X cameras](#fujifilm-x-cameras)
   - [Upgrading Solar Eclipse Workbench](#upgrading-solar-eclipse-workbench)
   - [Running Solar Eclipse Workbench](#running-solar-eclipse-workbench)
     - [Command line parameters](#command-line-parameters)
@@ -419,6 +420,14 @@ Final note on the `PC+Camera` option - SEW will not actually save JPEG files to 
 
 Camera clock - SEW cannot set the clock of a Sony camera over USB: pressing `Camera(s)` logs `Could not set date & time (unsupported operation?)`.  The clocks of consumer Sony bodies are also known to drift noticeably over a few days, so a clock set by hand well before the eclipse can be off by seconds on the day, and the times in the EXIF data of your pictures cannot be compared with the contact times.  This does not affect when SEW takes the pictures (that follows the computer clock, see [GPS time correction](#gps-time-correction)), only the times written in the files.  Set the camera clock as close to the eclipse as possible, or sync it from a script: [sony-location-info-link-sync](https://github.com/fliker09/sony-location-info-link-sync) can be run with a `command` line in your script.  The log of every run has the time each command released the shutter, in UTC with milliseconds, which is a reliable reference for when each picture was taken.
 
+
+## Fujifilm X cameras
+
+Fujifilm X bodies are controlled through the Fujifilm Shooting SDK, not through gphoto2, which cannot control them tethered.  The SDK is not part of Solar Eclipse Workbench: get it from Fujifilm and put it in `~/fujixsdk/`, or set `FUJI_SDK_PATH` to its folder.  The body then appears as `Fuji Fujifilm <model>`, e.g. `Fuji Fujifilm X-T4`, beside the gphoto2 cameras, and takes `take_picture`, `take_bracket`, `take_hdr`, `take_burst` and `prepare_camera`.
+
+Set the drive dial to `S`: on `CH` the SDK cannot release the shutter.  A `take_burst` is therefore a run of single frames, about 0.5 to 1.8 frames per second on an X-T4.  The camera clock cannot be set over USB, and live view and the camera test of the wizard do not support a Fuji body yet.
+
+See [Fujifilm X cameras](docs/FUJI.md) for the installation of the SDK and the settings of the body.
 
 ## Upgrading Solar Eclipse Workbench
 
