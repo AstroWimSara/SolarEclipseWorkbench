@@ -168,9 +168,12 @@ def build_timeline(filename: str, reference_moments: dict, cameras: Optional[dic
         start = reference + delta if sign == "+" else reference - delta
         latest = start if latest is None else max(latest, start)
 
-        if func_name in HARDWARE_COMMANDS:
+        if HARDWARE_COMMANDS.get(func_name) == 'relay':
             # The relay commands have no camera argument.  They share one row.
             camera_name = RELAY_BUSY_NAME
+        elif func_name in HARDWARE_COMMANDS:
+            # A mount command keeps no camera busy
+            camera_name = None
         elif script_args and func_name not in NON_CAMERA_COMMANDS:
             camera_name = script_args[0].strip()
         else:

@@ -52,6 +52,8 @@ from solareclipseworkbench import hardware_problems, job_text, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
+from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST, find_mounts, parse_address
+from solareclipseworkbench.indi_client import IndiClient, IndiError
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
                                                    set_enabled as set_limb_correction_enabled,
@@ -470,6 +472,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.live_view_action = QAction("Live View", self)
         self.beads_action = QAction("Baily's beads", self)
         self.relay_action = QAction("Relay", self)
+        self.mount_action = QAction("Mount", self)
         self.timeline_action = QAction("Timeline", self)
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
@@ -1021,6 +1024,13 @@ class SolarEclipseView(QMainWindow, Observable):
         self.relay_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.relay_action)
 
+        # Telescope mount (INDI)
+
+        self.mount_action.setStatusTip("Connect the telescope mount through INDI, and let it track the sun")
+        self.mount_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
+        self.mount_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.mount_action)
+
         # Refresh Plot
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
@@ -1339,6 +1349,9 @@ class SolarEclipseController(Observer):
         self.relay_popup: Union['RelayPopup', None] = None
         # The connected relay, also registered for the relay_* script commands
         self.relay_trigger: Union[RelayTrigger, None] = None
+        self.mount_popup: Union['MountPopup', None] = None
+        # The connected mount, also registered for the mount_* script commands
+        self.mount: Union[Mount, None] = None
         self._timeline_window = None
         self._run_report_window = None
         self._sites_window = None
@@ -1515,7 +1528,8 @@ class SolarEclipseController(Observer):
                 worst = "error" if any(p.severity == "error" for p in pending) else "warning"
                 marker = "\u26d4" if worst == "error" else "\u26a0"
                 self.view.setWindowTitle(
-                    f"{marker} {len(pending)} camera problem(s) - Solar Eclipse Workbench"
+                    f"{marker} {len(pending)} {'mount' if {p.source for p in pending} == {'Mount'} else 'camera'} "
+                    f"problem(s) - Solar Eclipse Workbench"
                 )
                 return
 
@@ -1523,7 +1537,8 @@ class SolarEclipseController(Observer):
             summary = hardware_problems.summarise(problems)
             has_error = any(p.severity == "error" for p in problems)
             box = QMessageBox.critical if has_error else QMessageBox.warning
-            kind = "Script" if all(p.source == "Script" for p in problems) else "Camera"
+            sources = {p.source for p in problems}
+            kind = "Script" if sources == {"Script"} else "Mount" if sources == {"Mount"} else "Camera"
             box(
                 self.view,
                 f"{kind} problem" if len(problems) == 1 else f"{kind} problems",
@@ -1701,6 +1716,13 @@ class SolarEclipseController(Observer):
 
             self.view.eclipse_visualization.set_location(longitude, latitude, altitude)
 
+            if self.mount is not None:
+                try:
+                    self.send_site_to_mount()
+                except (MountError, IndiError) as exc:
+                    hardware_problems.report("Mount", f"The new location was not sent to the mount: {exc}",
+                                             severity="warning")
+
             # The eclipse may have been changed on the map in the location window.
             selected = changed_object.location_plot.selected_eclipse_date()
             if selected and selected != changed_object.initial_eclipse_date:
@@ -1769,12 +1791,22 @@ class SolarEclipseController(Observer):
             # The popup has already stored and registered the relay
             return
 
+        elif isinstance(changed_object, MountPopup):
+            # The popup has already stored and registered the mount
+            return
+
         elif isinstance(changed_object, QCloseEvent):
 
             if self.relay_trigger is not None:
                 self.relay_trigger.close()
                 self.relay_trigger = None
                 register_hardware('relay', None)
+
+            if self.mount is not None:
+                # Only the connection closes: the mount keeps tracking
+                self.mount.close()
+                self.mount = None
+                register_hardware('mount', None)
 
             if self._keep_alive_thread is not None:
                 self._keep_alive_thread.stop()
@@ -1982,6 +2014,10 @@ class SolarEclipseController(Observer):
             self.relay_popup = RelayPopup(self)
             self.relay_popup.show()
 
+        elif text == "Mount":
+            self.mount_popup = MountPopup(self)
+            self.mount_popup.show()
+
         elif text == "Timeline":
             self._open_timeline_window()
 
@@ -2087,6 +2123,18 @@ class SolarEclipseController(Observer):
             self._show_live_view(camera)
         else:
             LOGGER.info("Live view closed from the phone dashboard")
+
+    def send_site_to_mount(self) -> list:
+        """ Send the observing location and the (GPS-corrected) time to the connected mount.
+
+        Returns: What was sent, as text; empty when no location is set yet.
+        """
+
+        model = self.model
+        if self.mount is None or None in (model.longitude, model.latitude, model.altitude):
+            return []
+        utc = datetime.datetime.now(tz=datetime.timezone.utc) + model.gps_time_offset
+        return self.mount.send_site(model.latitude, model.longitude, model.altitude, utc)
 
     def _open_live_view(self):
         """Open (or bring to front) the live view window.
@@ -3161,6 +3209,225 @@ class RelayPopup(QWidget, Observable):
         """ Open every contact now. """
 
         self.controller.relay_trigger.release_all()
+
+
+class MountPopup(QWidget, Observable):
+
+    def __init__(self, observer: 'SolarEclipseController'):
+        """ Panel to connect the telescope mount through an INDI server, and to track, stop and park it.
+
+        The connected mount is registered with the hardware registry, so the
+        mount_* commands in a script use it when they fire.  On connecting, the
+        observing location and the time (GPS-corrected when a GPS was used) are
+        sent to the mount.  The mount is never sent to a position: point it at
+        the sun by hand, behind the solar filter.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified when the
+                        mount is connected or disconnected
+        """
+
+        QWidget.__init__(self)
+        self.setWindowTitle("Telescope mount")
+        self.setGeometry(QRect(100, 100, 480, 260))
+        self.add_observer(observer)
+        self.controller = observer
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+
+        layout = QVBoxLayout()
+
+        connection_group_box = QGroupBox("INDI server")
+        connection_layout = QGridLayout()
+
+        connection_layout.addWidget(QLabel("Server"), 0, 0)
+        self.address = QLineEdit(settings.value("mount/address", "localhost", type=str))
+        self.address.setToolTip("host[:port] of the INDI server (port 7624 when not given), "
+                                f"or '{SIMULATED_HOST}' to try the controls without a mount")
+        connection_layout.addWidget(self.address, 0, 1)
+        self.find_button = QPushButton("Find mounts")
+        self.find_button.setToolTip("Ask the INDI server which mounts it has")
+        self.find_button.clicked.connect(self.find_mounts)
+        connection_layout.addWidget(self.find_button, 0, 2)
+
+        connection_layout.addWidget(QLabel("Mount"), 1, 0)
+        self.device_combobox = QComboBox()
+        self.device_combobox.setEditable(True)
+        self.device_combobox.setToolTip("Name of the mount on the INDI server.  "
+                                        "May be left empty when the server has only one.")
+        saved_device = settings.value("mount/device", "", type=str)
+        if saved_device:
+            self.device_combobox.addItem(saved_device)
+        connection_layout.addWidget(self.device_combobox, 1, 1)
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.clicked.connect(self.connect_or_disconnect)
+        connection_layout.addWidget(self.connect_button, 1, 2)
+
+        connection_layout.addWidget(QLabel("Mount port"), 2, 0)
+        self.device_port = QLineEdit(settings.value("mount/device_port", "", type=str))
+        self.device_port.setPlaceholderText("as saved in the driver")
+        self.device_port.setToolTip("Serial port of the mount on the machine of the INDI server, "
+                                    "e.g. /dev/ttyUSB0.  Leave empty to use the port saved in the driver.")
+        connection_layout.addWidget(self.device_port, 2, 1)
+
+        connection_group_box.setLayout(connection_layout)
+        layout.addWidget(connection_group_box)
+
+        control_layout = QHBoxLayout()
+        self.track_button = QPushButton("Track sun")
+        self.track_button.setToolTip("Unpark when needed, and track at the solar rate")
+        self.track_button.clicked.connect(self.track)
+        control_layout.addWidget(self.track_button)
+        self.stop_button = QPushButton("Stop tracking")
+        self.stop_button.clicked.connect(lambda: self._run(self.controller.mount.stop_tracking))
+        control_layout.addWidget(self.stop_button)
+        self.park_button = QPushButton("Park")
+        self.park_button.setToolTip("Move the mount to its park position")
+        self.park_button.clicked.connect(self.park)
+        control_layout.addWidget(self.park_button)
+        self.abort_button = QPushButton("Abort")
+        self.abort_button.setToolTip("Stop every motion now (a park or a nudge)")
+        self.abort_button.clicked.connect(lambda: self._run(self.controller.mount.abort))
+        control_layout.addWidget(self.abort_button)
+        layout.addLayout(control_layout)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+        self.site_label = QLabel()
+        self.site_label.setWordWrap(True)
+        layout.addWidget(self.site_label)
+
+        self.setLayout(layout)
+
+        # The mount state changes on its own (a park finishing, a lost connection)
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.show_state)
+        self.status_timer.start(1000)
+        self.show_state()
+
+    def show_state(self):
+        """ Show the connection state in the buttons and the status label. """
+
+        mount = self.controller.mount
+        connected = mount is not None
+        self.connect_button.setText("Disconnect" if connected else "Connect")
+        for widget in (self.address, self.device_combobox, self.device_port, self.find_button):
+            widget.setEnabled(not connected)
+        for button in (self.track_button, self.stop_button, self.park_button, self.abort_button):
+            button.setEnabled(connected and mount.connected)
+        self.status_label.setText(mount.describe() if connected else "Not connected")
+
+    def _busy(self, func):
+        """ Run func with a wait cursor; INDI calls block until the server answers. """
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return func()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _run(self, func):
+        """ Run a mount call, and show a refusal instead of raising. """
+
+        try:
+            return self._busy(func)
+        except (MountError, IndiError) as exc:
+            QMessageBox.warning(self, "Mount", str(exc))
+        finally:
+            self.show_state()
+
+    def find_mounts(self):
+        """ List the mounts of the INDI server in the mount list. """
+
+        address = self.address.text().strip()
+        if address.lower() == SIMULATED_HOST:
+            mounts = ["Telescope Simulator"]
+        else:
+            try:
+                host, port = parse_address(address)
+
+                def ask():
+                    client = IndiClient(host, port, timeout=3.0)
+                    try:
+                        client.wait_settled()
+                        return find_mounts(client)
+                    finally:
+                        client.close()
+
+                mounts = self._busy(ask)
+            except (MountError, IndiError) as exc:
+                QMessageBox.warning(self, "Mount", str(exc))
+                return
+        if not mounts:
+            QMessageBox.information(self, "Mount", "The INDI server has no mount.  Start it with the driver "
+                                                   "of the mount, e.g. 'indiserver indi_eqmod_telescope'.")
+            return
+        typed = self.device_combobox.currentText()
+        self.device_combobox.clear()
+        self.device_combobox.addItems(mounts)
+        if typed in mounts:
+            self.device_combobox.setCurrentText(typed)
+
+    def connect_or_disconnect(self):
+        """ Connect the mount and register it, or close the connection to it. """
+
+        if self.controller.mount is not None:
+            # The driver stays connected and the mount keeps tracking
+            self.controller.mount.close()
+            self.controller.mount = None
+            register_hardware('mount', None)
+            self.site_label.setText("")
+            self.show_state()
+            self.notify_observers(self)
+            return
+
+        address = self.address.text().strip() or "localhost"
+        device = self.device_combobox.currentText().strip() or None
+        device_port = self.device_port.text().strip() or None
+        try:
+            mount = self._busy(lambda: Mount.open(address, device, device_port))
+        except (MountError, IndiError) as exc:
+            QMessageBox.warning(self, "Mount", str(exc))
+            return
+
+        self.controller.mount = mount
+        register_hardware('mount', mount)
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        settings.setValue("mount/address", address)
+        settings.setValue("mount/device", mount.device)
+        settings.setValue("mount/device_port", device_port or "")
+
+        try:
+            sent = self._busy(self.controller.send_site_to_mount)
+            self.site_label.setText("Sent to the mount: " + "; ".join(sent) if sent else
+                                    "No location is set yet: it is sent to the mount once one is chosen.")
+        except (MountError, IndiError) as exc:
+            self.site_label.setText(f"The location and time could not be sent: {exc}")
+
+        self.show_state()
+        self.notify_observers(self)
+
+    def track(self):
+        """ Track at the solar rate, and say so when the mount has no solar rate. """
+
+        rate = self._run(self.controller.mount.track_solar)
+        if rate == "sidereal":
+            QMessageBox.information(self, "Mount", "The mount has no solar tracking rate, so it tracks at the "
+                                                   "sidereal rate.  The sun drifts about 2.5′ an hour.")
+
+    def park(self):
+        """ Park, after a confirmation: parking moves the mount. """
+
+        answer = QMessageBox.question(self, "Mount", "Parking moves the mount to its park position.  "
+                                                     "Park it now?")
+        if answer == QMessageBox.StandardButton.Yes:
+            self._run(self.controller.mount.park)
+
+    def closeEvent(self, event):
+        self.status_timer.stop()
+        super().closeEvent(event)
 
 
 class SettingsPopup(QWidget, Observable):

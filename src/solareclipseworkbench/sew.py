@@ -13,6 +13,7 @@ from solareclipseworkbench.location_ui import ConfigManager
 from solareclipseworkbench.logging_setup import setup_logging
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.relay_trigger import RelayError, open_trigger
+from solareclipseworkbench.mount import Mount, MountError
 from solareclipseworkbench.utils import observe_solar_eclipse
 
 
@@ -34,6 +35,23 @@ def open_relay(args) -> None:
         print(f"WARNING: no relay could be opened: {exc}")
         return
     register_hardware('relay', trigger)
+
+
+def open_mount(args) -> None:
+    """Connect and register the mount asked for with --mount, for the mount_* script commands.
+
+    The observing location and this computer's time are sent to the mount.
+    """
+    if not args.mount:
+        return
+    try:
+        mount = Mount.open(args.mount, args.mount_device, args.mount_port)
+        mount.send_site(args.latitude, args.longitude, args.altitude)
+    except MountError as exc:
+        logging.error("No mount could be connected, the mount commands in the script will fail: %s", exc)
+        print(f"WARNING: no mount could be connected: {exc}")
+        return
+    register_hardware('mount', mount)
 
 
 def main(args):
@@ -63,6 +81,7 @@ def main(args):
             )
 
             open_relay(args)
+            open_mount(args)
 
             # Only do a simulation if args.c1 is set
             if args.ref_moment:
@@ -155,6 +174,25 @@ if __name__ == "__main__":
         help="relay channel wired to S1, the half press (default: S1 shares the S2 contact)",
         default=None,
         type=int,
+    )
+
+    parser.add_argument(
+        "--mount",
+        help="connect a telescope mount for the mount_* commands: host[:port] of the INDI server, "
+             "or 'simulated'",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--mount-device",
+        help="name of the mount on the INDI server (default: the only mount there)",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--mount-port",
+        help="serial port of the mount on the INDI server's machine (default: as saved in the driver)",
+        default=None,
     )
 
     parser.add_argument(

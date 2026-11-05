@@ -61,6 +61,7 @@ More background, eclipse reports and the story behind SEW are on the [Deep Sky W
     - [How to use](#how-to-use)
     - [GPS time correction](#gps-time-correction)
   - [USB relay shutter trigger](#usb-relay-shutter-trigger)
+  - [Telescope mount (INDI)](#telescope-mount-indi)
   - [Using two cameras of the same model, or one camera with multiple setups](#using-two-cameras-of-the-same-model-or-one-camera-with-multiple-setups)
     - [Step-by-step setup](#step-by-step-setup)
   - [Script file format](#script-file-format)
@@ -800,6 +801,23 @@ shoot slowly over USB or cannot shoot a burst over USB at all.
 how to wire the board, and what was measured on a Fujifilm X-T4: latency, pulse length, burst rate
 and how the drive mode changes what a held contact does.
 
+## Telescope mount (INDI)
+
+Solar Eclipse Workbench can connect to the telescope mount through an [INDI](https://indilib.org) server,
+so the mount tracks the sun at the solar rate during the run.  The mount is never sent to a position:
+point it at the sun by hand, behind the solar filter.
+
+- Start an INDI server with the driver of the mount, e.g. `indiserver indi_eqmod_telescope`, on this
+  computer, in WSL on Windows, or on another computer such as a Raspberry Pi at the mount.
+- Connect with the **Mount** button in the toolbar.  The observing location and the time (corrected
+  with the USB GPS when one was used) are sent to the mount.  **Track sun**, **Stop tracking**,
+  **Park** and **Abort** control it.
+- In a script, use `mount_track`, `mount_stop` and `mount_park` (see [Commands](#commands)).
+- Closing Solar Eclipse Workbench leaves the mount tracking.
+
+[Telescope mount](docs/MOUNT.md) explains how to start the INDI server on Linux, macOS and Windows (WSL),
+and how to share the mount's USB cable with WSL.
+
 ## Using two cameras of the same model, or one camera with multiple setups
 
 SEW's default camera identification uses the gphoto2 model name (e.g. `Canon EOS 80D`) as
@@ -940,6 +958,12 @@ This command will take a picture 1 minutes and 2 seconds before first contact (C
 ```relay_burst, C3, -, 00:00:01.0, 2, 0.25, "Eight frames, 0.25 s apart"```
 
 ```relay_release, C2, +, 00:00:01.0, "Release the half press"```
+
+- **mount_track**, **mount_stop**, **mount_park** - Control the telescope mount (see [Telescope mount (INDI)](#telescope-mount-indi)).  `mount_track` tracks at the solar rate (it unparks the mount first when it is parked; a mount without a solar rate tracks at the sidereal rate, and a warning says so).  `mount_stop` stops tracking.  `mount_park` moves the mount to its park position.  They take no arguments.  The mount is looked up when the command fires, so it can be connected after the script is loaded.  When a mount command fails, a problem is reported and the run goes on.
+
+```mount_track, C1, -, 00:10:00.0, "Track the sun"```
+
+```mount_park, C4, +, 00:05:00.0, "Park the mount"```
 
 - **voice_prompt** - Play a sound file.
 

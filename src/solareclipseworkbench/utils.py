@@ -19,6 +19,7 @@ from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.hardware_registry import HARDWARE, HARDWARE_COMMANDS
 from solareclipseworkbench.relay_trigger import relay_shoot, relay_burst, relay_bulb, relay_arm, relay_release
+from solareclipseworkbench.mount import mount_track, mount_stop, mount_park
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
 COMMANDS = {
@@ -35,6 +36,9 @@ COMMANDS = {
     'relay_bulb': relay_bulb,
     'relay_arm': relay_arm,
     'relay_release': relay_release,
+    'mount_track': mount_track,
+    'mount_stop': mount_stop,
+    'mount_park': mount_park,
 }
 
 #: Name under which relay commands appear in the load-time timing warnings.
@@ -488,6 +492,22 @@ class DeviceAtRuntime:
         return getattr(device, name)
 
 
+def _hardware_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
+    """Check the arguments of a relay or mount command now, so a typo shows up when the script is loaded."""
+    if HARDWARE_COMMANDS[func_name] == 'mount':
+        return _mount_args_are_valid(func_name, args, cmd_str)
+    return _relay_args_are_valid(func_name, args, cmd_str)
+
+
+def _mount_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
+    """The mount commands take no arguments, only the description."""
+    if not [arg for arg in args if arg.strip()]:
+        return True
+    hardware_problems.report("Script", f"{func_name} takes no arguments.  This mount command will not run.",
+                             detail=cmd_str.strip())
+    return False
+
+
 def _relay_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
     """Check the arguments of a relay command now, so a typo shows up when the script is loaded."""
     values = [arg.strip() for arg in args if arg.strip()]
@@ -663,10 +683,10 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     camera_obj = None
 
     if func_name in HARDWARE_COMMANDS:
-        # A relay command takes its device as the first argument, the way a
-        # camera command takes a camera, but the device is looked up when the
-        # job fires (see DeviceAtRuntime).
-        if not _relay_args_are_valid(func_name, args, cmd_str):
+        # A relay or mount command takes its device as the first argument, the
+        # way a camera command takes a camera, but the device is looked up when
+        # the job fires (see DeviceAtRuntime).
+        if not _hardware_args_are_valid(func_name, args, cmd_str):
             return
         kind = HARDWARE_COMMANDS[func_name]
         if HARDWARE.get(kind) is None:

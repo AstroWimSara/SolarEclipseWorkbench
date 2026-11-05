@@ -1,4 +1,4 @@
-"""Bench console for the USB relay shutter trigger.
+"""Bench console for the USB relay shutter trigger and the telescope mount.
 
 For building and testing the hardware, not for running an eclipse.  Every
 command does one step, so a fault can be isolated to one wire, one contact or
@@ -19,6 +19,13 @@ connected:
     relay timing         how much jitter the host adds
 
 Then connect the camera, lens cap on, and use ``relay shoot`` and ``relay burst``.
+
+A mount is tested through its INDI server (``indiserver`` with the mount's driver):
+
+    mount connect localhost         connect, list what the mount reports
+    mount site 40.4 -3.7 650        send a location and the time
+    mount track                     track at the solar rate
+    mount guide N 1000              a one-second guide pulse
 """
 
 import argparse
@@ -29,10 +36,12 @@ import time
 from typing import Optional
 
 from solareclipseworkbench import relay_trigger as relay_mod
+from solareclipseworkbench.indi_client import IndiError
+from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST
 
 logger = logging.getLogger(__name__)
 
-BANNER = """Solar Eclipse Workbench — relay bench console
+BANNER = """Solar Eclipse Workbench — hardware bench console
 Type 'help' for commands, 'quit' to leave.
 Contacts are opened automatically on exit."""
 
@@ -56,6 +65,18 @@ Relay trigger
   relay bulb <seconds>          hold a bulb exposure
   relay timing [samples]        measure host-to-contact latency and spread
   relay events [n]              show the last n contact transitions
+
+Telescope mount (through an INDI server)
+  mount connect [host[:port]] [device] [serial port]
+                                connect (default localhost; 'simulated' for none)
+  mount status                  what the mount reports
+  mount site <lat> <lon> [elev] send a location (north and east positive) and the time
+  mount track                   track at the solar rate (unparks first)
+  mount stop                    stop tracking
+  mount park / unpark           park (moves the mount!) or unpark
+  mount abort                   stop every motion
+  mount guide <N|S|E|W> <ms>    one guide pulse
+  mount disconnect              close the connection; the mount keeps tracking
 """
 
 
@@ -63,6 +84,7 @@ class Console:
     def __init__(self, simulate: bool = False):
         self.simulate = simulate
         self.trigger: Optional[relay_mod.RelayTrigger] = None
+        self.mount: Optional[Mount] = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -91,6 +113,7 @@ class Console:
         self.out("Most relay boards answer nothing, so map one by pulsing and listening.")
 
     def cmd_status(self, args) -> None:
+        self.out(f"Mount:  {self.mount.describe() if self.mount is not None else 'not connected'}")
         if self.trigger is None:
             self.out("Relay:  not connected")
             return
@@ -255,6 +278,81 @@ class Console:
             flag = f"  ERROR: {event.error}" if event.error else ""
             self.out(f"  {stamp}  {event.channel:>2}  {state:<6}  {event.elapsed_ms:6.2f} ms{flag}")
 
+    # -------------------------------------------------------------------- mount
+
+    def cmd_mount(self, args) -> None:
+        if not args:
+            self.out("Missing mount subcommand.  See 'help'.")
+            return
+        sub, rest = args[0], args[1:]
+        handler = getattr(self, f"_mount_{sub}", None)
+        if handler is None:
+            self.out(f"Unknown mount subcommand: {sub}")
+            return
+        if sub != "connect" and self.mount is None:
+            self.out("No mount connected.  Run 'mount connect' first.")
+            return
+        handler(rest)
+
+    def _mount_connect(self, args) -> None:
+        if self.mount is not None:
+            self.mount.close()
+            self.mount = None
+        address = args[0] if args else (SIMULATED_HOST if self.simulate else "localhost")
+        device = args[1] if len(args) > 1 else None
+        port = args[2] if len(args) > 2 else None
+        self.mount = Mount.open(address, device, port)
+        self.out(f"Connected: {self.mount.describe()}")
+        self._mount_status([])
+
+    def _mount_status(self, args) -> None:
+        mount = self.mount
+        self.out(f"  {mount.describe()}")
+        position = mount.position()
+        if position is not None:
+            self.out(f"  RA {position[0]:.4f} h, Dec {position[1]:.4f}°")
+        self.out(f"  track mode {mount.track_mode or 'unknown'}"
+                 f"{'' if mount.has_solar_rate else ' (no solar rate)'}")
+
+    def _mount_site(self, args) -> None:
+        if len(args) < 2:
+            self.out("Usage: mount site <latitude> <longitude> [elevation]")
+            return
+        sent = self.mount.send_site(float(args[0]), float(args[1]), float(args[2]) if len(args) > 2 else 0.0)
+        self.out("Sent: " + ("; ".join(sent) or "nothing (the driver takes neither)"))
+
+    def _mount_track(self, args) -> None:
+        rate = self.mount.track_solar()
+        self.out(f"Tracking at the {rate} rate.")
+
+    def _mount_stop(self, args) -> None:
+        self.mount.stop_tracking()
+        self.out("Tracking stopped.")
+
+    def _mount_park(self, args) -> None:
+        self.mount.park()
+        self.out("Parking.")
+
+    def _mount_unpark(self, args) -> None:
+        self.mount.unpark()
+        self.out("Unparked.")
+
+    def _mount_abort(self, args) -> None:
+        self.mount.abort()
+        self.out("Motion aborted.")
+
+    def _mount_guide(self, args) -> None:
+        if len(args) < 2:
+            self.out("Usage: mount guide <N|S|E|W> <milliseconds>")
+            return
+        self.mount.guide(args[0], float(args[1]))
+        self.out(f"Guide pulse {args[0].upper()} {float(args[1]):.0f} ms sent.")
+
+    def _mount_disconnect(self, args) -> None:
+        self.mount.close()
+        self.mount = None
+        self.out("Disconnected.  The mount keeps tracking.")
+
     # --------------------------------------------------------------------- loop
 
     def dispatch(self, line: str) -> bool:
@@ -283,7 +381,7 @@ class Console:
 
         try:
             handler(args)
-        except relay_mod.RelayError as exc:
+        except (relay_mod.RelayError, MountError, IndiError) as exc:
             self.out(f"Error: {exc}")
         except (ValueError, IndexError) as exc:
             self.out(f"Bad arguments: {exc}")
@@ -310,13 +408,16 @@ class Console:
             self.shutdown()
 
     def shutdown(self) -> None:
+        if self.mount is not None:
+            self.mount.close()
+            self.mount = None
         if self.trigger is not None:
             self.trigger.close()
             self.out("Relay contacts released.")
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Bench console for the USB relay shutter trigger")
+    parser = argparse.ArgumentParser(description="Bench console for the USB relay shutter trigger and the telescope mount")
     parser.add_argument("--simulate", action="store_true",
                         help="use a simulated relay, to try the console with nothing connected")
     parser.add_argument("--relay-port", help="connect the relay on this port at startup")
