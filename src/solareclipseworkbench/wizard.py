@@ -2155,8 +2155,8 @@ class SummaryPage(QWizardPage):
         camera_profile = camera_profile_for(wizard, getattr(wizard, 'config_manager', None), camera_name)
         timing = camera_profile.timing_profile() if camera_profile else DEFAULT_PROFILE
         vendor = (camera_profile.vendor if camera_profile else None) or vendor_from_name(camera_name)
-        # With the lunar limb profile, the beads bursts are centred on the Baily's beads
-        # windows.  They are still written relative to C2 and C3, so a script run
+        # With the lunar limb profile, the beads bursts hold the edge of the Baily's beads
+        # windows next to totality.  They are still written relative to C2 and C3, so a script run
         # without the limb profile keeps all its lines (timed against the mean limb).
         bead_windows = {}
         for contact in ("C2", "C3"):
@@ -2664,7 +2664,7 @@ class SummaryPage(QWizardPage):
                 lines.append("# Diamond ring and Baily's beads (C2) - REMOVE SOLAR FILTER!")
                 if plan.beads_timed:
                     lines.append(_window_comment("C2"))
-                    lines.append("# The beads burst is centred on that window.")
+                    lines.append("# The beads burst ends just after that window, so it holds the last bead before totality.")
                 lines.append(f"# The diamond ring burst keeps the camera busy for ~{contact_burst_s:.0f}s, so it starts at "
                              f"{_relative('C2', -c2_diamond_start)} and the beads burst at "
                              f"{_relative('C2', -c2_beads_start)}.")
@@ -2983,7 +2983,7 @@ class SummaryPage(QWizardPage):
                 lines.append("# Diamond ring and Baily's beads (C3)")
                 if plan.beads_timed:
                     lines.append(_window_comment("C3"))
-                    lines.append("# The beads burst is centred on that window.")
+                    lines.append("# The beads burst starts just before that window, so it holds the first bead after totality.")
                 lines.append(_beads_comment(plan.c3_beads_shooting_s, plan.c3_beads_s))
                 lines.append(f"# The beads burst starts at {_relative('C3', c3_beads_start)} and the diamond ring burst "
                              f"at {_relative('C3', c3_diamond_start)}.")
