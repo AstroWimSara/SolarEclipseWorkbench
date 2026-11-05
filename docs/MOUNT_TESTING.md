@@ -130,9 +130,30 @@ sew> mount follow 5         a look every 5 s: "correcting … px off: guiding �
 | C.5 Turn the camera | Turn the camera 90° on the telescope, `mount calibrate` again | The direction changes by about 90° |
 | C.6 Backlash | Read the progress lines of N/S | "came back …% of the way": below 70 % is reported as backlash.  Note the value |
 | C.F1 Follow | `mount follow 10`; leave it for 10 minutes | "centred" most of the time, a correction now and then (polar alignment, periodic error).  Note how often it corrects and by how much |
-| C.F2 Push off | During C.F1, nudge the sun 10-20 px off with the nudge buttons (in another program, or before starting) | It comes back, about 1.4 px per correction at 0.5× sidereal (corrections of at most 3 s), and stays within 2 px |
+| C.F2 Push off | During C.F1, nudge the sun 20-40 px off with the nudge buttons (or before starting) | It comes back in one or two corrections: a move at the fast rate, then guiding; then stays within 2 px.  Note whether the fast move overshoots |
+| C.F2b Fast rate | Read the calibration line | "at the … rate … px a second": the driver's centering rate.  Without it ("guiding only"), large offsets come back slowly |
 | C.F3 Wrong calibration | Calibrate, turn the camera 90°, `mount follow 10` | After three corrections: "… did not move the sun the way they should: calibrate again", and it stops |
 | C.7 Problems | Cover the lens: `mount calibrate`.  Park the mount: `mount calibrate` | "the sun is not found …" / "the sun did not move …" (the second after up to 1.5 min of trying) |
+
+### In the GUI
+
+**Simulated** (`sew --sim`, with the virtual camera):
+
+| Check | How | Expected |
+|-------|-----|----------|
+| G.1 Sun in live view | `Mount` → **Simulated mount** → **Connect**; open `Live View` on the virtual camera | A sun, a little off-centre; it moves with the nudge buttons |
+| G.2 Calibrate | **Calibrate** → Yes | Progress in the `Mount` window; after ~40 s "Calibrated … towards 20° …, not mirrored …; at the 2x rate … px a second" |
+| G.3 Centre | Tick **Keep the sun centred** | Live view: the target cross and "Centring: …"; the sun comes to the middle in one or two corrections (a fast move, then guiding), well within a minute |
+| G.3b Phases | Run a simulation from e.g. C2 − 15 min | The live view shows the crescents of the 2026 eclipse thinning as the simulated time goes on, the corona in totality, the crescents after C3; the centring keeps the crescent on the target |
+| G.4 Drift | Nudge the sun away with the buttons | It is brought back |
+| G.5 Script | Load a script and run it in simulation | The centring says "waiting for a gap" before shots, and "paused around totality" from C2 − 15 s to C3 + 15 s |
+| G.6 Phone | Phone dashboard, `Mount` panel | "Centring: …" after the position |
+| G.7 Restart | Close and start `sew` again | The calibration is still there; **Keep the sun centred** works without calibrating again |
+
+**Real mount and camera**: as C.1–C.F3 above, but with **Calibrate** and **Keep the sun centred**
+in the `Mount` window and the `Live View` window open on the camera.  Also: **Calibrate** with the
+live view closed says to open it; turning the camera to portrait (or changing the preview size)
+makes **Keep the sun centred** ask for a new calibration.
 
 ## Stage 3 — Outdoors, on the sun
 

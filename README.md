@@ -814,6 +814,9 @@ point it at the sun by hand, behind the solar filter.
   **Park** and **Abort** control it.
 - The **◀ W ▲ N ▼ S E ▶** buttons in the `Mount` and `Live View` windows and on the phone dashboard
   nudge the mount while they are held, at the speed chosen next to them.
+- **Keep the sun centred**: after a **Calibrate** with the sun in the live view, the sun is found in
+  the live view every 30 s and guided back to the middle when it drifts, between the scheduled
+  shots and not around totality.
 - **Simulated mount** in the `Mount` window tries it all without a mount (ticked in simulation mode).
 - In a script, use `mount_track`, `mount_stop` and `mount_park` (see [Commands](#commands)).
 - Closing Solar Eclipse Workbench leaves the mount tracking.

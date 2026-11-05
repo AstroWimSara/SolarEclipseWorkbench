@@ -18,13 +18,36 @@ class FakeMount:
     ``axes`` sends a direction's pulses to another axis (a broken setup).
     """
 
-    def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True):
+    def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True, fast=None):
         self.ra_h, self.dec_deg = ra_h, dec_deg
         self.rate = rate
         self.scale = scale or {}
         self.axes = axes or {}
         self.moves = moves
         self.pulses = []
+        #: Speed of the "Centering" slew rate in arcseconds per second, or None for a mount without slew rates
+        self.fast = fast
+        self.slew_rate = "1x"
+        self.motions = []           # (direction, seconds) of the moves at a slew rate
+        self._moving = {}           # direction → (time.monotonic() it started, rate)
+
+    def slew_rates(self):
+        return [("1x", "Guide"), ("2x", "Centering"), ("3x", "Find")] if self.fast else []
+
+    def set_slew_rate(self, rate):
+        self.slew_rate = rate
+
+    def nudge_start(self, direction):
+        self._moving[direction] = (time.monotonic(), self.slew_rate)
+
+    def nudge_stop(self, direction):
+        started = self._moving.pop(direction, None)
+        if started is None:
+            return
+        seconds = time.monotonic() - started[0]
+        self.motions.append((direction, seconds))
+        speed = {"1x": 15.0, "2x": self.fast, "3x": self.fast * 8}[started[1]]
+        self._shift(direction, speed * seconds)
 
     def position(self):
         return self.ra_h, self.dec_deg
@@ -33,7 +56,9 @@ class FakeMount:
         self.pulses.append((direction, milliseconds))
         if not self.moves:
             return
-        arcsec = self.rate * milliseconds / 1000 * self.scale.get(direction, 1.0)
+        self._shift(direction, self.rate * milliseconds / 1000 * self.scale.get(direction, 1.0))
+
+    def _shift(self, direction, arcsec):
         axis = self.axes.get(direction, direction)
         sign = 1 if axis in ("N", "E") else -1
         if axis in ("N", "S"):
@@ -222,6 +247,39 @@ def test_measuring_waits_for_new_frames():
 # ---------------------------------------------------------- with INDI
 
 
+def test_the_fast_rate_is_calibrated_when_the_mount_has_slew_rates():
+    mount = FakeMount(fast=1200)                # "Centering": 75 px a second at 16″/px
+    camera = SimulatedSunCamera(mount, rotation_deg=50, mirrored=True)
+    calibration = calibrate(mount, camera)
+    assert calibration.fast_rate == "2x"
+    assert mount.slew_rate == "1x"              # put back
+    fast = (math.hypot(*calibration.fast_north) + math.hypot(*calibration.fast_east)) * 500
+    assert fast == pytest.approx(1200 / 16, rel=0.15)
+    assert "at the 2x rate" in calibration.describe()
+    # Moving at the fast rate for the times it computes brings the sun where it should be, roughly
+    x, y = camera.sun_in_frame()
+    for direction, ms in calibration.moves_for(40, -30).items():
+        mount.set_slew_rate("2x")
+        mount.nudge_start(direction)
+        time.sleep(ms / 1000)
+        mount.nudge_stop(direction)
+    x2, y2 = camera.sun_in_frame()
+    assert math.hypot(x2 - x - 40, y2 - y + 30) < 6
+
+
+def test_a_mount_without_slew_rates_is_calibrated_for_guiding_only():
+    mount = FakeMount()
+    calibration = calibrate(mount, SimulatedSunCamera(mount))
+    assert not calibration.has_fast_rate
+
+
+def test_an_older_calibration_without_a_fast_rate_is_read():
+    old = ('{"north": [0.0, -0.01], "east": [0.01, 0.0], "frame_size": [960, 640], "radius": 60.0, '
+           '"camera": "Canon EOS R", "made": 1.0, "warnings": []}')
+    calibration = Calibration.from_json(old)
+    assert not calibration.has_fast_rate and calibration.frame_size == (960, 640)
+
+
 def test_calibrating_the_simulated_indi_mount():
     server = SimulatedIndiServer(guide_rate=20)
     try:
@@ -230,6 +288,7 @@ def test_calibrating_the_simulated_indi_mount():
         camera = SimulatedSunCamera(mount, rotation_deg=30, mirrored=True)
         calibration = calibrate(mount, camera)
         assert calibration.mirrored
+        assert calibration.fast_rate == "2x"         # the INDI simulator names its rates as INDI does
         target = (450.0, 300.0)
         x, y = camera.sun_in_frame()
         for direction, ms in calibration.pulses_for(target[0] - x, target[1] - y).items():

@@ -287,6 +287,12 @@ def test_the_simulated_mount_is_one_tick_away(app, monkeypatch):
     class Controller(Observer):
         is_simulator = True
         mount = None
+        mount_calibration = None
+        centrer = None
+        _live_view_window = None
+
+        def stop_centring(self):
+            pass
 
         def update(self, changed_object):
             pass

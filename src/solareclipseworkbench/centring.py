@@ -15,9 +15,15 @@ calibration measures it:
        pixels, which the centring inverts to know which pulses bring the sun to
        where it should be.
 
+    4. When the mount has slew rates, the same once more, briefly, at a fast one
+       (the driver's "Centering" rate): how far a second of moving at that rate
+       moves the sun.  The centring uses it to bring a sun that is far off back
+       in seconds; the guide pulses then do the fine work.
+
 Guide pulses are slow on purpose (half the sidereal rate is common: 7.5″ a
 second, half a pixel of a sun of 60 pixels), so a calibration takes a minute or
-two.  It is done once, before C1, with the sun in the live view.
+two; a higher guide rate in the driver (0.9× or 1×) makes it faster.  It is done
+once, before C1, with the sun in the live view.
 
 Checks: the sun must be found, it must move (else the guide pulses do not reach
 the mount), and the two axes must be roughly perpendicular in the frame (else
@@ -55,6 +61,9 @@ MIN_MOVE_PX = 1.0
 #: The two axes must be at least this far from parallel in the frame (degrees from 90°)
 MAX_SKEW_DEG = 30.0
 
+#: How long the calibration moves at the fast rate, in seconds (about 7 px at 8× sidereal and 16″/px)
+FAST_LEG_S = 1.0
+
 #: Frames averaged for one position of the sun
 FRAMES_PER_POSITION = 2
 
@@ -86,6 +95,11 @@ class Calibration:
     made: float = field(default_factory=time.time)
     #: Problems seen that did not stop it (backlash), for the user
     warnings: list = field(default_factory=list)
+    #: A fast slew rate (its name on the driver) and how moving at it moves the sun, (dx, dy) in
+    #: pixels per millisecond north and east; None when not calibrated
+    fast_rate: Optional[str] = None
+    fast_north: Optional[tuple] = None
+    fast_east: Optional[tuple] = None
 
     @property
     def matrix(self) -> np.ndarray:
@@ -135,6 +149,21 @@ class Calibration:
             pulses["E" if east_ms > 0 else "W"] = float(abs(east_ms))
         return pulses
 
+    @property
+    def has_fast_rate(self) -> bool:
+        return self.fast_rate is not None and self.fast_north is not None and self.fast_east is not None
+
+    def moves_for(self, dx: float, dy: float) -> dict:
+        """How long to move at the fast rate to move the sun by (dx, dy): {direction: milliseconds}."""
+        matrix = np.array([[self.fast_north[0], self.fast_east[0]], [self.fast_north[1], self.fast_east[1]]])
+        north_ms, east_ms = np.linalg.solve(matrix, np.array([dx, dy], dtype=float))
+        moves = {}
+        if abs(north_ms) >= 1:
+            moves["N" if north_ms > 0 else "S"] = float(abs(north_ms))
+        if abs(east_ms) >= 1:
+            moves["E" if east_ms > 0 else "W"] = float(abs(east_ms))
+        return moves
+
     def matches(self, frame_size: tuple, camera: str = "") -> bool:
         """Whether this calibration is for frames of this size (and this camera, when both are known)."""
         return tuple(frame_size) == tuple(self.frame_size) and (not camera or not self.camera
@@ -145,6 +174,9 @@ class Calibration:
         text = (f"guiding east moves the sun towards {self.angle_deg:.0f}° in the frame, the frame is "
                 f"{'mirrored' if self.mirrored else 'not mirrored'}; a second of guiding moves the sun "
                 f"{north_pps:.2f} px north/south, {east_pps:.2f} px east/west")
+        if self.has_fast_rate:
+            fast = (float(np.linalg.norm(self.fast_north)) + float(np.linalg.norm(self.fast_east))) * 500
+            text += f"; at the {self.fast_rate} rate {fast:.1f} px a second"
         if self.warnings:
             text += "; " + "; ".join(self.warnings)
         return text
@@ -155,8 +187,9 @@ class Calibration:
     @classmethod
     def from_json(cls, text: str) -> "Calibration":
         data = json.loads(text)
-        for key in ("north", "east", "frame_size"):
-            data[key] = tuple(data[key])
+        for key in ("north", "east", "frame_size", "fast_north", "fast_east"):
+            if data.get(key) is not None:
+                data[key] = tuple(data[key])
         return cls(**data)
 
 
@@ -299,6 +332,67 @@ class Calibrator:
                        f"{direction}")
         return vector, warning
 
+    def _fast_rate(self) -> Optional[str]:
+        """The fast slew rate to calibrate: the driver's centering rate, else the second slowest; None without rates."""
+        try:
+            rates = self.mount.slew_rates()
+        except Exception:
+            return None
+        if len(rates) < 2:
+            return None
+        for name, label in rates:
+            if "center" in label.lower() or "centre" in label.lower() or "centering" in name.lower():
+                return name
+        return rates[1][0]
+
+    def _move(self, direction: str, seconds: float) -> float:
+        """Move at the current slew rate for about ``seconds``.  Returns how long it really moved."""
+        start = time.monotonic()
+        self.mount.nudge_start(direction)
+        try:
+            self._sleep(seconds)
+        finally:
+            self.mount.nudge_stop(direction)
+        return time.monotonic() - start
+
+    def _fast_leg(self, direction: str, back: str, radius: float) -> Optional[np.ndarray]:
+        """Move a second at the fast rate and back.  Returns the vector (px per ms), or None when it barely moved."""
+        start = np.array(self._position(radius))
+        seconds = self._move(direction, FAST_LEG_S)
+        moved = np.array(self._position(radius)) - start
+        self._move(back, seconds)
+        distance = float(np.linalg.norm(moved))
+        self._say(f"moved {direction} at the fast rate for {seconds:.1f} s: the sun moved {distance:.1f} px")
+        if distance < MIN_MOVE_PX * 2:
+            return None
+        return moved / (seconds * 1000)
+
+    def _calibrate_fast(self, radius: float) -> tuple:
+        """(rate, north, east) at a fast slew rate, or (None, None, None) when the mount has none or it fails."""
+        rate = self._fast_rate()
+        if rate is None:
+            return None, None, None
+        previous = getattr(self.mount, "slew_rate", None)
+        try:
+            self.mount.set_slew_rate(rate)
+            east = self._fast_leg("E", "W", radius)
+            north = self._fast_leg("N", "S", radius)
+        except CalibrationError:
+            raise
+        except Exception as exc:
+            self._say(f"the fast rate could not be calibrated: {exc}")
+            return None, None, None
+        finally:
+            if previous:
+                try:
+                    self.mount.set_slew_rate(previous)
+                except Exception:
+                    pass
+        if east is None or north is None:
+            self._say("the fast rate barely moved the sun: only guide pulses will be used")
+            return None, None, None
+        return rate, tuple(map(float, north)), tuple(map(float, east))
+
     def run(self) -> Calibration:
         """Calibrate.  Raises CalibrationError with a message for the user when it cannot."""
         self._say("looking for the sun")
@@ -319,9 +413,12 @@ class Calibrator:
         if warning:
             warnings.append(warning)
 
+        fast_rate, fast_north, fast_east = self._calibrate_fast(radius)
+
         calibration = Calibration(north=tuple(map(float, north)), east=tuple(map(float, east)),
                                   frame_size=frame_size, radius=float(radius), camera=self.camera,
-                                  warnings=warnings)
+                                  warnings=warnings, fast_rate=fast_rate, fast_north=fast_north,
+                                  fast_east=fast_east)
         if calibration.skew_deg > MAX_SKEW_DEG:
             raise CalibrationError(
                 f"guiding north and guiding east moved the sun in nearly the same direction (the axes are "
@@ -350,9 +447,17 @@ DEADBAND_PX = 2.0
 #: little off does not make it overshoot back and forth
 GAIN = 0.7
 
-#: Longest guide pulse of one correction, per axis.  A larger offset is corrected over
-#: several looks; the time also has to fit in a gap between the scheduled shots.
-MAX_CORRECTION_MS = 3000.0
+#: Longest guiding of one correction, per axis.  A correction is as long as the gap
+#: between the scheduled shots allows (before C1 that is as long as it needs), sent as
+#: pulses of at most MAX_PULSE_MS; this only keeps a wild offset from guiding for ever.
+MAX_CORRECTION_MS = 120_000.0
+
+#: Farther off than this, and with the fast rate calibrated, the sun is first moved at the
+#: fast rate (most of the way), and the guide pulses do the rest
+COARSE_PX = 10.0
+
+#: Share of the offset a coarse move covers: not all, so it does not overshoot
+COARSE_GAIN = 0.85
 
 #: Corrections in a row that do not move the sun as they should before the centring gives up
 MAX_FAILED_CORRECTIONS = 3
@@ -394,10 +499,12 @@ class Centrer:
 
     Every ``interval_s`` it finds the sun in the newest frame.  When the sun is
     more than ``deadband_px`` from the target, it computes the guide pulses that
-    bring it most of the way back (``gain``), at most ``max_correction_ms`` per
-    axis, and sends them once ``quiet(seconds)`` says no camera is busy for as
-    long as the pulses and the settling take.  Then it looks again soon, to see
-    the correction worked.
+    bring it most of the way back (``gain``) and sends them once ``quiet(seconds)``
+    says no camera is busy for as long as the pulses and the settling take.  When
+    the whole correction does not fit in the gap, it sends pulses of at most
+    MAX_PULSE_MS, if those fit.  A sun more than COARSE_PX off is first moved at
+    the fast slew rate, when the calibration has one: seconds instead of minutes.
+    Then it looks again soon, to see the correction worked.
 
     It does nothing while ``paused()`` (around totality: from C2 - 15 s to
     C3 + 15 s, when the live view is paused too and the mount just tracks), and
@@ -547,6 +654,9 @@ class Centrer:
             self._set(CENTRED, f"centred ({distance:.1f} px off)", **found)
             return self.interval_s
 
+        if distance > COARSE_PX and self.calibration.has_fast_rate and hasattr(self.mount, "nudge_start"):
+            return self._coarse_move(dx, dy, distance, found)
+
         pulses = self.calibration.pulses_for(-dx * self.gain, -dy * self.gain)
         pulses = {d: min(ms, self.max_correction_ms) for d, ms in pulses.items() if ms >= 50}
         if not pulses:
@@ -554,25 +664,98 @@ class Centrer:
             return self.interval_s
         busy_s = max(pulses.values()) / 1000.0 + self.settle_s
         if not self.quiet(busy_s):
-            self._set(WAITING, f"{distance:.1f} px off: waiting for a gap of {busy_s:.0f} s between the shots",
-                      **found)
-            return RECHECK_S
+            # Not the whole correction: one pulse per axis, if that fits
+            short = {d: min(ms, MAX_PULSE_MS) for d, ms in pulses.items()}
+            short_s = max(short.values()) / 1000.0 + self.settle_s
+            if short_s >= busy_s or not self.quiet(short_s):
+                self._set(WAITING, f"{distance:.1f} px off: waiting for a gap of {short_s:.0f} s between the shots",
+                          **found)
+                return RECHECK_S
+            pulses, busy_s = short, short_s
 
-        for direction, ms in pulses.items():
-            try:
-                self.mount.guide(direction, ms)
-            except Exception as exc:
-                self._set(STOPPED, f"the mount refused a guide pulse: {exc}", **found)
-                return self.interval_s
         text = ", ".join(f"{d} {ms / 1000:.1f} s" for d, ms in pulses.items())
         logger.info("Centring: the sun is %.1f px off (%.1f, %.1f): guiding %s", distance, dx, dy, text)
         self._set(CORRECTING, f"{distance:.1f} px off: guiding {text}", corrections=self.status.corrections + 1,
                   **found)
+        try:
+            self._guide(pulses)
+        except Exception as exc:
+            self._set(STOPPED, f"the mount refused a guide pulse: {exc}", **found)
+            return self.interval_s
         if self.wait_for_pulses:
-            self._stop.wait(busy_s)
-        self._ready_after = time.monotonic()
+            self._stop.wait(self.settle_s)
         north_ms = pulses.get("N", 0.0) - pulses.get("S", 0.0)
         east_ms = pulses.get("E", 0.0) - pulses.get("W", 0.0)
+        return self._corrected(x, y, self.calibration.matrix @ np.array((north_ms, east_ms)))
+
+    def _guide(self, pulses: dict) -> None:
+        """Send the guide pulses, both axes at once, in pulses of at most MAX_PULSE_MS."""
+        remaining = dict(pulses)
+        while remaining and not self._stop.is_set():
+            chunk = {d: min(ms, MAX_PULSE_MS) for d, ms in remaining.items()}
+            for direction, ms in chunk.items():
+                self.mount.guide(direction, ms)
+            if self.wait_for_pulses:
+                self._stop.wait(max(chunk.values()) / 1000.0)
+            remaining = {d: ms - chunk[d] for d, ms in remaining.items() if ms - chunk[d] >= 50}
+
+    def _coarse_move(self, dx: float, dy: float, distance: float, found: dict) -> float:
+        """Move most of the way at the fast slew rate."""
+        calibration = self.calibration
+        moves = calibration.moves_for(-dx * COARSE_GAIN, -dy * COARSE_GAIN)
+        if not moves:
+            return RECHECK_S
+        busy_s = max(moves.values()) / 1000.0 + self.settle_s
+        if not self.quiet(busy_s):
+            self._set(WAITING, f"{distance:.1f} px off: waiting for a gap of {busy_s:.0f} s between the shots",
+                      **found)
+            return RECHECK_S
+        text = ", ".join(f"{d} {ms / 1000:.1f} s" for d, ms in moves.items())
+        logger.info("Centring: the sun is %.1f px off (%.1f, %.1f): moving %s at the %s rate", distance, dx, dy,
+                    text, calibration.fast_rate)
+        self._set(CORRECTING, f"{distance:.1f} px off: moving {text} at the {calibration.fast_rate} rate",
+                  corrections=self.status.corrections + 1, **found)
+        mount = self.mount
+        previous = getattr(mount, "slew_rate", None)
+        started = []
+        try:
+            mount.set_slew_rate(calibration.fast_rate)
+            begin = time.monotonic()
+            for direction in moves:
+                mount.nudge_start(direction)
+                started.append(direction)
+            # Stop each axis after its own time, the shortest first
+            for direction, ms in sorted(moves.items(), key=lambda item: item[1]):
+                wait = begin + ms / 1000.0 - time.monotonic()
+                if self.wait_for_pulses and wait > 0:
+                    self._stop.wait(wait)
+                mount.nudge_stop(direction)
+                started.remove(direction)
+        except Exception as exc:
+            self._set(STOPPED, f"the mount refused to move: {exc}", **found)
+            return self.interval_s
+        finally:
+            for direction in started:
+                try:
+                    mount.nudge_stop(direction)
+                except Exception:
+                    logger.exception("Could not stop the mount moving %s", direction)
+            if previous and previous != calibration.fast_rate:
+                try:
+                    mount.set_slew_rate(previous)
+                except Exception:
+                    pass
+        if self.wait_for_pulses:
+            self._stop.wait(self.settle_s)
+        north_ms = moves.get("N", 0.0) - moves.get("S", 0.0)
+        east_ms = moves.get("E", 0.0) - moves.get("W", 0.0)
+        fast = np.array([[calibration.fast_north[0], calibration.fast_east[0]],
+                         [calibration.fast_north[1], calibration.fast_east[1]]])
+        return self._corrected(dx + self.target[0], dy + self.target[1], fast @ np.array((north_ms, east_ms)))
+
+    def _corrected(self, x: float, y: float, expected: np.ndarray) -> float:
+        """Remember what the correction should have done, to check it at the next look."""
+        self._ready_after = time.monotonic()
         self._before = np.array((x, y))
-        self._expected = self.calibration.matrix @ np.array((north_ms, east_ms))
+        self._expected = expected
         return RECHECK_S if self.wait_for_pulses else 0.0

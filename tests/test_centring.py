@@ -96,6 +96,52 @@ def test_another_target_than_the_middle(setup):
     assert math.hypot(x - 560, y - 300) <= 2.0
 
 
+def test_before_c1_a_correction_is_as_long_as_it_needs():
+    """No shots coming: the whole correction at once, in pulses of at most 3 s."""
+    mount = FakeMount(rate=20)                  # 1.25 px a second of guiding
+    camera = SimulatedSunCamera(mount)
+    calibration = calibrate(mount, camera)
+    drift(mount, 400, 0)                        # 25 px off: 14 s of guiding at 70 %
+    loop = centrer(mount, camera, calibration)
+    before = len(mount.pulses)
+    loop.step()
+    pulses = mount.pulses[before:]
+    assert sum(ms for _, ms in pulses) > 10_000
+    assert max(ms for _, ms in pulses) <= 3000
+    assert off_centre(camera, calibration) < 10
+
+
+def test_in_a_short_gap_only_a_short_correction():
+    mount = FakeMount(rate=20)
+    camera = SimulatedSunCamera(mount)
+    calibration = calibrate(mount, camera)
+    drift(mount, 400, 0)
+    loop = centrer(mount, camera, calibration, quiet=lambda seconds: seconds <= 4)
+    before = len(mount.pulses)
+    loop.step()
+    assert loop.status.state == CORRECTING
+    pulses = mount.pulses[before:]
+    assert len(pulses) <= 2 and all(ms <= 3000 for _, ms in pulses)     # one pulse per axis
+
+
+def test_far_off_the_sun_is_moved_at_the_fast_rate_first():
+    mount = FakeMount(rate=20, fast=1200)       # guiding 1.25 px/s, the fast rate 75 px/s
+    camera = SimulatedSunCamera(mount, rotation_deg=-30)
+    calibration = calibrate(mount, camera)
+    assert calibration.has_fast_rate
+    drift(mount, 1200, -800)                    # about 90 px off
+    loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: the moves are timed
+    before = len(mount.motions)
+    for _ in range(6):
+        loop.step()
+        if loop.status.state == CENTRED:
+            break
+    assert loop.status.state == CENTRED, loop.status.message
+    assert len(mount.motions) > before          # moved at the fast rate
+    assert mount.slew_rate == "1x"              # and put the rate back
+    assert off_centre(camera, calibration) <= 2.0
+
+
 # --------------------------------------------------------- when not to guide
 
 

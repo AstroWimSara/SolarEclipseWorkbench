@@ -27,11 +27,20 @@ class LiveFrames:
         self._latest: Optional[tuple] = None
         self._jpeg: Optional[bytes] = None
         self._jpeg_time = 0.0
+        #: Name of the camera the frames come from
+        self.camera = ""
 
-    def push(self, jpeg: bytes) -> None:
+    def push(self, jpeg: bytes, camera: Optional[str] = None) -> None:
         """A new frame arrived (any thread).  It is decoded when asked for, not now."""
         with self._lock:
             self._jpeg, self._jpeg_time = bytes(jpeg), time.monotonic()
+            if camera is not None:
+                self.camera = camera
+
+    def clear(self) -> None:
+        """Forget the frames (the live view closed): old frames must not count as the sun now."""
+        with self._lock:
+            self._jpeg, self._latest = None, None
 
     def push_array(self, frame: np.ndarray) -> None:
         """A new frame that is already decoded."""

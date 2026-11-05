@@ -13,6 +13,13 @@ class FakeController(Observer):
     def __init__(self):
         self.mount = None
         self.updates = []
+        # Keeping the sun centred
+        self.mount_calibration = None
+        self.centrer = None
+        self._live_view_window = None
+
+    def stop_centring(self):
+        self.centrer = None
 
     def update(self, changed_object):
         self.updates.append(changed_object)

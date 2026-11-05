@@ -270,7 +270,8 @@ function renderMount(stale) {
   sel.disabled = stale || m.rates.length < 2;
   for (const b of document.querySelectorAll('#pad button')) b.disabled = stale || !m.connected;
   if (stale) releaseMount();
-  document.getElementById('mountStatus').textContent = m.status + (m.position ? ' \u00b7 ' + m.position : '');
+  document.getElementById('mountStatus').textContent = m.status + (m.position ? ' \u00b7 ' + m.position : '') +
+    (m.centring ? ' \u00b7 ' + m.centring : '');
 }
 
 function renderCameras() {

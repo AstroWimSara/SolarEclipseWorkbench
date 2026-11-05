@@ -111,6 +111,43 @@ A held button keeps telling Solar Eclipse Workbench to move, several times a sec
 stops — the button is released, the window closes, or the phone loses the network — the mount
 stops by itself within a second, so a lost button release never leaves the mount running.
 
+## Keep the sun centred
+
+With the mount connected and the `Live View` window open on the camera that shows the sun, Solar
+Eclipse Workbench can keep the sun in the middle of the frame for the whole run.
+
+1. Centre the sun roughly with the nudge buttons, filter on.
+2. In the `Mount` window, click **Calibrate**.  The mount is guided east, west, north and south at
+   the guide rate, then moved briefly at a fast slew rate (the driver's "Centering" rate), and the
+   sun is brought back where it was each time: about 1.5 minutes at a guide rate of half the
+   sidereal rate (a higher guide rate in the driver makes it faster).  This measures which way and
+   how far guiding and moving fast move the sun in the live view, so a camera turned on the
+   telescope and a mirrored image (a diagonal) are handled.  The calibration is kept for the next
+   start; calibrate again when the camera is turned or the live-view size changes.
+3. Tick **Keep the sun centred**.
+
+Every 30 seconds the sun is found in the live view: its own edge is used, so the centre stays put
+while the moon covers more and more of it.  When it is more than 2 pixels off the middle, it is
+guided back.  A sun more than 10 pixels off is first moved most of the way at the fast rate (a
+few seconds), and guide pulses do the rest.  A correction is as long as it needs to be when no
+shot is coming (before C1, the first centring takes seconds); during the run it has to fit in a
+gap between the shots, or it is cut to one pulse of at most 3 seconds per axis:
+
+- only in a gap between the scheduled shots (no camera is busy and none is due for the move and
+  a few seconds more),
+- not from 15 seconds before C2 to 15 seconds after C3: the mount just tracks then, as the live
+  view is paused anyway,
+- and it stops by itself, with the reason in the `Mount` window, when the corrections do not move
+  the sun as the calibration says (calibrate again) or the live-view frames change size.
+
+The live view shows the sun that was found (a green circle) and the target (a small cross), with
+the state of the centring; the phone dashboard shows the state in its `Mount` panel.
+
+Guide pulses are for small corrections: at half the sidereal rate, a second of guiding moves the
+sun half a pixel of a sun of 60 pixels radius.  That is why a sun far off is moved at the fast
+rate first.  A mount without slew rates in its driver only guides, and a sun far off then comes
+back slowly: put it close with the nudge buttons first.
+
 ## Simulated mount
 
 Tick **Simulated mount** in the `Mount` window and click **Connect** to try the mount controls, the
@@ -118,6 +155,12 @@ nudges, the phone dashboard and scripts with `mount_*` commands without a mount 
 In simulation mode (`sew --sim`) it is ticked already.  The simulated mount starts pointed at the
 sun.  Without tracking, its position drifts with the sky; it follows the nudges at the chosen speed,
 the guide pulses and a park, so the position next to the nudge buttons shows what it does.
+With the simulated mount connected, the live view of the virtual camera shows the sun where the
+simulated mount points (turned 20° and a little off-centre), so **Calibrate** and **Keep the sun
+centred** can be tried too.  The sun is the real one, from frames of the total eclipse of
+12 August 2026, in the phase of the (simulated) time: the crescent of ten minutes before C2 at
+C2 − 10 min, the corona in totality.  The simulated mount guides at twice the sidereal rate,
+faster than a real mount, so a calibration takes well under a minute.
 
 On the command line, use `--mount simulated`, and `sew_hardware --simulate` for the bench console.
 

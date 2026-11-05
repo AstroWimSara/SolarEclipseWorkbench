@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 #: Host name that starts the built-in simulated mount instead of connecting to a server
 SIMULATED_HOST = "simulated"
 
+#: Guide rate of the built-in simulated mount, as a multiple of the sidereal rate.  Faster than
+#: a real mount (0.5× is common), so calibrating and centring can be tried in seconds, not minutes.
+SIMULATED_GUIDE_RATE = 2.0
+
 #: Host names of an INDI server on this computer
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
@@ -108,7 +112,7 @@ class Mount:
         simulator = None
         if address.strip().lower() == SIMULATED_HOST:
             from solareclipseworkbench.indi_simulator import SimulatedIndiServer
-            simulator = SimulatedIndiServer()
+            simulator = SimulatedIndiServer(guide_rate=SIMULATED_GUIDE_RATE)
             host, port = "127.0.0.1", simulator.port
         else:
             host, port = parse_address(address)

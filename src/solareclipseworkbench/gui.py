@@ -55,6 +55,10 @@ from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST, find_mounts, parse_address
 from solareclipseworkbench.indi_client import IndiClient, IndiError
 from solareclipseworkbench.mount_ui import MountNudgePanel, format_position
+from solareclipseworkbench.live_frames import LiveFrames
+from solareclipseworkbench import sun_simulator
+from solareclipseworkbench.centring import (Calibration, CalibrationError, Calibrator, Centrer, CentringStatus,
+                                            OFF as CENTRING_OFF, STOPPED as CENTRING_STOPPED)
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
                                                    set_enabled as set_limb_correction_enabled,
@@ -1354,6 +1358,12 @@ class SolarEclipseController(Observer):
         self.mount_popup: Union['MountPopup', None] = None
         # The connected mount, also registered for the mount_* script commands
         self.mount: Union[Mount, None] = None
+        # Keeping the sun centred: the frames of the Live View window, the calibration and the loop
+        self.live_frames = LiveFrames()
+        self.mount_calibration: Optional[Calibration] = self._load_mount_calibration()
+        self.centrer: Optional[Centrer] = None
+        # The simulated camera shows the eclipse in the phase of the (simulated) time
+        sun_simulator.ECLIPSE_CLOCK = self._eclipse_clock
         self._timeline_window = None
         self._run_report_window = None
         self._sites_window = None
@@ -1585,6 +1595,7 @@ class SolarEclipseController(Observer):
         self._reference_now = reference_now
         if self._live_view_window is not None:
             self._live_view_window.set_totality_paused(self._live_view_paused_at(reference_now))
+            self._live_view_window.centring_overlay = self._centring_overlay()
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
@@ -1804,6 +1815,7 @@ class SolarEclipseController(Observer):
                 self.relay_trigger = None
                 register_hardware('relay', None)
 
+            self.stop_centring()
             if self.mount is not None:
                 # Only the connection closes: the mount keeps tracking
                 self.mount.close()
@@ -2095,6 +2107,8 @@ class SolarEclipseController(Observer):
     def _show_live_view(self, camera):
         """Open the live view window on this camera (the open one, if any, must be closed first)."""
         window = LiveViewWindow(camera, parent=None)
+        # The calibration and the centring of the mount look at the same frames
+        window.frames_sink = self.live_frames
         # Paused right away when opened around totality, not only at the next clock tick
         window.set_totality_paused(self._live_view_paused_at(getattr(self, "_reference_now", None)))
         window.share_with_phone = self._phone_dashboard is not None
@@ -2125,6 +2139,99 @@ class SolarEclipseController(Observer):
             self._show_live_view(camera)
         else:
             LOGGER.info("Live view closed from the phone dashboard")
+
+    # ------------------------------------------------------------------
+    # Keeping the sun centred
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_mount_calibration() -> Optional[Calibration]:
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        text = settings.value("mount/calibration", "", type=str)
+        if not text:
+            return None
+        try:
+            return Calibration.from_json(text)
+        except Exception:
+            LOGGER.warning("The saved calibration of the mount could not be read; calibrate again", exc_info=True)
+            return None
+
+    def _eclipse_clock(self) -> Optional[tuple]:
+        """(seconds from C2, seconds from C3) of the (simulated) time now, or None without totality here."""
+        now = getattr(self, "_reference_now", None)
+        c2, c3 = self.model.c2_info, self.model.c3_info
+        if now is None or c2 is None or c3 is None:
+            return None
+        return (now - c2.time_utc).total_seconds(), (now - c3.time_utc).total_seconds()
+
+    def set_mount_calibration(self, calibration: Calibration) -> None:
+        """Use and keep a new calibration (a running centring starts again with it)."""
+        self.mount_calibration = calibration
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        settings.setValue("mount/calibration", calibration.to_json())
+        if self.centrer is not None and self.centrer.running:
+            self.stop_centring()
+            self.start_centring()
+
+    def live_view_frame_size(self) -> Optional[tuple]:
+        """(width, height) of the frames of the open live view, or None when there are none."""
+        latest = self.live_frames.latest()
+        return None if latest is None else (latest[1].shape[1], latest[1].shape[0])
+
+    def centring_problem(self) -> Optional[str]:
+        """Why the centring cannot start now, or None when it can."""
+        if self.mount is None or not self.mount.connected:
+            return "Connect the mount first."
+        window = self._live_view_window
+        if window is None or not window.isVisible():
+            return "Open the live view of the camera that shows the sun first."
+        calibration = self.mount_calibration
+        if calibration is None:
+            return "Calibrate first, with the sun in the live view."
+        size = self.live_view_frame_size()
+        if size is None:
+            return "No live view frame yet: wait a moment."
+        if not calibration.matches(size, window._camera.name):
+            return (f"The calibration was made on frames of {calibration.frame_size[0]}×{calibration.frame_size[1]}"
+                    f"{' of ' + calibration.camera if calibration.camera else ''}; the live view now shows "
+                    f"{size[0]}×{size[1]} of {window._camera.name}.  Calibrate again.")
+        return None
+
+    def start_centring(self) -> Optional[str]:
+        """Start keeping the sun centred.  Returns why not, or None when it started."""
+        problem = self.centring_problem()
+        if problem is not None:
+            return problem
+        if self.centrer is not None and self.centrer.running:
+            return None
+        from solareclipseworkbench.utils import quiet_for
+        self.centrer = Centrer(
+            self.mount, self.live_frames, self.mount_calibration,
+            quiet=lambda seconds: quiet_for(self.scheduler, seconds),
+            paused=lambda: self._live_view_paused_at(getattr(self, "_reference_now", None)))
+        self.centrer.start()
+        LOGGER.info("Keeping the sun centred: %s", self.mount_calibration.describe())
+        return None
+
+    def stop_centring(self) -> None:
+        if self.centrer is not None:
+            self.centrer.stop()
+            LOGGER.info("Stopped keeping the sun centred after %d correction(s)", self.centrer.status.corrections)
+        self.centrer = None
+
+    def centring_status(self) -> CentringStatus:
+        return self.centrer.status if self.centrer is not None else CentringStatus()
+
+    def _centring_overlay(self) -> Optional[dict]:
+        """What the live view draws for the centring: the sun found and the target, or None."""
+        centrer = self.centrer
+        if centrer is None or not centrer.running:
+            return None
+        status = centrer.status
+        # While a correction moves the sun, where it was at the last look is no longer where it is
+        sun = None if status.state == "correcting" else status.sun
+        return {"sun": sun, "radius": centrer.radius, "target": status.target, "state": status.state,
+                "message": status.message}
 
     def send_site_to_mount(self) -> list:
         """ Send the observing location and the (GPS-corrected) time to the connected mount.
@@ -2644,7 +2751,14 @@ class SolarEclipseController(Observer):
             "position": format_position(mount.position()) if connected else "",
             "rates": [list(rate) for rate in mount.slew_rates()] if connected else [],
             "rate": mount.slew_rate if connected else None,
+            "centring": self._phone_centring_text(),
         }
+
+    def _phone_centring_text(self) -> str:
+        if self.centrer is None:
+            return ""
+        status = self.centrer.status
+        return f"Centring: {status.message}" if status.message else "Centring on"
 
     def _mount_action_from_phone(self, action: str, data: dict) -> None:
         """Nudge or stop the mount from the phone.  Never waits for the mount (see mount.Nudger)."""
@@ -3250,6 +3364,11 @@ class RelayPopup(QWidget, Observable):
 
 class MountPopup(QWidget, Observable):
 
+    #: A line of progress of the calibration (from its thread)
+    calibration_progress = pyqtSignal(str)
+    #: The calibration ended: (Calibration or None, error message)
+    calibration_done = pyqtSignal(object, str)
+
     def __init__(self, observer: 'SolarEclipseController'):
         """ Panel to connect the telescope mount through an INDI server, and to track, stop and park it.
 
@@ -3339,6 +3458,34 @@ class MountPopup(QWidget, Observable):
         self.nudge_panel = MountNudgePanel(self)
         layout.addWidget(self.nudge_panel)
 
+        # Keeping the sun centred from the live view
+        centring_group_box = QGroupBox("Keep the sun centred")
+        centring_layout = QGridLayout()
+        self.calibrate_button = QPushButton("Calibrate")
+        self.calibrate_button.setToolTip("Guide east, west, north and south (about 1.5 minutes) and measure how the "
+                                         "sun moves in the live view.  Needs the live view open with the sun in it.")
+        self.calibrate_button.clicked.connect(self.calibrate)
+        centring_layout.addWidget(self.calibrate_button, 0, 0)
+        self.calibration_label = QLabel()
+        self.calibration_label.setWordWrap(True)
+        centring_layout.addWidget(self.calibration_label, 0, 1)
+        self.centring_checkbox = QCheckBox("Keep the sun centred")
+        self.centring_checkbox.setToolTip("Every 30 s, find the sun in the live view and guide it back to the "
+                                          "middle when it is more than 2 px off, in a gap between the scheduled "
+                                          "shots.  Paused from 15 s before C2 to 15 s after C3.")
+        self.centring_checkbox.toggled.connect(self.centring_toggled)
+        centring_layout.addWidget(self.centring_checkbox, 1, 0)
+        self.centring_label = QLabel()
+        self.centring_label.setWordWrap(True)
+        centring_layout.addWidget(self.centring_label, 1, 1)
+        centring_layout.setColumnStretch(1, 1)
+        centring_group_box.setLayout(centring_layout)
+        layout.addWidget(centring_group_box)
+
+        self._calibrator: Optional[Calibrator] = None
+        self.calibration_progress.connect(self._on_calibration_progress)
+        self.calibration_done.connect(self._on_calibration_done)
+
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -3368,6 +3515,103 @@ class MountPopup(QWidget, Observable):
             button.setEnabled(connected and mount.connected)
         self.status_label.setText(mount.describe() if connected else "Not connected")
         self.nudge_panel.refresh()
+        self._show_centring()
+
+    def _show_centring(self):
+        """ Show the calibration and the state of the centring. """
+
+        controller = self.controller
+        mount = controller.mount
+        connected = mount is not None and mount.connected
+        calibrating = self._calibrator is not None
+        self.calibrate_button.setText("Stop calibrating" if calibrating else "Calibrate")
+        self.calibrate_button.setEnabled(connected or calibrating)
+        if not calibrating:
+            calibration = controller.mount_calibration
+            if calibration is None:
+                self.calibration_label.setText("Not calibrated.")
+            else:
+                made = datetime.datetime.fromtimestamp(calibration.made).strftime("%Y-%m-%d %H:%M")
+                self.calibration_label.setText(f"Calibrated {made}"
+                                               + (f" on {calibration.camera}" if calibration.camera else "")
+                                               + f": {calibration.describe()}")
+        centrer = controller.centrer
+        running = centrer is not None and centrer.running
+        with QSignalBlocker(self.centring_checkbox):
+            self.centring_checkbox.setChecked(running)
+        self.centring_checkbox.setEnabled(connected and not calibrating
+                                          and (running or controller.mount_calibration is not None))
+        if running:
+            status = centrer.status
+            self.centring_label.setText(f"{status.message} — {status.corrections} correction(s)")
+        elif centrer is not None and centrer.status.state == CENTRING_STOPPED:
+            self.centring_label.setText(centrer.status.message)
+        elif not calibrating:
+            self.centring_label.setText("")
+
+    def calibrate(self):
+        """ Start the calibration on a thread of its own, or stop the one that runs. """
+
+        if self._calibrator is not None:
+            self._calibrator.stop()
+            return
+        controller = self.controller
+        window = controller._live_view_window
+        if window is None or not window.isVisible():
+            QMessageBox.warning(self, "Mount", "Open the live view of the camera that shows the sun first.")
+            return
+        answer = QMessageBox.question(
+            self, "Mount", "The calibration guides the mount east, west, north and south, for about 1.5 minutes "
+                           "at the guide rate, and brings the sun back where it was.\n\nThe sun must be in the "
+                           "live view, roughly in the middle, through the filter.  Calibrate now?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        controller.stop_centring()
+        self._calibrator = Calibrator(controller.mount, controller.live_frames, camera=window._camera.name,
+                                      progress=self.calibration_progress.emit)
+        calibrator = self._calibrator
+
+        def run():
+            try:
+                result = calibrator.run()
+                error = ""
+            except CalibrationError as exc:
+                result, error = None, str(exc)
+            except Exception as exc:
+                LOGGER.exception("Calibration failed")
+                result, error = None, str(exc)
+            try:
+                self.calibration_done.emit(result, error)
+            except RuntimeError:
+                pass        # the window was closed
+
+        threading.Thread(target=run, name="mount-calibration", daemon=True).start()
+        self.calibration_label.setText("Calibrating…")
+        self._show_centring()
+
+    def _on_calibration_progress(self, line: str):
+        self.calibration_label.setText(f"Calibrating: {line}")
+
+    def _on_calibration_done(self, calibration, error: str):
+        self._calibrator = None
+        if calibration is not None:
+            self.controller.set_mount_calibration(calibration)
+            if calibration.warnings:
+                QMessageBox.information(self, "Mount", "Calibrated, but: " + "; ".join(calibration.warnings))
+        else:
+            QMessageBox.warning(self, "Mount", f"The calibration failed: {error}")
+        self._show_centring()
+
+    def centring_toggled(self, checked: bool):
+        """ Start or stop keeping the sun centred. """
+
+        if checked:
+            problem = self.controller.start_centring()
+            if problem is not None:
+                QMessageBox.warning(self, "Mount", problem)
+        else:
+            self.controller.stop_centring()
+        self._show_centring()
 
     def _busy(self, func):
         """ Run func with a wait cursor; INDI calls block until the server answers. """
@@ -3424,6 +3668,9 @@ class MountPopup(QWidget, Observable):
         """ Connect the mount and register it, or close the connection to it. """
 
         if self.controller.mount is not None:
+            if self._calibrator is not None:
+                self._calibrator.stop()
+            self.controller.stop_centring()
             # The driver stays connected and the mount keeps tracking
             self.controller.mount.close()
             self.controller.mount = None
@@ -3484,6 +3731,9 @@ class MountPopup(QWidget, Observable):
 
     def closeEvent(self, event):
         self.status_timer.stop()
+        if self._calibrator is not None:
+            # A calibration must not go on guiding with nobody seeing it
+            self._calibrator.stop()
         super().closeEvent(event)
 
 
@@ -3918,6 +4168,10 @@ class LiveViewWindow(QWidget):
         # The phone dashboard shows the frames of this window (it never reads the camera itself).
         # Set by the controller while the dashboard runs; the frames are only encoded then.
         self.share_with_phone: bool = False
+        # The frames are also handed to the calibration and the centring of the mount (set by the controller)
+        self.frames_sink: Optional[LiveFrames] = None
+        # What the centring draws: {"sun", "radius", "target", "state", "message"} or None (set by the controller)
+        self.centring_overlay: Optional[dict] = None
         self._phone_jpeg: Optional[bytes] = None
         self._phone_frame_time: Optional[float] = None
         self._phone_frame_id: int = 0
@@ -4094,6 +4348,9 @@ class LiveViewWindow(QWidget):
 
     def _on_frame(self, jpeg_bytes: bytes):
         """Called from the LiveViewThread; enqueue (frame, timestamp) for GUI thread."""
+        sink = self.frames_sink
+        if sink is not None:
+            sink.push(jpeg_bytes, self._camera.name)
         try:
             self._frame_queue.put_nowait((jpeg_bytes, datetime.datetime.now()))
         except queue.Full:
@@ -4309,6 +4566,8 @@ class LiveViewWindow(QWidget):
         )
         if self._crosshair_box.isChecked():
             live_view_tools.draw_crosshair(disp)
+        if self.centring_overlay is not None and shown_rect.width() and shown_rect.height():
+            live_view_tools.draw_centring(disp, shown_rect, self.centring_overlay)
 
         if new_frame and self.share_with_phone:
             self._encode_phone_frame(shown)
@@ -4400,6 +4659,9 @@ class LiveViewWindow(QWidget):
 
     def closeEvent(self, event):
         self._poll_timer.stop()
+        if self.frames_sink is not None:
+            # Old frames must not count as the sun now
+            self.frames_sink.clear()
         if self._thread is not None:
             self._thread.stop()
             self._thread = None

@@ -63,7 +63,7 @@ starts at the sun and moves (sky drift, nudges, pulses, park).
 - The same on the phone dashboard (`ACTION_MOUNT_*`, validated and queued like
   the live-view actions).
 
-## Step 3 — Automatic centring from the DSLR live view  *(in progress)*
+## Step 3 — Automatic centring from the DSLR live view  *(done, to be tested on a real mount)*
 
 Done: `sun_finder.find_sun()` (numpy only, ~60 ms per 1000 px frame), checked on
 663 frames of the 2026-08-12 eclipse (Canon EOS R, tests/data/sun, not in git; 21 of
@@ -104,11 +104,26 @@ a long arc.  Stops itself when three corrections in a row move the sun less than
 of what the calibration says they should, or when the frame size changes.  Bench
 console: `mount follow`.
 
-Next: the GUI — calibrate and follow from the `Mount` window with the live view
-open (frames from the `Live View` window, no extra USB traffic), keep the
-calibration in the settings, a target marker in the live view, the status on the
-phone; and in simulation mode a simulated camera showing the sun where the
-simulated mount points.
+Done: the GUI.  The `Live View` window hands its frames to `controller.live_frames`
+(no extra USB traffic; cleared when it closes).  `Mount` window: **Calibrate** (on
+a thread, with progress; the calibration is kept in the settings as
+`mount/calibration`) and **Keep the sun centred** (`controller.start_centring()`,
+with the quiet check on the scheduler and the totality pause of the live view).
+The live view draws the sun found, the target and the state; the phone shows the
+state.  In simulation mode, the virtual camera's live view shows the simulated sun
+where the simulated mount points (`sun_simulator.simulated_live_view_jpeg`).
+
+Then, on request: corrections are no longer capped at 3 s — as long as the gap
+between the shots allows (the whole correction before C1), in pulses of at most 3 s,
+cut to one pulse per axis only when the gap is short.  The calibration also
+measures a fast slew rate (the driver's centering rate), and a sun more than 10 px
+off is moved most of the way at that rate first.  First centring from 35 px: 14-20 s
+instead of minutes.  The simulated mount guides at 2× sidereal; the simulated
+camera shows the real 2026 eclipse (77 crops, 230 KB, img/eclipse, made by
+scripts/make_eclipse_images.py) in the phase of the simulated time.
+
+Ideas for later: pick the target by clicking in the live view; hold the
+calibration per camera; a `mount_centre on/off` script command.
 
 - Sun detection: threshold, edge pixels, circle fit with a radius constraint,
   rejecting the concave lunar edge (a crescent's centroid would drift).
