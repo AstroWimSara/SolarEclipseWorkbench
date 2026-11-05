@@ -1242,6 +1242,131 @@ class FujiCamera(BaseCamera):
                 self._note_frame_fired()
                 self.drain_if_filling()
 
+    # --- Live view ----------------------------------------------------
+    #
+    # LiveViewThread in camera.py calls these three methods on its own thread,
+    # never on the GUI thread.  On macOS the SDK runs the Cocoa run loop while
+    # it waits, and a Qt slot that then calls the SDK deadlocks.
+    #
+    # While live view runs, the body refuses settings and the shutter release
+    # with 0x1006, also when the lock is free.  The GUI therefore stops the
+    # preview before each scheduled camera job.
+
+    #: The stream while live view runs, else None.
+    _preview: Optional[Any] = None
+    #: The number of live-view threads that use the stream.  The last stop
+    #: stops it, so a window that closes does not stop the stream of a new one.
+    _preview_users: int = 0
+
+    def start_preview(self) -> None:
+        """Put the body in PC priority and start the live-view stream.
+
+        No flush shot is allowed: a preview must never release the shutter.
+
+        Raises:
+            CameraError: when the body is not on the USB bus, or does not give
+                PC priority.
+        """
+        with self._lock:
+            if self._preview is not None:
+                self._preview_users += 1
+                return
+            sdk = self._sdk
+            if sdk.vanished:
+                raise CameraError(f"{self.name}: the camera is not on the USB bus.  Power it on and "
+                                  f"detect it again")
+            if not sdk_recovery.unblock(sdk, fujixsdk.PRIORITY_PC, allow_shot=False, why='live view'):
+                raise CameraError(f"{self.name}: the camera did not give PC priority for live view")
+            stream = fujixsdk.LiveViewStream(sdk)
+            try:
+                stream.start()
+            except Exception:
+                self._return_priority(sdk)
+                raise
+            self._preview = stream
+            self._preview_users = 1
+            logging.info('%s: live view started', self.name)
+
+    def read_preview_frame(self) -> Optional[bytes]:
+        """One JPEG frame of the live view, or None when no frame is ready.
+
+        Raises:
+            CameraError: when the session was rebuilt after the stream started.
+                The stream belongs to the closed session.
+            RuntimeError: when the body has left the USB bus.
+        """
+        with self._lock:
+            stream = self._preview
+            if stream is None:
+                return None
+            if stream.camera is not self._sdk_cam:
+                self._preview = None
+                self._preview_users = 0
+                raise CameraError(f"{self.name}: the camera session was rebuilt, so live view stopped")
+            return stream.read_frame()
+
+    def stop_preview(self) -> None:
+        """Stop the live-view stream and give priority back to the body.
+
+        A body that has left the USB bus gets no SDK call.  The device-removal
+        path of the SDK can crash the process.  After the stop, the settings
+        that the body refused during live view are applied.
+        """
+        with self._lock:
+            if self._preview is None:
+                return
+            self._preview_users -= 1
+            if self._preview_users > 0:
+                return
+            stream, self._preview = self._preview, None
+            self._preview_users = 0
+            sdk = self._sdk_cam
+            if sdk is None or stream.camera is not sdk:
+                logging.info('%s: live view stopped with its session', self.name)
+                return
+            if not self._still_on_bus(sdk):
+                logging.warning('%s: live view stopped, but the camera is not on the USB bus.  '
+                                'Power it on and detect it again', self.name)
+                return
+            stream.stop()
+            if sdk.vanished:
+                logging.warning('%s: the camera left the USB bus when live view stopped', self.name)
+                return
+            self._return_priority(sdk)
+            logging.info('%s: live view stopped, priority given back to the camera', self.name)
+
+        try:
+            self.apply_pending()
+        except Exception:
+            logging.warning('%s: the settings held back by live view were not applied',
+                            self.name, exc_info=True)
+
+    def _still_on_bus(self, sdk) -> bool:
+        """Whether the body is on the USB bus.
+
+        ``vanished`` is set only by the first call that fails, so the bus is
+        also checked.  The check does not use the session handle, so it is
+        safe when the body has gone.
+        """
+        if sdk.vanished:
+            return False
+        still_on_bus = getattr(sdk, 'still_on_bus', None)
+        if callable(still_on_bus) and not still_on_bus():
+            sdk.vanished = True
+            return False
+        return True
+
+    def _return_priority(self, sdk) -> None:
+        """Give priority back to the body, so that it takes its own settings again."""
+        try:
+            sdk.set_priority(fujixsdk.PRIORITY_CAMERA)
+        except CommunicationError:
+            sdk.vanished = True
+            logging.warning('%s: the camera left the USB bus when it got priority back', self.name)
+        except Exception as exc:
+            logging.warning('%s: the camera did not take priority back after live view (%s)',
+                            self.name, exc)
+
     # --- gphoto2-style stubs ------------------------------------------
 
     def get_config(self) -> _FujiConfigStub:

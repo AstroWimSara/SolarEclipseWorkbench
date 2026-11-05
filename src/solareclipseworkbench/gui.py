@@ -47,7 +47,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
     MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size, get_exposure_compensation, \
     set_exposure_compensation, compensated_shutter_speed, EXPOSURE_COMPENSATION_STEP_EV, \
-    MAX_EXPOSURE_COMPENSATION_EV
+    MAX_EXPOSURE_COMPENSATION_EV, has_preview_source
 from solareclipseworkbench import hardware_problems, job_text, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
@@ -1305,6 +1305,8 @@ class SolarEclipseController(Observer):
         self.is_simulator: bool = is_simulator
 
         self.scheduler: Union[BackgroundScheduler, None] = None
+        # Says if a scheduled job uses a camera; set when a script is loaded
+        self._job_touches_camera = None
         self.sim_reference_moment: Union[str, None] = None
         self.sim_offset_minutes: Union[int, None] = None
 
@@ -1568,6 +1570,7 @@ class SolarEclipseController(Observer):
         self._reference_now = reference_now
         if self._live_view_window is not None:
             self._live_view_window.set_totality_paused(self._live_view_paused_at(reference_now))
+            self._stop_live_view_before_camera_jobs()
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
@@ -1631,6 +1634,23 @@ class SolarEclipseController(Observer):
             self._keep_alive_allowed.set()
         else:
             self._keep_alive_allowed.clear()
+
+    def _stop_live_view_before_camera_jobs(self):
+        """Tell the live view window if a scheduled camera job is due soon.
+
+        The window stops the preview of an SDK camera then.  Jobs that do not
+        use a camera, such as voice prompts, do not count.
+        """
+        window = self._live_view_window
+        if window is None or not self.scheduler:
+            return
+        try:
+            jobs = self.scheduler.get_jobs()
+        except Exception:
+            LOGGER.debug("Could not read the scheduled jobs", exc_info=True)
+            return
+        gap = seconds_to_next_camera_job(jobs, self._job_touches_camera)
+        window.set_camera_job_due(gap is not None and gap < LIVE_VIEW_CLEAR_BEFORE_S)
 
     def _start_keep_alive(self):
         """Start the camera keep-alive thread once; it follows camera refreshes by itself."""
@@ -1877,13 +1897,15 @@ class SolarEclipseController(Observer):
                 self._shutdown_scheduler()
 
             try:
-                from solareclipseworkbench.utils import observe_solar_eclipse, get_continuous_mode_commands
+                from solareclipseworkbench.utils import observe_solar_eclipse, get_continuous_mode_commands, \
+                    job_touches_camera
                 self.scheduler: BackgroundScheduler
                 self.scheduler, unknown_moments \
                     = observe_solar_eclipse(self.model.reference_moments, filename,
                                             self.model.camera_overview.camera_overview_dict, self,
                                             self.sim_reference_moment, self.sim_offset_minutes,
                                             gps_time_offset=self.model.gps_time_offset)
+                self._job_touches_camera = job_touches_camera
 
                 self.script_filename = filename
                 if self._timeline_window is not None:
@@ -2041,6 +2063,8 @@ class SolarEclipseController(Observer):
     def _live_view_cameras(self) -> list:
         """The cameras that live view can show, as (name, camera), each camera once.
 
+        These are the gphoto2 cameras, and the cameras that give their own live-view frames.
+
         The name is the primary alias when one is configured (the name used in scripts),
         otherwise the gphoto2 model name.
         """
@@ -2049,7 +2073,8 @@ class SolarEclipseController(Observer):
         seen_ids: set = set()
         cameras: list = []
         for cam in cam_dict.values():
-            if isinstance(cam, (GPhotoCameraAdapter, VirtualCamera)) and id(cam) not in seen_ids:
+            previews = isinstance(cam, (GPhotoCameraAdapter, VirtualCamera)) or has_preview_source(cam)
+            if previews and id(cam) not in seen_ids:
                 seen_ids.add(id(cam))
                 cameras.append((cam.name, cam))
         return cameras
@@ -2061,6 +2086,9 @@ class SolarEclipseController(Observer):
         window.set_totality_paused(self._live_view_paused_at(getattr(self, "_reference_now", None)))
         window.share_with_phone = self._phone_dashboard is not None
         self._live_view_window = window
+        # Before the first frame: the preview of an SDK camera must not start
+        # when a camera job is due
+        self._stop_live_view_before_camera_jobs()
         window.show()
 
     def _switch_live_view_from_phone(self, name: str):
@@ -3546,6 +3574,35 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
 CAMERA_DEFAULT_SIZE = "Camera default"
 
+#: How many seconds before a scheduled camera job the preview of an SDK camera
+#: stops.  In live view such a camera refuses settings and the shutter release,
+#: also when its lock is free.  The time covers the stop of the stream and the
+#: settings that the camera refused while the stream ran.
+LIVE_VIEW_CLEAR_BEFORE_S = 8.0
+
+
+def seconds_to_next_camera_job(jobs, touches_camera=None, now=None) -> Optional[float]:
+    """Seconds until the next scheduled job that uses a camera, or None.
+
+    Args:
+        - jobs: The jobs of the scheduler
+        - touches_camera: Says if a job uses a camera.  Without it, every job counts.
+        - now: The time to count from (UTC).  Without it, the time of the computer clock,
+               because the run times of the jobs are on that clock.
+
+    A job that is due now but has not started yet gives 0.
+    """
+    now = now or datetime.datetime.now(tz=datetime.timezone.utc)
+    soonest = None
+    for job in jobs:
+        when = getattr(job, 'next_run_time', None)
+        if when is None or (touches_camera is not None and not touches_camera(job)):
+            continue
+        gap = max(0.0, (when - now).total_seconds())
+        if soonest is None or gap < soonest:
+            soonest = gap
+    return soonest
+
 
 def live_view_size_items(current: str, choices: list) -> tuple:
     """Items of the preview size box, and the one to select first.
@@ -3560,7 +3617,7 @@ def live_view_size_items(current: str, choices: list) -> tuple:
 
 
 class LiveViewWindow(QWidget):
-    """Floating window that shows a live-view preview from a gphoto2 camera.
+    """Floating window that shows a live-view preview from a camera.
 
     A background ``LiveViewThread`` grabs one preview frame per second.  When
     the camera USB lock is held by a scheduled shot the frame is silently
@@ -3576,20 +3633,32 @@ class LiveViewWindow(QWidget):
     selects another one for as long as the window is open; the camera's own
     setting is restored when the window closes.
 
+    A camera that gives its own live-view frames (see ``has_preview_source``)
+    refuses settings and the shutter release while its live view runs.  The
+    controller calls ``set_camera_job_due(True)`` before each scheduled camera
+    job, and the preview of such a camera then stops until it is enabled again.
+    Such a camera gets frames more often, and its preview size is not offered.
+
     The focus tools (peaking, focus score, loupe, histogram) and the crosshair
     work on the frames of every camera.  A click on the preview sets the zoom
     centre and the part of the frame that the loupe shows.
     """
+
+    #: The interval between frames of a camera that gives its own frames.
+    SDK_FRAME_INTERVAL_S = 0.2
 
     def __init__(self, camera, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setMinimumSize(480, 400)
 
         self._camera = camera
+        self._sdk_preview = has_preview_source(camera)
         self._thread = None
         self._frame_queue: queue.Queue = queue.Queue(maxsize=1)
         self._user_enabled: bool = True
         self._totality_paused: bool = False
+        # Why the preview stopped by itself, shown until it is enabled again
+        self._stop_reason: Union[str, None] = None
 
         # The phone dashboard shows the frames of this window (it never reads the camera itself).
         # Set by the controller while the dashboard runs; the frames are only encoded then.
@@ -3639,7 +3708,7 @@ class LiveViewWindow(QWidget):
         # Preview size: only offered when the camera lets it be changed
         self._size_combo = QComboBox()
         self._original_size: Union[str, None] = None
-        sizes = get_live_view_sizes(camera)
+        sizes = None if self._sdk_preview else get_live_view_sizes(camera)
         if sizes is None:
             self._size_combo.addItem(CAMERA_DEFAULT_SIZE)
             self._size_combo.setEnabled(False)
@@ -3743,7 +3812,7 @@ class LiveViewWindow(QWidget):
 
         # Poll the frame queue on the GUI thread
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(500)
+        self._poll_timer.setInterval(100 if self._sdk_preview else 500)
         self._poll_timer.timeout.connect(self._poll_frame)
         self._poll_timer.start()
 
@@ -3760,7 +3829,7 @@ class LiveViewWindow(QWidget):
         self._thread = LiveViewThread(
             camera=self._camera,
             frame_callback=self._on_frame,
-            interval_s=1.0,
+            interval_s=self.SDK_FRAME_INTERVAL_S if self._sdk_preview else 1.0,
         )
         self._thread.start()
         self._update_status_label()
@@ -3774,6 +3843,7 @@ class LiveViewWindow(QWidget):
 
     def _poll_frame(self):
         """Called on the Qt main thread by the poll timer; updates the image."""
+        self._check_thread_error()
         try:
             jpeg_bytes, ts = self._frame_queue.get_nowait()
         except queue.Empty:
@@ -3793,6 +3863,17 @@ class LiveViewWindow(QWidget):
         # remains in sync with the latest frame.
         self._render_image(image, ts, new_frame=True)
 
+    def _check_thread_error(self):
+        """Show why the preview source stopped, and show the preview as disabled."""
+        if self._thread is None:
+            return
+        error = self._thread.take_error()
+        if error is None:
+            return
+        self._user_enabled = False
+        self._stop_reason = f"Stopped: {error}"
+        self._apply_state()
+
     def _apply_state(self):
         """Push the user+totality state into the thread and refresh the button."""
         if self._thread is None:
@@ -3811,7 +3892,7 @@ class LiveViewWindow(QWidget):
 
     def _update_status_label(self):
         if not self._user_enabled:
-            self._status_label.setText("○  Disabled")
+            self._status_label.setText(f"○  {self._stop_reason or 'Disabled'}")
             self._status_label.setStyleSheet("color: gray;")
         elif self._totality_paused:
             self._status_label.setText(
@@ -3833,12 +3914,28 @@ class LiveViewWindow(QWidget):
         self._totality_paused = paused
         self._apply_state()
 
+    def set_camera_job_due(self, due: bool):
+        """Stop the preview of an SDK camera when a scheduled camera job is due.
+
+        The preview stays stopped until it is enabled again.  The controller
+        calls this on each clock tick, so a preview that is enabled again while
+        the job is still due stops again.  A gphoto2 camera takes a shot also
+        in live view, so its preview is not stopped.
+        """
+        if not due or not self._sdk_preview or not self._user_enabled:
+            return
+        LOGGER.info("Live view of %s stopped: a scheduled camera job is due", self._camera.name)
+        self._user_enabled = False
+        self._stop_reason = "Stopped for a scheduled camera job.  Enable it again when the job is done."
+        self._apply_state()
+
     # ------------------------------------------------------------------
     # Slots / event handlers
     # ------------------------------------------------------------------
 
     def _on_toggle(self):
         self._user_enabled = not self._user_enabled
+        self._stop_reason = None
         self._apply_state()
 
     def _on_size_changed(self, size: str):
@@ -4074,6 +4171,7 @@ class LiveViewWindow(QWidget):
     def closeEvent(self, event):
         self._poll_timer.stop()
         if self._thread is not None:
+            # The thread stops the preview source of an SDK camera itself
             self._thread.stop()
             self._thread = None
         # Give the camera its own preview size back, unless that would cost a

@@ -1243,6 +1243,24 @@ class _SonyBackgroundDownloader(threading.Thread):
             self._stop_event.wait(cycle_sleep)
 
 
+#: The methods of a camera that gives its own live-view frames.
+PREVIEW_SOURCE_METHODS = ('start_preview', 'read_preview_frame', 'stop_preview')
+
+#: How long the live-view thread waits for the camera lock before it starts a
+#: preview source.  A start takes longer than a frame read, so it gets more time.
+PREVIEW_START_LOCK_WAIT_S = 3.0
+
+
+def has_preview_source(camera) -> bool:
+    """Whether the camera gives its own live-view frames.
+
+    A camera that a vendor SDK drives has no gphoto2 handle.  It has
+    ``start_preview()``, ``read_preview_frame()`` and ``stop_preview()``, and
+    LiveViewThread uses those instead of gphoto2.
+    """
+    return all(callable(getattr(camera, name, None)) for name in PREVIEW_SOURCE_METHODS)
+
+
 class LiveViewThread(threading.Thread):
     """Background thread that periodically fetches a live-view preview frame.
 
@@ -1254,7 +1272,12 @@ class LiveViewThread(threading.Thread):
     Parameters
     ----------
     camera : GPhotoCameraAdapter or equivalent
-        Must have ``_camera`` and ``_usb_lock`` attributes.
+        Must have ``_camera`` and ``_usb_lock`` attributes, or the preview
+        source methods (see :func:`has_preview_source`) and ``_usb_lock``.
+        The thread calls the preview source methods on its own thread only.
+        A preview source is started when the thread runs or resumes, and
+        stopped when it pauses or stops.  When a preview source fails, the
+        thread pauses itself, and :meth:`take_error` gives the reason.
     frame_callback : callable[[bytes], None]
         Called with the JPEG preview bytes each time a frame is successfully
         captured.  Must be thread-safe (e.g. use a queue.Queue to forward
@@ -1274,6 +1297,8 @@ class LiveViewThread(threading.Thread):
         self._lock_timeout = lock_timeout
         self._stop_event = threading.Event()
         self._paused = threading.Event()
+        self._error: Optional[str] = None
+        self._error_lock = threading.Lock()
 
     def stop(self):
         """Signal the thread to stop and wait briefly for it to exit."""
@@ -1287,8 +1312,19 @@ class LiveViewThread(threading.Thread):
         """Resume suspended preview capture."""
         self._paused.clear()
 
+    def take_error(self) -> Optional[str]:
+        """The reason that a preview source stopped, once, or None."""
+        with self._error_lock:
+            error, self._error = self._error, None
+        return error
+
     def exit_live_view(self):
         """Force the camera out of live-view mode (important for Nikon DSLRs)."""
+        if has_preview_source(self._camera):
+            # The caller is usually the GUI thread, which must not call a vendor
+            # SDK.  The run loop stops the preview source when it sees the pause.
+            self._paused.set()
+            return
         if not hasattr(self, '_camera') or not hasattr(self._camera, '_camera'):
             return
         try:
@@ -1309,14 +1345,81 @@ class LiveViewThread(threading.Thread):
     def is_paused(self) -> bool:
         return self._paused.is_set()
 
+    def _fail(self, log, message: str) -> None:
+        """Record why the preview source stopped, and pause."""
+        log.warning('LiveViewThread: %s', message)
+        with self._error_lock:
+            self._error = message
+        self._paused.set()
+
+    def _start_preview_source(self, log) -> bool:
+        lock = self._camera._usb_lock
+        if not lock.acquire(timeout=PREVIEW_START_LOCK_WAIT_S):
+            log.debug('LiveViewThread: camera busy, live view start postponed')
+            return False
+        try:
+            self._camera.start_preview()
+            log.info('LiveViewThread: live view started')
+            return True
+        except Exception as exc:
+            self._fail(log, f'live view did not start: {exc}')
+            return False
+        finally:
+            lock.release()
+
+    def _stop_preview_source(self, log) -> None:
+        # stop_preview takes the camera lock itself.  It waits for a scheduled
+        # shot, because the camera must leave live view before the next shot.
+        try:
+            self._camera.stop_preview()
+            log.info('LiveViewThread: live view stopped')
+        except Exception:
+            log.warning('LiveViewThread: could not stop live view', exc_info=True)
+
+    def _run_preview_source(self, log) -> None:
+        """The run loop for a camera that gives its own live-view frames."""
+        lock = self._camera._usb_lock
+        running = False
+        try:
+            while not self._stop_event.wait(self._interval_s):
+                if self._paused.is_set():
+                    if running:
+                        running = False
+                        self._stop_preview_source(log)
+                    continue
+                if not running:
+                    running = self._start_preview_source(log)
+                    continue
+
+                if not lock.acquire(timeout=self._lock_timeout):
+                    log.debug('LiveViewThread: USB lock busy, skipping frame')
+                    continue
+                try:
+                    frame = self._camera.read_preview_frame()
+                    self._camera._last_usb_activity = time.monotonic()
+                except Exception as exc:
+                    self._fail(log, f'live view stopped: {exc}')
+                    continue
+                finally:
+                    lock.release()
+                if frame:
+                    self._frame_callback(bytes(frame))
+        finally:
+            if running:
+                self._stop_preview_source(log)
+
     def run(self):
+        log = camera_log(self._camera)
+        if has_preview_source(self._camera):
+            self._run_preview_source(log)
+            return
+
         # If the camera provides a capture_preview() method (e.g. VirtualCamera
         # in simulator mode), use that path — no gphoto2 calls or USB lock needed.
         # Do not use this path for wrapped gphoto2 cameras: delegated
         # capture_preview() may return a CameraFile object (not JPEG bytes).
         _has_virtual_preview = isinstance(self._camera, VirtualCamera)
 
-        log = camera_log(self._camera)
         target = None
         context = None
         if not _has_virtual_preview:
@@ -1384,7 +1487,7 @@ def get_live_view_sizes(camera) -> Optional[Tuple[str, list[str]]]:
     Returns: (current size, available sizes), or None when the camera does not
              let the live-view size be changed or is busy.
     """
-    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera):
+    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera) or has_preview_source(camera):
         return None
     lock = getattr(camera, '_usb_lock', None)
     if lock is not None and not lock.acquire(timeout=_LIVE_VIEW_SIZE_LOCK_WAIT_S):
@@ -1418,7 +1521,7 @@ def set_live_view_size(camera, size: str) -> bool:
 
     Returns: True when the camera accepted the size.
     """
-    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera):
+    if not hasattr(camera, '_camera') or isinstance(camera, VirtualCamera) or has_preview_source(camera):
         return False
     log = camera_log(camera)
     lock = getattr(camera, '_usb_lock', None)
