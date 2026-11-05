@@ -49,7 +49,14 @@ by the `simulated` address.  Not yet tested against a real `indiserver` / mount.
 - Tests against a fake INDI server; optional manual test with
   `indi_simulator_telescope`.  `docs/MOUNT.md`, README, changelog.
 
-## Step 2 — Manual nudge
+## Step 2 — Manual nudge  *(done)*
+
+Built as `mount.Nudger` (a thread per mount, holds that must be renewed, so a lost
+release stops the mount within `HOLD_S` = 0.6 s; 1.0 s from the phone) and
+`mount_ui.MountNudgePanel` (in the `Live View` and `Mount` windows).  Rates come
+from the driver's `TELESCOPE_SLEW_RATE` with their labels.  Also, on request: the
+`Simulated mount` check box (ticked in simulation mode), and the simulated mount
+starts at the sun and moves (sky drift, nudges, pulses, park).
 
 - N/S/E/W buttons in the `Live View` window, guiding while held (motion
   start/stop at guide rate) and a guide-rate selector.

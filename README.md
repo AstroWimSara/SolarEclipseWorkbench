@@ -812,6 +812,9 @@ point it at the sun by hand, behind the solar filter.
 - Connect with the **Mount** button in the toolbar.  The observing location and the time (corrected
   with the USB GPS when one was used) are sent to the mount.  **Track sun**, **Stop tracking**,
   **Park** and **Abort** control it.
+- The **◀ W ▲ N ▼ S E ▶** buttons in the `Mount` and `Live View` windows and on the phone dashboard
+  nudge the mount while they are held, at the speed chosen next to them.
+- **Simulated mount** in the `Mount` window tries it all without a mount (ticked in simulation mode).
 - In a script, use `mount_track`, `mount_stop` and `mount_park` (see [Commands](#commands)).
 - Closing Solar Eclipse Workbench leaves the mount tracking.
 

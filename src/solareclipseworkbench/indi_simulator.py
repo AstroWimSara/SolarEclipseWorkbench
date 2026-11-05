@@ -4,8 +4,11 @@ For the tests and for trying the mount controls with nothing connected (the
 ``simulated`` host in the `Mount` window, ``sew --mount simulated`` and
 ``sew_hardware --simulate``).  It speaks the same XML as a real ``indiserver``
 and defines the standard telescope properties ``sew`` uses, so the real client
-code path runs against it.  It does not move anything: a park or a guide pulse
-is answered and remembered, nothing more.
+code path runs against it.
+
+The simulated mount starts pointed at the sun and moves like a mount would: the
+position drifts with the sky when it does not track, holds when it tracks, and
+follows the nudges (at the chosen slew rate), the guide pulses and a park.
 
 To test against a real driver instead, run the INDI telescope simulator:
 
@@ -15,6 +18,7 @@ To test against a real driver instead, run the INDI telescope simulator:
 import logging
 import socket
 import threading
+import time
 from xml.sax.saxutils import escape, quoteattr
 
 from solareclipseworkbench.indi_client import (ALERT, BUSY, IDLE, NUMBER, OK, SWITCH, TEXT, XmlStream,
@@ -26,6 +30,34 @@ DEVICE = "Telescope Simulator"
 
 #: Interface bit of a telescope in DRIVER_INFO.DRIVER_INTERFACE
 TELESCOPE_INTERFACE = 1
+
+#: How fast the sky turns: sidereal rate in hours of right ascension per second
+SIDEREAL_H_PER_S = 1.00273791 / 3600.0
+
+#: Slew rates as multiples of the sidereal rate (15″/s)
+SLEW_RATE_MULTIPLES = {"1x": 1.0, "2x": 8.0, "3x": 64.0, "4x": 400.0}
+
+#: Guide pulses move at half the sidereal rate, as most drivers do by default
+GUIDE_RATE = 0.5
+
+#: How often the position is updated
+TICK_S = 0.2
+
+
+def sun_position() -> tuple:
+    """(right ascension in hours, declination in degrees) of the sun now; the pole when unknown."""
+    try:
+        from astropy.coordinates import get_sun
+        from astropy.time import Time
+        sun = get_sun(Time.now())
+        return float(sun.ra.hour), float(sun.dec.deg)
+    except Exception:
+        logger.debug("No sun position for the simulated mount", exc_info=True)
+        return 0.0, 90.0
+
+
+#: Labels of the slew rates, as the INDI telescope base class names them
+SLEW_RATE_LABELS = {"1x": "Guide", "2x": "Centering", "3x": "Find", "4x": "Max"}
 
 
 class _Prop:
@@ -66,13 +98,15 @@ class SimulatedIndiServer:
             _Prop("DEVICE_PORT", TEXT, {"PORT": "/dev/ttyUSB0"}, needs_connection=False),
             _Prop("GEOGRAPHIC_COORD", NUMBER, {"LAT": 0.0, "LONG": 0.0, "ELEV": 0.0}),
             _Prop("TIME_UTC", TEXT, {"UTC": "", "OFFSET": "0"}),
-            _Prop("EQUATORIAL_EOD_COORD", NUMBER, {"RA": 0.0, "DEC": 90.0}),
+            _Prop("EQUATORIAL_EOD_COORD", NUMBER, dict(zip(("RA", "DEC"), sun_position())), perm="ro"),
             _Prop("TELESCOPE_TRACK_MODE", SWITCH, modes, rule="OneOfMany"),
             _Prop("TELESCOPE_TRACK_STATE", SWITCH, {"TRACK_ON": False, "TRACK_OFF": True}, rule="OneOfMany"),
             _Prop("TELESCOPE_PARK", SWITCH, {"PARK": False, "UNPARK": True}, rule="OneOfMany"),
             _Prop("TELESCOPE_ABORT_MOTION", SWITCH, {"ABORT": False}, rule="AtMostOne"),
             _Prop("TELESCOPE_TIMED_GUIDE_NS", NUMBER, {"TIMED_GUIDE_N": 0.0, "TIMED_GUIDE_S": 0.0}),
             _Prop("TELESCOPE_TIMED_GUIDE_WE", NUMBER, {"TIMED_GUIDE_W": 0.0, "TIMED_GUIDE_E": 0.0}),
+            _Prop("TELESCOPE_SLEW_RATE", SWITCH, {"1x": True, "2x": False, "3x": False, "4x": False},
+                  rule="OneOfMany"),
             _Prop("TELESCOPE_MOTION_NS", SWITCH, {"MOTION_NORTH": False, "MOTION_SOUTH": False}, rule="AtMostOne"),
             _Prop("TELESCOPE_MOTION_WE", SWITCH, {"MOTION_WEST": False, "MOTION_EAST": False}, rule="AtMostOne"),
         ]
@@ -82,6 +116,7 @@ class SimulatedIndiServer:
         self._running = True
         self._thread = threading.Thread(target=self._accept, name="indi-simulator", daemon=True)
         self._thread.start()
+        threading.Thread(target=self._move, name="indi-simulator-motion", daemon=True).start()
         logger.info("Simulated INDI server with %r on port %d", device, self.port)
 
     # --------------------------------------------------------------- helpers
@@ -108,6 +143,53 @@ class SimulatedIndiServer:
                 conn.close()
             except OSError:
                 pass
+
+    # ---------------------------------------------------------------- motion
+
+    def _offset(self, ra_h: float = 0.0, dec_deg: float = 0.0) -> None:
+        """Move the pointing; called with the lock held."""
+        coord = self.props["EQUATORIAL_EOD_COORD"].values
+        coord["RA"] = (coord["RA"] + ra_h) % 24.0
+        coord["DEC"] = max(-90.0, min(90.0, coord["DEC"] + dec_deg))
+
+    def _move(self) -> None:
+        """Move the pointing with the sky and the motors, and tell the clients once a second."""
+        last, last_sent = time.monotonic(), 0.0
+        while self._running:
+            time.sleep(TICK_S)
+            now = time.monotonic()
+            dt, last = now - last, now
+            with self._lock:
+                if not self.connected:
+                    continue
+                props = self.props
+                tracking = props["TELESCOPE_TRACK_STATE"].values["TRACK_ON"]
+                if not tracking and not props["TELESCOPE_PARK"].values["PARK"]:
+                    # A mount standing still sees the sky turn past it
+                    self._offset(ra_h=SIDEREAL_H_PER_S * dt)
+                rate = next((k for k, on in props["TELESCOPE_SLEW_RATE"].values.items() if on), "1x")
+                step_deg = SLEW_RATE_MULTIPLES.get(rate, 1.0) * 15.0 / 3600.0 * dt
+                ns, we = props["TELESCOPE_MOTION_NS"].values, props["TELESCOPE_MOTION_WE"].values
+                moving = any(ns.values()) or any(we.values())
+                self._offset(dec_deg=step_deg * (ns["MOTION_NORTH"] - ns["MOTION_SOUTH"]),
+                             ra_h=step_deg / 15.0 * (we["MOTION_EAST"] - we["MOTION_WEST"]))
+                if moving or now - last_sent >= 1.0:
+                    last_sent = now
+                    xml = self._vector(props["EQUATORIAL_EOD_COORD"], "set")
+                else:
+                    xml = ""
+            if xml:
+                self._broadcast(xml)
+
+    def _pulse(self, name: str, changes: dict) -> None:
+        """Apply a guide pulse at once; called with the lock held."""
+        step_deg = GUIDE_RATE * 15.0 / 3600.0 / 1000.0     # per millisecond
+        for element, ms in changes.items():
+            sign = {"TIMED_GUIDE_N": 1, "TIMED_GUIDE_S": -1, "TIMED_GUIDE_E": 1, "TIMED_GUIDE_W": -1}[element]
+            if name.endswith("_NS"):
+                self._offset(dec_deg=sign * step_deg * ms)
+            else:
+                self._offset(ra_h=sign * step_deg * ms / 15.0)
 
     # ---------------------------------------------------------------- server
 
@@ -160,7 +242,10 @@ class SimulatedIndiServer:
 
     def _vector(self, prop: _Prop, verb: str, message: str = "") -> str:
         element = "def" if verb == "def" else "one"
-        body = "".join(f"<{element}{prop.kind} name={quoteattr(k)}>{self._value_text(prop.kind, v)}"
+        def label(key):
+            return f" label={quoteattr(SLEW_RATE_LABELS.get(key, key))}" if verb == "def" else ""
+
+        body = "".join(f"<{element}{prop.kind} name={quoteattr(k)}{label(k)}>{self._value_text(prop.kind, v)}"
                        f"</{element}{prop.kind}>" for k, v in prop.values.items())
         extra = f" rule={quoteattr(prop.rule)}" if verb == "def" and prop.rule else ""
         if verb == "def":
@@ -221,6 +306,12 @@ class SimulatedIndiServer:
                 prop.values.update(changes)
             if name == "TELESCOPE_PARK" and prop.values["PARK"]:
                 self.props["TELESCOPE_TRACK_STATE"].values.update(TRACK_ON=False, TRACK_OFF=True)
+                self.props["EQUATORIAL_EOD_COORD"].values["DEC"] = 90.0     # parked at the pole
+            if name == "TELESCOPE_ABORT_MOTION":
+                for motion in ("TELESCOPE_MOTION_NS", "TELESCOPE_MOTION_WE"):
+                    self.props[motion].values.update({k: False for k in self.props[motion].values})
+            if name.startswith("TELESCOPE_TIMED_GUIDE"):
+                self._pulse(name, changes)
             # A guide pulse or a park starts something long: answer Busy first
             long_change = name.startswith("TELESCOPE_TIMED_GUIDE") or name == "TELESCOPE_PARK"
             prop.state = BUSY if long_change else OK
@@ -230,6 +321,8 @@ class SimulatedIndiServer:
                 xml += self._vector(prop, "set")
             if name == "TELESCOPE_PARK":
                 xml += self._vector(self.props["TELESCOPE_TRACK_STATE"], "set")
+            if long_change:
+                xml += self._vector(self.props["EQUATORIAL_EOD_COORD"], "set")
         self._broadcast(xml)
 
         if name == "CONNECTION" and self.connected != was_connected:

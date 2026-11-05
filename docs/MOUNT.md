@@ -70,10 +70,10 @@ Ethernet needs no cable either.
 
 ## Connect the mount
 
-1. Click **Mount** in the toolbar.
+1. Click **Mount** in the toolbar.  To try everything without a mount, tick **Simulated mount** and
+   click **Connect**: see [Simulated mount](#simulated-mount).
 2. Enter the address of the INDI server: `localhost` when it runs on this computer (or in WSL),
    otherwise `host` or `host:port`.  The port is 7624 unless you started the server with another one.
-   `simulated` starts a built-in simulated mount, to try the controls with nothing connected.
 3. Click **Find mounts**, and choose the mount when the server has more than one.
 4. **Mount port** is the serial port of the mount on the computer of the INDI server
    (e.g. `/dev/ttyUSB0`).  Leave it empty when the driver already has it saved.
@@ -92,6 +92,37 @@ confirmation) and **Abort** stops every motion at once.
 driver stays connected and the mount keeps tracking.
 
 The window saves the address, the mount and the port for the next start.
+
+## Nudge the mount
+
+While a mount is connected, the `Mount` window and the `Live View` window have a row of nudge
+buttons: **◀ W**, **▲ N**, **▼ S** and **E ▶** move the mount for as long as the button is held,
+at the speed chosen next to them (the slew rates of the driver, e.g. Guide, Centering, Find, Max;
+the slowest is the default, and the choice is kept).  **Stop** stops every motion at once (a park
+as well); tracking goes on.  The position of the mount is shown next to the buttons.
+
+The directions are those of the sky.  The picture in live view can be turned or mirrored by the
+optics, so a button can move the sun another way in the picture: try each button once while
+framing.
+
+The phone dashboard has the same buttons, the speed and the position in its `Mount` panel.
+
+A held button keeps telling Solar Eclipse Workbench to move, several times a second.  When that
+stops — the button is released, the window closes, or the phone loses the network — the mount
+stops by itself within a second, so a lost button release never leaves the mount running.
+
+## Simulated mount
+
+Tick **Simulated mount** in the `Mount` window and click **Connect** to try the mount controls, the
+nudges, the phone dashboard and scripts with `mount_*` commands without a mount or an INDI server.
+In simulation mode (`sew --sim`) it is ticked already.  The simulated mount starts pointed at the
+sun.  Without tracking, its position drifts with the sky; it follows the nudges at the chosen speed,
+the guide pulses and a park, so the position next to the nudge buttons shows what it does.
+
+On the command line, use `--mount simulated`, and `sew_hardware --simulate` for the bench console.
+
+To test against a real INDI server without a mount, use the simulator driver of INDI instead:
+`indiserver indi_simulator_telescope`, and connect to `localhost`.
 
 ## Script commands
 

@@ -78,6 +78,8 @@ class Property:
     rule: str = ""
     #: Element name → value: bool for switches, float for numbers, str otherwise
     values: dict = field(default_factory=dict)
+    #: Element name → label, as defined by the driver (e.g. "SLEW_GUIDE" → "Guide")
+    labels: dict = field(default_factory=dict)
     #: The message that came with the last definition or update
     message: str = ""
     #: Counts the definitions and updates received, so a caller can wait for the next one
@@ -314,7 +316,9 @@ class IndiClient:
                                 rule=attrs.get("rule", ""), message=message)
                 for child in element:
                     if child.tag == f"def{kind}":
-                        prop.values[child.attrib.get("name", "")] = _element_value(kind, child.text)
+                        element_name = child.attrib.get("name", "")
+                        prop.values[element_name] = _element_value(kind, child.text)
+                        prop.labels[element_name] = child.attrib.get("label", element_name)
                 with self._cond:
                     old = self._properties.get((device, name))
                     prop.updates = (old.updates if old else 0) + 1

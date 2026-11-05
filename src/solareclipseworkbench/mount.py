@@ -16,6 +16,7 @@ keeps tracking when ``sew`` is closed.
 import datetime
 import logging
 import threading
+import time
 from typing import Optional
 
 from solareclipseworkbench import hardware_problems, wsl_usb
@@ -88,6 +89,7 @@ class Mount:
         self.device = device
         self._simulator = simulator
         self._lock = threading.RLock()
+        self._nudger: Optional["Nudger"] = None
 
     # ------------------------------------------------------------ connection
 
@@ -167,7 +169,13 @@ class Mount:
         return self.client.connected and self.driver_connected
 
     def close(self) -> None:
-        """Close the connection to the INDI server.  The mount keeps tracking."""
+        """Close the connection to the INDI server.  The mount keeps tracking.
+
+        A nudge that is still running is stopped first.
+        """
+        if self._nudger is not None:
+            self._nudger.stop()
+            self._nudger = None
         self.client.close()
         if self._simulator is not None:
             self._simulator.close()
@@ -307,6 +315,43 @@ class Mount:
         with self._lock:
             self._change(prop, {element: False})
 
+    def slew_rates(self) -> list:
+        """The rates the mount can be nudged at, slowest first: [(name, label), ...].
+
+        Empty when the driver has no TELESCOPE_SLEW_RATE; the mount then moves
+        at whatever rate its driver uses.
+        """
+        prop = self.client.property(self.device, "TELESCOPE_SLEW_RATE")
+        if prop is None:
+            return []
+        return [(name, prop.labels.get(name, name)) for name in prop.values]
+
+    @property
+    def slew_rate(self) -> Optional[str]:
+        prop = self.client.property(self.device, "TELESCOPE_SLEW_RATE")
+        if prop is None:
+            return None
+        on = prop.on_switches()
+        return on[0] if on else None
+
+    def set_slew_rate(self, rate: str) -> None:
+        """Set the rate of the nudges (a name from ``slew_rates()``)."""
+        names = [name for name, _ in self.slew_rates()]
+        if rate not in names:
+            raise MountError(f"{self.device} has no slew rate {rate!r}"
+                             + (f"; it has {', '.join(names)}" if names else ""))
+        with self._lock:
+            if self.slew_rate != rate:
+                self._change("TELESCOPE_SLEW_RATE", {rate: True})
+
+    @property
+    def nudger(self) -> "Nudger":
+        """The nudger of this mount, for the N/S/E/W buttons."""
+        with self._lock:
+            if self._nudger is None:
+                self._nudger = Nudger(self)
+            return self._nudger
+
     @staticmethod
     def _direction(direction: str) -> tuple:
         try:
@@ -337,6 +382,145 @@ class Mount:
             state = "not tracking"
         where = "simulated" if self._simulator is not None else self.client.describe()
         return f"{self.device} on {where}: {state}"
+
+
+class Nudger:
+    """Moves the mount while a button is held, and stops it by itself when the holding stops.
+
+    A button sends ``hold()`` when it is pressed and again every few tenths of a
+    second while it stays pressed, and ``release()`` when it is let go.  Each
+    ``hold()`` keeps the mount moving for ``hold_s`` more.  When the release is
+    lost (the window loses the mouse, the phone loses the network), the mount
+    stops by itself at most ``hold_s`` later.
+
+    The INDI calls run on a thread of their own, so a button never waits for the
+    mount.  The two axes are independent: N/S and E/W can move at the same time;
+    the opposite direction on the same axis replaces the first one.
+    """
+
+    #: How long one hold() keeps the mount moving
+    HOLD_S = 0.6
+
+    _AXES = {"N": "NS", "S": "NS", "E": "WE", "W": "WE"}
+
+    def __init__(self, mount: Mount):
+        self.mount = mount
+        self._cond = threading.Condition()
+        self._wanted: dict = {}          # axis → (direction, deadline)
+        self._moving: dict = {}          # axis → direction that was started
+        self._rate: Optional[str] = None
+        self._abort = False
+        self._running = True
+        self._last_error = ""
+        self._thread = threading.Thread(target=self._run, name=f"nudge-{mount.device}", daemon=True)
+        self._thread.start()
+
+    @classmethod
+    def _axis(cls, direction: str) -> tuple:
+        key = (direction or "").strip().upper()[:1]
+        if key not in cls._AXES:
+            raise MountError(f"not a direction: {direction!r}; use N, S, E or W")
+        return key, cls._AXES[key]
+
+    def hold(self, direction: str, rate: Optional[str] = None, hold_s: Optional[float] = None) -> None:
+        """Move towards ``direction`` (N, S, E or W) for ``hold_s`` more, at ``rate`` when given."""
+        key, axis = self._axis(direction)
+        with self._cond:
+            self._wanted[axis] = (key, time.monotonic() + (hold_s or self.HOLD_S))
+            if rate:
+                self._rate = rate
+            self._cond.notify_all()
+
+    def release(self, direction: Optional[str] = None) -> None:
+        """Stop moving towards ``direction``, or in every direction when it is None."""
+        with self._cond:
+            if direction is None:
+                self._wanted.clear()
+            else:
+                key, axis = self._axis(direction)
+                if self._wanted.get(axis, (None,))[0] == key:
+                    del self._wanted[axis]
+            self._cond.notify_all()
+
+    def abort(self) -> None:
+        """Stop every nudge, and every other motion of the mount (a park as well)."""
+        with self._cond:
+            self._wanted.clear()
+            self._abort = True
+            self._cond.notify_all()
+
+    @property
+    def moving(self) -> list:
+        """The directions the mount is being moved in now."""
+        with self._cond:
+            return sorted(self._moving.values())
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
+
+    def stop(self, timeout: float = 3.0) -> None:
+        """Stop every nudge and end the thread."""
+        with self._cond:
+            self._wanted.clear()
+            self._running = False
+            self._cond.notify_all()
+        if threading.current_thread() is not self._thread:
+            self._thread.join(timeout)
+
+    # ------------------------------------------------------------- the thread
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                now = time.monotonic()
+                for axis in [a for a, (_, deadline) in self._wanted.items() if deadline <= now]:
+                    del self._wanted[axis]
+                wanted = {axis: key for axis, (key, _) in self._wanted.items()}
+                rate, self._rate = self._rate, None
+                abort, self._abort = self._abort, False
+                running = self._running
+            self._apply(wanted, rate, abort)
+            if not running:
+                return
+            with self._cond:
+                deadlines = [deadline for _, deadline in self._wanted.values()]
+                wait = min(deadlines) - time.monotonic() if deadlines else 1.0
+                if not (self._abort or self._rate or not self._running
+                        or {a: k for a, (k, _) in self._wanted.items()} != self._moving):
+                    self._cond.wait(max(0.01, wait))
+
+    def _apply(self, wanted: dict, rate: Optional[str], abort: bool) -> None:
+        """Make the motion of the mount what is wanted.  Runs on the nudge thread only."""
+        mount = self.mount
+        try:
+            if abort:
+                self._moving.clear()
+                mount.abort()
+                return
+            if rate:
+                mount.set_slew_rate(rate)
+            for axis in ("NS", "WE"):
+                current, target = self._moving.get(axis), wanted.get(axis)
+                if current == target:
+                    continue
+                if current is not None:
+                    # Forget it first: a stop that fails must not be retried for ever
+                    del self._moving[axis]
+                    mount.nudge_stop(current)
+                if target is not None:
+                    mount.nudge_start(target)
+                    self._moving[axis] = target
+            self._last_error = ""
+        except (MountError, IndiError) as exc:
+            if str(exc) != self._last_error:
+                logger.warning("Mount nudge failed: %s", exc)
+                hardware_problems.report("Mount", "a nudge of the mount failed", detail=str(exc),
+                                         severity="warning")
+            self._last_error = str(exc)
+            # Do not try to start again until the button is pressed again
+            with self._cond:
+                self._wanted.clear()
 
 
 # ------------------------------------------------------------ scheduler commands

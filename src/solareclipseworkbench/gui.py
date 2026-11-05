@@ -54,13 +54,15 @@ from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST, find_mounts, parse_address
 from solareclipseworkbench.indi_client import IndiClient, IndiError
+from solareclipseworkbench.mount_ui import MountNudgePanel, format_position
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
                                                    set_enabled as set_limb_correction_enabled,
                                                    ensure_limb_profile)
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.phone_dashboard import (DashboardServer, ACTION_ABORT, ACTION_EV_DOWN, ACTION_EV_RESET,
-                                                   ACTION_EV_UP, ACTION_LIVE_CAMERA, ACTION_LIVE_POINT)
+                                                   ACTION_EV_UP, ACTION_LIVE_CAMERA, ACTION_LIVE_POINT, ACTION_MOUNT_HOLD,
+                                                   ACTION_MOUNT_RELEASE, ACTION_MOUNT_STOP, PHONE_HOLD_S)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
@@ -2554,6 +2556,10 @@ class SolarEclipseController(Observer):
                     window = self._live_view_window
                     if window is not None and window.isVisible():
                         window.set_zoom_centre_from_phone(float(data["x"]), float(data["y"]))
+                elif action in (ACTION_MOUNT_HOLD, ACTION_MOUNT_RELEASE, ACTION_MOUNT_STOP):
+                    self._mount_action_from_phone(action, data)
+                    # Nothing on the main window changes
+                    continue
                 handled = True
             except Exception:
                 LOGGER.exception("Phone dashboard action %s failed", action)
@@ -2622,7 +2628,38 @@ class SolarEclipseController(Observer):
             "live_cameras": [name for name, _ in self._live_view_cameras()],
             "live_camera": live["camera"] if live else "",
             "live_switch": not self._live_view_paused_at(reference_now),
+            "mount": self._phone_mount_state(),
         }
+
+    def _phone_mount_state(self) -> Optional[dict]:
+        """The mount as the phone dashboard shows it, or None when no mount is connected."""
+
+        mount = self.mount
+        if mount is None:
+            return None
+        connected = mount.connected
+        return {
+            "connected": connected,
+            "status": mount.describe(),
+            "position": format_position(mount.position()) if connected else "",
+            "rates": [list(rate) for rate in mount.slew_rates()] if connected else [],
+            "rate": mount.slew_rate if connected else None,
+        }
+
+    def _mount_action_from_phone(self, action: str, data: dict) -> None:
+        """Nudge or stop the mount from the phone.  Never waits for the mount (see mount.Nudger)."""
+
+        mount = self.mount
+        if mount is None:
+            return
+        if action == ACTION_MOUNT_HOLD:
+            if mount.connected:
+                mount.nudger.hold(data["direction"], data.get("rate"), hold_s=PHONE_HOLD_S)
+        elif action == ACTION_MOUNT_RELEASE:
+            mount.nudger.release(data["direction"])
+        else:
+            LOGGER.info("Mount stopped from the phone dashboard")
+            mount.nudger.abort()
 
     def _shutdown_scheduler(self):
         """Safely shut down the scheduler and update UI."""
@@ -3229,7 +3266,7 @@ class MountPopup(QWidget, Observable):
 
         QWidget.__init__(self)
         self.setWindowTitle("Telescope mount")
-        self.setGeometry(QRect(100, 100, 480, 260))
+        self.setGeometry(QRect(100, 100, 560, 300))
         self.add_observer(observer)
         self.controller = observer
 
@@ -3239,6 +3276,14 @@ class MountPopup(QWidget, Observable):
 
         connection_group_box = QGroupBox("INDI server")
         connection_layout = QGridLayout()
+
+        self.simulated_checkbox = QCheckBox("Simulated mount")
+        self.simulated_checkbox.setToolTip("Use a simulated mount that starts pointed at the sun, to try the "
+                                           "controls and scripts without a mount or an INDI server")
+        self.simulated_checkbox.setChecked(settings.value("mount/simulated", False, type=bool)
+                                           or bool(getattr(observer, "is_simulator", False)))
+        self.simulated_checkbox.toggled.connect(self.show_state)
+        connection_layout.addWidget(self.simulated_checkbox, 3, 1)
 
         connection_layout.addWidget(QLabel("Server"), 0, 0)
         self.address = QLineEdit(settings.value("mount/address", "localhost", type=str))
@@ -3291,6 +3336,9 @@ class MountPopup(QWidget, Observable):
         control_layout.addWidget(self.abort_button)
         layout.addLayout(control_layout)
 
+        self.nudge_panel = MountNudgePanel(self)
+        layout.addWidget(self.nudge_panel)
+
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -3312,11 +3360,14 @@ class MountPopup(QWidget, Observable):
         mount = self.controller.mount
         connected = mount is not None
         self.connect_button.setText("Disconnect" if connected else "Connect")
+        simulated = self.simulated_checkbox.isChecked()
+        self.simulated_checkbox.setEnabled(not connected)
         for widget in (self.address, self.device_combobox, self.device_port, self.find_button):
-            widget.setEnabled(not connected)
+            widget.setEnabled(not connected and not simulated)
         for button in (self.track_button, self.stop_button, self.park_button, self.abort_button):
             button.setEnabled(connected and mount.connected)
         self.status_label.setText(mount.describe() if connected else "Not connected")
+        self.nudge_panel.refresh()
 
     def _busy(self, func):
         """ Run func with a wait cursor; INDI calls block until the server answers. """
@@ -3382,11 +3433,15 @@ class MountPopup(QWidget, Observable):
             self.notify_observers(self)
             return
 
+        simulated = self.simulated_checkbox.isChecked()
         address = self.address.text().strip() or "localhost"
         device = self.device_combobox.currentText().strip() or None
         device_port = self.device_port.text().strip() or None
         try:
-            mount = self._busy(lambda: Mount.open(address, device, device_port))
+            if simulated:
+                mount = self._busy(lambda: Mount.open(SIMULATED_HOST))
+            else:
+                mount = self._busy(lambda: Mount.open(address, device, device_port))
         except (MountError, IndiError) as exc:
             QMessageBox.warning(self, "Mount", str(exc))
             return
@@ -3395,9 +3450,11 @@ class MountPopup(QWidget, Observable):
         register_hardware('mount', mount)
 
         settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
-        settings.setValue("mount/address", address)
-        settings.setValue("mount/device", mount.device)
-        settings.setValue("mount/device_port", device_port or "")
+        settings.setValue("mount/simulated", simulated)
+        if not simulated:
+            settings.setValue("mount/address", address)
+            settings.setValue("mount/device", mount.device)
+            settings.setValue("mount/device_port", device_port or "")
 
         try:
             sent = self._busy(self.controller.send_site_to_mount)
@@ -4005,6 +4062,9 @@ class LiveViewWindow(QWidget):
         layout.addWidget(self._timestamp_label)
         layout.addWidget(self._status_label)
         layout.addLayout(tools_layout)
+        # Nudges of the telescope mount, shown while one is connected
+        self._mount_panel = MountNudgePanel(self, hide_when_absent=True)
+        layout.addWidget(self._mount_panel)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
