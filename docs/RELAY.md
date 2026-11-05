@@ -15,6 +15,7 @@ Use the relay for the bursts around C2 and C3.  The camera commands (`take_pictu
 - [Wiring](#wiring)
 - [Connecting the relay](#connecting-the-relay)
 - [Script commands](#script-commands)
+- [Drive mode](#drive-mode)
 - [Measured on a Fujifilm X-T4](#measured-on-a-fujifilm-x-t4)
 - [Fault finding](#fault-finding)
 
@@ -162,7 +163,16 @@ relay_shoot, C3, +, 00:00:10.0, "One frame"
   see a camera command and a relay command that use the same camera at the same time.  Keep them
   apart in the script.
 - Do not keep S1 armed while a camera command changes the exposure of the same camera.  With S1
-  held, a camera can refuse the change (see below).  Put `relay_release` before such a command.
+  held, a camera can refuse the change.  Put `relay_release` before such a command.
+
+## Drive mode
+
+The drive mode of the camera decides what a held contact does:
+
+- In S (single), a held contact gives one frame.
+- In CH or CL, a held contact gives a burst for as long as it is held.
+- With AE bracketing on, one pulse runs the complete bracket, also after the contact opens.  A
+  held contact does not start a second bracket.
 
 ## Measured on a Fujifilm X-T4
 
@@ -186,24 +196,6 @@ moment, arm S1 a few seconds before and schedule the burst that much earlier tha
 `relay_shoot` the pulse is 40 ms.  A 30 ms tap fired at least one frame in every one of 18 test
 sequences.  At 1/30 s and faster, a tap sometimes gave two frames.  At 1/8 s and slower it never
 did.
-
-**Bursts:** in CH (set to 10 fps) the camera shot at the full rate for about 4 s, until its buffer
-was full.  After that the card set the rate: about 3 fps on a UHS-I card.  The electronic and the
-mechanical shutter gave the same rate, so the limit is the card, not the shutter.  A faster card
-gives more frames after the first seconds.  With long exposures the rate follows the exposure: 1/15
-s gave 7.8 fps, 1/2 s gave 1.9 fps.
-
-**Drive mode decides what a held contact does:**
-
-- In S (single), a held contact gives one frame.
-- In CH or CL, a held contact gives a burst for as long as it is held.
-- With AE bracketing on, one pulse runs the complete bracket, also after the contact opens.  A
-  held contact does not start a second bracket.  A 9-frame bracket took the sum of its exposures
-  plus about 0.7 s.
-
-**S1 held and exposure changes:** while S1 was held across a sequence of shutter-speed changes
-over USB, the camera kept its drive running and refused 6 of 7 changes.  With the contacts open,
-all 7 changes were accepted.
 
 ## Fault finding
 
