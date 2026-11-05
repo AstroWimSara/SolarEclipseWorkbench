@@ -186,7 +186,8 @@ When the Fuji body is the only one connected, the relay commands work on that
 queue and on the exposure:
 
 - `relay_burst` deletes the queued transfers while the release is held.
-  Without this, the body stops after 32 frames.
+  Without this, the body stops after 32 frames.  When a camera command still
+  uses the body, the burst fires at once and does not delete the transfers.
 - `relay_arm` and `relay_shoot` first send the exposure settings that a busy
   body refused, but only while S1 is open.  This adds at most 0.8 s.
 

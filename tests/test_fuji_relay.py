@@ -303,10 +303,9 @@ def test_relay_burst_without_a_tethered_camera_only_holds_the_release():
     assert relay.closed_channels == set()
 
 
-def test_relay_burst_does_not_drain_while_a_camera_command_has_the_body(monkeypatch):
+def test_relay_burst_does_not_drain_while_a_camera_command_has_the_body():
     # The SDK is not thread-safe.  When a camera command holds the body, the
-    # burst still fires, but it leaves the queue alone.
-    monkeypatch.setattr(fuji_camera, "RELAY_LOCK_WAIT_S", 0.01)
+    # burst still fires at once, but it leaves the queue alone.
     cam, sdk = _tethered()
     relay = _relay()
     taken = threading.Event()
@@ -321,11 +320,14 @@ def test_relay_burst_does_not_drain_while_a_camera_command_has_the_body(monkeypa
     worker.start()
     taken.wait(5)
     try:
+        started = time.monotonic()
         relay_burst(relay, "0.05")
+        elapsed = time.monotonic() - started
     finally:
         done.set()
         worker.join(5)
 
+    assert elapsed < 0.5
     assert not sdk.drain_buffer.called
     assert relay.closed_channels == set()
 

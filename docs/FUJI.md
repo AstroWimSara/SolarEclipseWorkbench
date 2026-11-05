@@ -117,7 +117,9 @@ work with the Fuji body, when it is the only one connected:
 - `relay_arm` and `relay_shoot` first send the exposure settings that a busy
   body refused, but only while S1 is open.  A body with S1 held refuses
   exposure changes.
-- `relay_burst` deletes the queued transfers while the release is held.
+- `relay_burst` deletes the queued transfers while the release is held.  When a
+  camera command still uses the body, the burst fires at once and does not
+  delete the transfers.  The body then stops after 32 frames.
 
 ## The transfer buffer
 

@@ -165,10 +165,6 @@ MID_BURST_DRAIN_S = 2.0
 #: How often the hold looks at the queue again while the release is held.
 HOLD_POLL_S = 0.05
 
-#: How long a relay command waits for a camera command to free the body.  After
-#: that, the relay fires without the work on the queue or the exposure.
-RELAY_LOCK_WAIT_S = 2.0
-
 #: Below this there is no time for a catch-up write: one exposure write on a
 #: free body takes about 0.3 s.
 MIN_CATCHUP_BUDGET_S = 0.25
@@ -1163,15 +1159,14 @@ class FujiCamera(BaseCamera):
     # --- Hooks for the relay_* script commands ------------------------
     #
     # The relay commands run on their own thread and do not hold the lock of
-    # this camera.  Each hook takes the lock itself, and does not wait long for
-    # it: a camera command that holds it already works on the queue and the
-    # exposure itself.
+    # this camera.  Each hook takes the lock itself, and does not wait for it:
+    # a relay frame is timed to a contact, and a camera command that holds the
+    # lock already works on the queue and the exposure itself.
 
     @contextmanager
-    def _locked_for_relay(self, wait_s: float):
-        """Take the camera lock for a relay command.  Yields whether it was taken."""
-        acquired = (self._lock.acquire(timeout=wait_s) if wait_s > 0
-                    else self._lock.acquire(blocking=False))
+    def _locked_for_relay(self):
+        """Take the camera lock for a relay command, if it is free.  Yields whether it was taken."""
+        acquired = self._lock.acquire(blocking=False)
         try:
             yield acquired
         finally:
@@ -1180,7 +1175,7 @@ class FujiCamera(BaseCamera):
 
     def catch_up_exposure(self, budget_s: float) -> None:
         """Before relay_shoot and relay_arm: send the settings that are still pending."""
-        with self._locked_for_relay(0.0) as acquired:
+        with self._locked_for_relay() as acquired:
             if not acquired:
                 logging.info('%s: busy with a camera command; no exposure catch-up', self.name)
                 return
@@ -1200,7 +1195,7 @@ class FujiCamera(BaseCamera):
             logging.warning('%s: a %.1f s hold is longer than the %.1f s the image buffer of '
                             'the body takes', self.name, duration_s, self.max_relay_hold_s)
         paced = interval_s is not None and not trigger.wiring.is_single_channel
-        with self._locked_for_relay(RELAY_LOCK_WAIT_S) as acquired:
+        with self._locked_for_relay() as acquired:
             if not acquired:
                 logging.warning('%s: busy with a camera command; the relay burst runs without '
                                 'draining the transfer queue', self.name)
@@ -1217,7 +1212,7 @@ class FujiCamera(BaseCamera):
 
     def after_relay_frame(self) -> None:
         """After relay_shoot and relay_bulb: drain the queue when it fills."""
-        with self._locked_for_relay(0.0) as acquired:
+        with self._locked_for_relay() as acquired:
             if acquired:
                 self._note_frame_fired()
                 self.drain_if_filling()
