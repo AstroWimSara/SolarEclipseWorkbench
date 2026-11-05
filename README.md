@@ -598,8 +598,9 @@ The functionality of the toolbar buttons is as follows (from left to right):
   - Countdown;
   - Execution time in the local timezone;
   - Execution time in UTC;
-  - Representation of the command;
+  - The command;
   - Description of the command.
+- The `Commands` drop-down above the jobs table chooses how the commands are shown.  `In words` (the default) says what each command does, at the shutter speed the camera will use, e.g. `Bracket of 5 frames, 1 EV apart, around 1/1000 s, f/8, ISO 200 (VirtualCamera)`.  `As in the script` shows the command with its fields as they are written in the script, e.g. `take_bracket("VirtualCamera", 1/1000, 8, 200, 1 5)`.  The tooltip of a command shows the other form.  The choice is saved in `~/.SolarEclipseWorkbench.ini`.
 - Important to know when in simulation mode:
   - Jobs that were scheduled in the past w.r.t. the start of the simulation, will not appear in the list of scheduled jobs.
   - The displayed local execution time of the jobs corresponds to the local time at the observing location, so this may be different from the timezone on you laptop (e.g. when you would be practising beforehand at home).
@@ -608,7 +609,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
 
 - When clouds, haze or dust make the Sun dimmer (or brighter) than the script expects, the buttons above the jobs table change the exposure of all following shots: `+1 EV` makes them one stop brighter, `−1 EV` one stop darker, and `Reset exposure` goes back to the exposures in the script.  The compensation in effect is shown between the buttons, and can go up to 5 EV either way.
 - Only the shutter speed changes: the aperture and ISO stay as in the script.  The compensated speed is rounded to the nearest speed the camera supports, and is limited by the camera's shortest and longest speed.
-- The compensation is applied when a shot fires, so it reaches every `take_picture`, `take_burst`, `take_bracket`, `take_hdr` and `prepare_camera` still to come, including those already scheduled.  A shot that is already being taken is not changed.  The jobs table shows the scripted and the compensated shutter speed, e.g. `1/1000 → 1/500`.
+- The compensation is applied when a shot fires, so it reaches every `take_picture`, `take_burst`, `take_bracket`, `take_hdr` and `prepare_camera` still to come, including those already scheduled.  A shot that is already being taken is not changed.  The jobs table shows the compensated shutter speed: `1/500 s (+1 EV)` in words, or the scripted and the compensated speed, e.g. `1/1000 → 1/500`, as in the script.
 - The compensation is not saved: it starts at 0 EV every time the application starts.
 
 #### Interrupting scheduled jobs
