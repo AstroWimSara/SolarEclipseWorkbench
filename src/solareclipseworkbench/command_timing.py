@@ -349,6 +349,36 @@ def bracket_duration_s(shutter_speed: str, profile: TimingProfile = DEFAULT_PROF
     return sum(bracket_exposures(_exposure_s(shutter_speed), spec)) + overhead
 
 
+#: A single relay frame: the S1 settle before S2 closes, and the S2 pulse
+#: (relay_trigger.DEFAULT_SETTLE_S + DEFAULT_PULSE_S).  Rounded up, so a
+#: pre-armed release (no settle) is covered as well.
+RELAY_SHOT_S = 0.2
+
+
+def relay_duration_s(func_name: str, args: list) -> Optional[float]:
+    """How long a relay command keeps the release contacts pressed.
+
+    Args:
+        - func_name: relay_shoot, relay_burst, relay_bulb, relay_arm or relay_release
+        - args: Script fields after the time offset, without the description
+
+    Returns: Seconds, or None for commands that take no time (relay_arm, relay_release)
+             and for arguments that are not a number.
+
+    The camera can still be writing the frames to its card after the contacts
+    open.  The relay is free again then, so only the camera's own commands
+    have to allow for that.
+    """
+    try:
+        if func_name == "relay_shoot":
+            return RELAY_SHOT_S
+        if func_name in ("relay_burst", "relay_bulb"):
+            return float(args[0]) + RELAY_SHOT_S
+    except (IndexError, ValueError):
+        pass
+    return None
+
+
 def bracket_planning_s(shutter_speed: str, bracket: str, profile: TimingProfile = DEFAULT_PROFILE) -> float:
     """Busy time to plan a take_bracket with: every frame pays the picture overhead.
 
