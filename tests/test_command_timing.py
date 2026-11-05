@@ -167,15 +167,17 @@ def test_without_bursts_neighbouring_shots_keep_their_usual_distance():
 # --- Bursts aimed at the Baily's beads windows ---------------------------------
 
 @pytest.mark.parametrize("vendor", ["Canon", "Nikon", "Sony"])
-def test_the_beads_bursts_are_centred_on_the_bead_windows(vendor):
+def test_the_beads_bursts_hold_the_edge_of_the_bead_windows_next_to_totality(vendor):
+    """An untested camera shoots 2 s, less than the window: the burst keeps the last and the first bead."""
     beads_c2, beads_c3 = (-0.1, 3.1), (-0.0, 4.0)
     plan = contact_burst_plan(vendor, beads_c2=beads_c2, beads_c3=beads_c3)
     shooting = burst_shooting_s(vendor, plan.burst_param)
 
     assert plan.beads_timed
-    for start, window in ((-plan.c2_beads_start, beads_c2), (plan.c3_beads_start, beads_c3)):
-        shooting_centre = start + burst_lead_s(vendor) + shooting / 2
-        assert shooting_centre == pytest.approx(sum(window) / 2, abs=0.05)
+    c2_shooting_end = -plan.c2_beads_start + burst_lead_s(vendor) + shooting
+    c3_shooting_start = plan.c3_beads_start + burst_lead_s(vendor)
+    assert c2_shooting_end == pytest.approx(beads_c2[1] + BEADS_WINDOW_MARGIN_S, abs=0.05)
+    assert c3_shooting_start == pytest.approx(beads_c3[0] - BEADS_WINDOW_MARGIN_S, abs=0.05)
 
 
 def test_a_beads_burst_after_c2_moves_the_first_totality_shot():
@@ -254,7 +256,8 @@ def test_a_sony_starts_shooting_sooner_after_a_burst_command():
 # --- Measured Nikon bursts and the timing recorded in a script -----------------
 
 from solareclipseworkbench.command_timing import (  # noqa: E402
-    CONTACT_BURST_S, DEFAULT_PROFILE, DIAMOND_RING_SHIFT_MAX_S, MAX_BEADS_BURST_S, BURST_MARGIN_S,
+    BEADS_WINDOW_MARGIN_S, CONTACT_BURST_S, DEFAULT_PROFILE, DIAMOND_RING_SHIFT_MAX_S, MAX_BEADS_BURST_S,
+    BURST_MARGIN_S,
     TimingProfile, fit_test_bursts, nikon_burst_fit, parse_timing_directives, timing_directive,
 )
 
@@ -341,7 +344,7 @@ def test_planned_canon_burst_covers_both_test_bursts(short, long):
 
 @pytest.mark.parametrize("vendor, profile", [("Canon", TESTED_CANON), ("Sony", TESTED_CANON), ("Nikon", TESTED_Z8)])
 def test_a_tested_camera_covers_the_beads_window(vendor, profile):
-    beads_c2, beads_c3 = (-1.0, 2.0), (-0.5, 3.0)
+    beads_c2, beads_c3 = (-1.0, 2.0), (-0.5, 2.5)
     plan = contact_burst_plan(vendor, profile=profile, beads_c2=beads_c2, beads_c3=beads_c3)
     for start, shooting, window in ((-plan.c2_beads_start, plan.c2_beads_shooting_s, beads_c2),
                                     (plan.c3_beads_start, plan.c3_beads_shooting_s, beads_c3)):
@@ -357,7 +360,7 @@ def test_a_tested_camera_covers_the_beads_window(vendor, profile):
 def test_nikon_beads_burst_is_given_in_frames():
     plan = contact_burst_plan("Nikon", profile=TESTED_Z8, beads_c2=(-1.0, 2.0), beads_c3=(-0.5, 3.0))
     assert plan.c2_beads_param == 80              # 4 s at 20 fps
-    assert plan.c3_beads_param == 90              # 4.5 s at 20 fps
+    assert plan.c3_beads_param == 82              # 4.1 s at 20 fps: 4.5 s moves the diamond ring burst 3 s
     assert plan.burst_param == 40                 # diamond ring: 2 s
 
 
@@ -385,3 +388,39 @@ def test_beads_burst_is_shortened_so_the_diamond_ring_burst_stays_close():
     assert CONTACT_BURST_S < plan.c3_beads_shooting_s < window[1] - window[0] + 1.0
     assert plan.c3_diamond_start - standard.c3_diamond_start <= DIAMOND_RING_SHIFT_MAX_S
     assert plan.c2_diamond_start - standard.c2_diamond_start <= DIAMOND_RING_SHIFT_MAX_S
+
+
+# --- Beads bursts shorter than the Baily's beads window --------------------------
+
+SHORT_TEST_CANON = planning_profile("Canon", burst_overhead_s=3.0, burst_max_s=3.0)
+
+
+@pytest.mark.parametrize("vendor, profile, seconds", [
+    ("Canon", DEFAULT_PROFILE, 2.0), ("Sony", DEFAULT_PROFILE, 2.0), ("Nikon", DEFAULT_PROFILE, 2.0),
+    ("Canon", SHORT_TEST_CANON, 3.0), ("Sony", SHORT_TEST_CANON, 3.0)])
+def test_a_short_beads_burst_ends_at_c2_and_starts_at_c3(vendor, profile, seconds):
+    """The last bead is at C2 and the first bead at C3: a short burst keeps them, not the middle of the window."""
+    beads_c2, beads_c3 = (-4.0, 0.0), (0.0, 4.5)
+    plan = contact_burst_plan(vendor, profile=profile, beads_c2=beads_c2, beads_c3=beads_c3)
+    lead = burst_lead_s(vendor)
+
+    assert plan.c2_beads_shooting_s == plan.c3_beads_shooting_s == seconds
+    c2_shooting_end = -plan.c2_beads_start + lead + plan.c2_beads_shooting_s
+    c3_shooting_start = plan.c3_beads_start + lead
+    assert c2_shooting_end == pytest.approx(BEADS_WINDOW_MARGIN_S, abs=0.05)
+    assert c3_shooting_start == pytest.approx(-BEADS_WINDOW_MARGIN_S, abs=0.05)
+    # The diamond ring bursts on the crescent side still wait for the beads bursts
+    assert plan.c2_diamond_start - plan.c2_beads_start >= plan.burst_s
+    assert plan.c3_diamond_start - plan.c3_beads_start >= plan.c3_beads_s
+
+
+def test_a_nikon_beads_burst_given_in_frames_holds_the_contact_edge():
+    """A Z 8 at 20 fps: the frame count sets the length, and the burst still ends at C2 and starts at C3."""
+    beads_c2, beads_c3 = (-4.0, 0.0), (0.0, 4.5)
+    plan = contact_burst_plan("Nikon", profile=TESTED_Z8, beads_c2=beads_c2, beads_c3=beads_c3)
+    lead = burst_lead_s("Nikon")
+
+    assert plan.c2_beads_shooting_s == pytest.approx(plan.c2_beads_param / TESTED_Z8.nikon_burst_fps)
+    assert CONTACT_BURST_S < plan.c2_beads_shooting_s < beads_c2[1] - beads_c2[0] + 2 * BEADS_WINDOW_MARGIN_S
+    assert -plan.c2_beads_start + lead + plan.c2_beads_shooting_s == pytest.approx(BEADS_WINDOW_MARGIN_S, abs=0.05)
+    assert plan.c3_beads_start + lead == pytest.approx(-BEADS_WINDOW_MARGIN_S, abs=0.05)
