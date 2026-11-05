@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- The jobs table shows the commands in words, at the shutter speed the camera will use, e.g. `Bracket of 5 frames, 1 EV apart, around 1/1000 s, f/8, ISO 200 (VirtualCamera)` for `take_bracket("VirtualCamera", 1/1000, 8, 200, 1 5)`.  The `Commands` drop-down above the table switches back to the commands as they are written in the script; the choice is saved, and the tooltip of a command shows the other form - by @mrosseel
 - README: a `What it does` section at the top explains what Solar Eclipse Workbench does and links to the posts about it on the Deep Sky Wim blog.  The notice about pre-release 2.0.0rc5 and `pip install --pre` is replaced by a short note that versions older than 2.0.0 calculate shutter speeds that are too long below 5 degrees solar altitude (Issue #194)
 - The `Baily's beads` window animates smoothly near second and third contact: within two minutes of C2 and C3 it is redrawn every 150 ms instead of once a second, so the beads, which last only a few seconds, no longer show as a few still images.  Further from the contacts, with the window closed, or in low-CPU mode nothing changes (PR #196)
 - Log timestamps are ISO 8601 (`2026-08-12T17:46:38.123Z`): the log file now writes the `T` between date and time, and the console shows the same UTC time with milliseconds instead of local time.  The run report still reads the logs of 2.0.0 (Issue #191)
