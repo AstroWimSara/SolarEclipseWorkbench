@@ -179,6 +179,21 @@ def _widget(config, *names):
     return None
 
 
+def _current_f_number(widget) -> Optional[float]:
+    """The f-number the aperture widget is set to, or None when it holds none."""
+    if widget is None:
+        return None
+    try:
+        return _f_number(widget.get_value()) or None
+    except Exception:
+        return None
+
+
+def _not_read(value) -> bool:
+    """Whether a camera state value says that the camera did not report it."""
+    return str(value).strip().lower() in ("", "unknown", "none")
+
+
 def read_brackets(config, vendor: Optional[str]) -> List[str]:
     """The brackets the camera takes itself ('<EV step> <frames>'), see bracketing.native_brackets."""
     choices = {}
@@ -300,7 +315,11 @@ def check_settings(camera, commands: List[ScriptCommand], report: TestReport) ->
     ap_choices.pop(None, None)
     ap_choices.pop(0.0, None)
     wanted_apertures = sorted({a for a in apertures if _f_number(a)}, key=_f_number)
-    if not ap_choices:
+    if not ap_choices and _current_f_number(ap_widget):
+        report.add(INFO, "Apertures could not be checked",
+                   f"{name} does not list the apertures of the lens over USB.  The script sets "
+                   f"f/{', f/'.join(wanted_apertures)}: check that the lens has them.")
+    elif not ap_choices:
         report.add(INFO, "Aperture cannot be set over USB",
                    f"No lens aperture is reported (manual lens or telescope?).  "
                    f"Set f/{', f/'.join(wanted_apertures)} by hand.")
@@ -378,6 +397,29 @@ def check_brackets(config, vendor: Optional[str], commands: List[ScriptCommand],
                        f"Use the same number of frames for every bracket.")
 
 
+def _clock_not_accessible(report: TestReport) -> None:
+    report.add(INFO, "The camera clock is not accessible over USB",
+               "SEW cannot set it: set the date and time on the camera by hand.")
+
+
+# Settings of FujiCamera.validate that the other camera state checks already report.
+_STATE_SETTINGS = {"AE Mode", "Focus Mode", "Battery"}
+
+
+def check_body_settings(camera, report: TestReport) -> None:
+    """The settings a camera checks itself (FujiCamera.validate), as report lines.
+
+    An info issue that expects no value only states a fact (the lens, the
+    current exposure), and is not in the report.
+    """
+    status = {"error": ERROR, "warning": WARNING}
+    for issue in camera.validate() or []:
+        if issue.setting in _STATE_SETTINGS or (issue.severity == "info" and not issue.expected):
+            continue
+        needs = f", needs {issue.expected}" if issue.expected and issue.severity != "info" else ""
+        report.add(status.get(issue.severity, INFO), f"{issue.setting}: {issue.current}{needs}", issue.message)
+
+
 def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport) -> None:
     """Mode dial, focus, battery, card space, sleep timer, burst support and clock."""
     from solareclipseworkbench import camera as cam_module
@@ -393,22 +435,34 @@ def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport
 
     def mode():
         shooting_mode = cam_module.get_shooting_mode(name, camera)
+        how = ("Set the shutter speed dial to T and the aperture ring to a number" if vendor == "Fuji"
+               else "Turn the mode dial to M")
         if str(shooting_mode).lower() == "manual":
             report.add(OK, "Shooting mode is Manual")
+        elif _not_read(shooting_mode):
+            report.add(WARNING, "The shooting mode could not be read",
+                       f"{how}, otherwise the camera chooses its own exposure.")
         else:
             report.add(ERROR, f"Shooting mode is '{shooting_mode}', not Manual",
-                       "Turn the mode dial to M, otherwise the camera chooses its own exposure.")
+                       f"{how}, otherwise the camera chooses its own exposure.")
 
     def focus():
         focus_mode = cam_module.get_focus_mode(camera)
         if str(focus_mode).lower() == "manual":
             report.add(OK, "Focus mode is Manual")
+        elif _not_read(focus_mode):
+            report.add(WARNING, "The focus mode could not be read",
+                       "Check that the focus mode is M: autofocus on the eclipse can fail and block the shot.")
         else:
             report.add(WARNING, f"Focus mode is '{focus_mode}', not Manual",
                        "Set the lens to MF: autofocus on the eclipse can fail and block the shot.")
 
     def battery():
         level = str(cam_module.get_battery_level(camera))
+        if _not_read(level):
+            report.add(INFO, "The camera does not report its battery level",
+                       "Check the level on the camera.  Use a full battery (or mains power) for the eclipse.")
+            return
         try:
             percent = float(level.rstrip("%"))
         except ValueError:
@@ -441,6 +495,9 @@ def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport
     def power_off():
         setting = cam_module.get_auto_power_off(camera)
         if setting is None:
+            if vendor == "Fuji":
+                report.add(INFO, "Auto power off cannot be read over USB",
+                           "Set Auto Power Off to OFF on the camera: the body must stay on for the whole script.")
             return
         label, raw, delay = setting
         if delay is not None and delay < cam_module.MIN_AUTO_POWER_OFF_S:
@@ -451,6 +508,12 @@ def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport
 
     def burst():
         bursts = [c for c in commands if c.func == "take_burst"]
+        if vendor == "Fuji" and (bursts or not commands):
+            report.add(INFO, "No continuous bursts over the Fujifilm SDK",
+                       "The SDK cannot start the continuous drive of the body.  Each take_burst command "
+                       "takes single frames, one after the other, as fast as the SDK releases them.  This "
+                       "is much slower than the drive of the body.  The full test measures how long a "
+                       "burst keeps the camera busy.")
         if (commands and not bursts) or vendor != "Canon":
             return
         if _widget(camera.get_config(), "eosremoterelease") is None:
@@ -463,8 +526,7 @@ def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport
     def clock():
         reading = cam_module.read_camera_clock(camera)
         if reading is None:
-            report.add(INFO, "The camera clock is not accessible over USB",
-                       "SEW cannot set it: set the date and time on the camera by hand.")
+            _clock_not_accessible(report)
         elif not reading.readable:
             report.add(WARNING, f"The camera clock reads '{reading.raw}'",
                        "SEW does not understand this value and will not set the clock: "
@@ -485,6 +547,8 @@ def check_camera_state(camera, commands: List[ScriptCommand], report: TestReport
     guarded("Auto power off", power_off)
     guarded("Burst support", burst)
     guarded("Camera clock", clock)
+    if vendor == "Fuji" and callable(getattr(camera, "validate", None)):
+        guarded("Body settings", lambda: check_body_settings(camera, report))
 
 
 # --- Full test (changes the clock, takes pictures) ---------------------------
@@ -566,8 +630,9 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
     try:
         if cam_module.set_time(camera):
             report.add(OK, "Camera clock set and verified")
+        elif (reading := cam_module.read_camera_clock(camera)) is None:
+            _clock_not_accessible(report)
         else:
-            reading = cam_module.read_camera_clock(camera)
             shown = (reading.camera_time.strftime("%Y-%m-%d %H:%M:%S")
                      if reading is not None and reading.camera_time else "unknown")
             report.add(ERROR, "The camera clock could not be set reliably",
@@ -812,7 +877,8 @@ def read_camera_profile(camera) -> CameraProfile:
     if vendor == "Canon":
         continuous = _widget(config, "eosremoterelease") is not None
     else:
-        continuous = True
+        # The Fujifilm SDK cannot start the continuous drive of the body.
+        continuous = vendor != "Fuji"
 
     return CameraProfile(camera=name, vendor=vendor, shutter_speeds=speeds, isos=sorted(set(isos)),
                          apertures=apertures, continuous_burst=continuous,
@@ -845,9 +911,17 @@ def check_camera(camera, full: bool = False) -> Tuple[TestReport, CameraProfile]
         report.add(OK, f"ISO {min(profile.isos)}–{max(profile.isos)}", ", ".join(map(str, profile.isos)))
     else:
         report.add(WARNING, "The camera does not list its ISO values")
+    try:
+        aperture_now = _current_f_number(_widget(camera.get_config(), "aperture", "f-number"))
+    except Exception:
+        aperture_now = None
     if profile.apertures:
         report.add(OK, f"Aperture f/{_format_f(profile.apertures[0])}–f/{_format_f(profile.apertures[-1])} "
                        "with the mounted lens", ", ".join(f"f/{_format_f(a)}" for a in profile.apertures))
+    elif aperture_now:
+        report.add(INFO, "The camera does not list the apertures of the lens",
+                   f"It is at f/{_format_f(aperture_now)} now.  The script keeps the aperture you enter: "
+                   "check that the lens has it.")
     else:
         report.add(INFO, "Aperture cannot be set over USB",
                    "Manual lens or telescope: the script keeps the aperture you enter; set it on the lens by hand.")
@@ -880,13 +954,15 @@ def check_camera(camera, full: bool = False) -> Tuple[TestReport, CameraProfile]
             profile.clock_settable = bool(cam_module.set_time(camera))
             if profile.clock_settable:
                 report.add(OK, "Camera clock set and verified")
+            elif cam_module.read_camera_clock(camera) is None:
+                _clock_not_accessible(report)
             else:
                 report.add(ERROR, "The camera clock could not be set reliably",
                            "SEW will not set the clock of this camera; set the date and time on the camera by hand.")
         except Exception as e:
             report.add(ERROR, "Setting the camera clock failed", str(e))
 
-        aperture = _format_f(profile.apertures[0]) if profile.apertures else "0"
+        aperture = _format_f(profile.apertures[0] if profile.apertures else aperture_now or 0)
         iso = min(profile.isos) if profile.isos else 100
         settings = cam_module.CameraSettings(name, "1/1000", aperture, iso)
         try:

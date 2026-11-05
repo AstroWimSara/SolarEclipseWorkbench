@@ -3213,11 +3213,14 @@ def get_shooting_mode(camera_name: str, camera: Camera) -> str:
 
     Returns: Shooting mode of the camera
     """
+    vendor = getattr(camera, 'vendor', None)
+    # A Fuji body reads its exposure mode over the SDK (see fuji_camera._FujiConfigStub).
+    if vendor == 'Fuji':
+        return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
+
     # For virtual/non-gphoto cameras assume Manual shooting mode
     if isinstance(camera, BaseCamera) and not hasattr(camera, '_camera'):
         return "Manual"
-
-    vendor = getattr(camera, 'vendor', None)
     try:
         if vendor == 'Canon':
             return camera.get_config().get_child_by_name('autoexposuremodedial').get_value()
