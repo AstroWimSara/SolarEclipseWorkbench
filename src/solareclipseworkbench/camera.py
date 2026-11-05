@@ -37,6 +37,10 @@ class SdkDetection(NamedTuple):
     # Lower-case words: a gphoto2 model name that contains one is left to the SDK
     skip_gphoto: tuple
 
+    def claims(self, model_name: str) -> bool:
+        """Whether gphoto2 must leave the camera with this model name to the SDK."""
+        return any(word in model_name.lower() for word in self.skip_gphoto)
+
 
 # Detection functions of cameras that are driven through a vendor SDK instead of
 # gphoto2 (e.g. fuji_camera.detect_for_workbench).  get_camera_dict calls them
@@ -48,6 +52,29 @@ def register_sdk_backend(detect: Callable[[], SdkDetection]) -> None:
     """Add a vendor SDK to camera detection."""
     if detect not in _sdk_backends:
         _sdk_backends.append(detect)
+
+
+def detect_sdk_cameras() -> SdkDetection:
+    """Open the cameras of every vendor SDK (see register_sdk_backend).
+
+    Call it before gphoto2 opens a camera: the first driver that claims the USB
+    device keeps it.  A backend that fails is reported, and the others still run.
+
+    Returns: The cameras the SDKs opened, and the model name words gphoto2 must leave alone.
+    """
+    cameras: dict = {}
+    skip_gphoto: list = []
+    for detect in _sdk_backends:
+        try:
+            found = detect()
+        except Exception as exc:
+            logging.exception('Camera detection through %s failed', getattr(detect, '__module__', detect))
+            hardware_problems.report('Camera detection', 'Detection through a camera SDK failed',
+                                     detail=str(exc))
+            continue
+        cameras.update(found.cameras)
+        skip_gphoto.extend(found.skip_gphoto)
+    return SdkDetection(cameras, tuple(skip_gphoto))
 
 
 def _is_sony_model(name: str) -> bool:
@@ -3638,18 +3665,8 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
 
     # Cameras driven through a vendor SDK come first: the SDK must claim the
     # USB device before gphoto2 does.
-    cameras: dict = {}
-    skip_gphoto: list = []
-    for detect in _sdk_backends:
-        try:
-            found = detect()
-        except Exception as exc:
-            logging.exception('Camera detection through %s failed', getattr(detect, '__module__', detect))
-            hardware_problems.report('Camera detection', 'Detection through a camera SDK failed',
-                                     detail=str(exc))
-            continue
-        cameras.update(found.cameras)
-        skip_gphoto.extend(found.skip_gphoto)
+    sdk = detect_sdk_cameras()
+    cameras: dict = dict(sdk.cameras)
 
     detected = detect_cameras()  # [(model_name, port), ...]
     try:
@@ -3658,7 +3675,7 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
         logging.debug('Could not print found cameras to terminal')
 
     for model_name, port in detected:
-        if any(word in model_name.lower() for word in skip_gphoto):
+        if sdk.claims(model_name):
             logging.info('Leaving %s to its camera SDK; gphoto2 does not claim it', model_name)
             continue
         cam = get_camera_by_port(model_name, port)

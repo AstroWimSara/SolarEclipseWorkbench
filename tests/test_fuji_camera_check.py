@@ -18,6 +18,7 @@ from fujixsdk.camera import BatteryInfo
 
 from solareclipseworkbench import camera as cam_module
 from solareclipseworkbench import camera_check, fuji_camera, hardware_problems
+from solareclipseworkbench.camera import SdkDetection
 from solareclipseworkbench.camera_check import (
     ERROR, INFO, OK, WARNING, check_camera, check_script_with_cameras, check_settings, parse_commands,
     read_camera_profile,
@@ -315,3 +316,21 @@ def test_a_slow_test_picture_replaces_the_default_overhead(clock):
     assert any(t.startswith("Test picture (1/1000, f/5.6, ISO 200) took 2.8 s") for t in _titles(report, INFO))
     assert "The camera clock is not accessible over USB" in _titles(report, INFO)
 
+
+# ------------------------------------------------------------------ detection
+
+
+def test_sdk_detection_merges_the_backends_and_survives_a_failing_one(monkeypatch):
+    body = SimpleNamespace(name=NAME)
+
+    def broken():
+        raise RuntimeError("library missing")
+
+    monkeypatch.setattr(cam_module, "_sdk_backends", [broken, lambda: SdkDetection({NAME: body}, ("fuji",))])
+
+    found = cam_module.detect_sdk_cameras()
+
+    assert found.cameras == {NAME: body}
+    assert found.claims("Fuji Fujifilm X-T4")
+    assert not found.claims("Nikon DSC Z 8")
+    assert any("SDK failed" in str(p) for p in hardware_problems.peek())
