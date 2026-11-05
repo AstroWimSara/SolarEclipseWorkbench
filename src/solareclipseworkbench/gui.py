@@ -1272,6 +1272,16 @@ class SolarEclipseController(Observer):
         # The script loaded last, for the timeline
         self.script_filename: Union[str, None] = None
 
+        # The beads live for three or four seconds, so a 1 Hz redraw shows them
+        # in two or three frames.  Near a contact, a 150 ms timer redraws the
+        # bead window on a clock extrapolated from the last update_time() tick.
+        self._beads_clock = None
+        self._beads_fast_timer = QTimer()
+        self._beads_fast_timer.setInterval(150)
+        self._beads_fast_timer.timeout.connect(self._animate_beads)
+        if not low_cpu_mode:
+            self._beads_fast_timer.start()
+
         # Keeps idle cameras from going to sleep before the script starts.
         # Started once the cameras are connected; update_time() pauses it
         # around totality and just before scheduled commands.
@@ -1476,12 +1486,32 @@ class SolarEclipseController(Observer):
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
+        self._beads_clock = (reference_now, time.monotonic())
 
         self._update_keep_alive_allowed(reference_now)
 
         # self.view.eclipse_visualization.plot(current_time_utc)    FIXME
 
         self.update_jobs_countdown()
+
+    def _animate_beads(self):
+        """Redraw the bead window between clock ticks when a contact is near.
+
+        The time is the reference time of the last update_time() tick plus the
+        time since that tick, so a simulation offset is already in it.  More than
+        two minutes from C2 and C3 the 1 Hz tick is sufficient, and nothing is done.
+        """
+        try:
+            if self._beads_clock is None or self._beads_window is None or not self._beads_window.isVisible():
+                return
+            reference, base = self._beads_clock
+            now = reference + datetime.timedelta(seconds=time.monotonic() - base)
+            for info in (self.model.c2_info, self.model.c3_info):
+                if info is not None and abs((info.time_utc - now).total_seconds()) < 120:
+                    self._beads_window.set_current_time(now)
+                    return
+        except Exception:
+            LOGGER.debug("Bead animation tick failed", exc_info=True)
 
     def _update_keep_alive_allowed(self, reference_now: datetime.datetime):
         """Allow keep-alive pings only when they cannot get in the way of a shot.
