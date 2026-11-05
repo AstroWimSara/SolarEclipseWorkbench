@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QPushButton, QMessageBox, QProgressDialog, QDialog, QPlainTextEdit, QProgressBar, QWidget, QScrollArea
 )
 
+from solareclipseworkbench.camera import detect_cameras, detect_sdk_cameras, get_camera_by_port
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench import solar_radius
 from solareclipseworkbench.location_ui import (ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget,
@@ -860,19 +861,34 @@ class EquipmentPage(QWizardPage):
         """Test the connected camera and keep the result for generating the script."""
         from solareclipseworkbench.camera_check import WARNING, check_camera
 
+        def detect():
+            # A camera SDK claims its bodies before gphoto2 can (see camera.get_camera_dict).
+            sdk = detect_sdk_cameras()
+            on_gphoto2 = [(m, p) for m, p in detect_cameras() if not sdk.claims(m)]
+            return sdk.cameras, on_gphoto2
+
+        def close_sdk_cameras():
+            for opened in sdk_cameras.values():
+                try:
+                    opened.disconnect()
+                except Exception:
+                    pass
+
         try:
-            from solareclipseworkbench.camera import detect_cameras, get_camera_by_port
-            detected = detect_cameras()
+            sdk_cameras, on_gphoto2 = run_with_progress(self, "Test Camera", "Looking for cameras...", detect)
         except Exception as exc:
-            QMessageBox.critical(self, "Detection Failed", f"Could not detect cameras via gphoto2:\n{exc}")
+            QMessageBox.critical(self, "Detection Failed", f"Could not detect cameras:\n{exc}")
             return
+        # (model name, gphoto2 port), with port None for a camera an SDK opened
+        detected = [(m, None) for m in sdk_cameras] + on_gphoto2
         if not detected:
             QMessageBox.information(self, "No Camera Found",
                                     "No camera was detected.  Connect the camera via USB, switch it on and try "
                                     "again.  Close Solar Eclipse Workbench if it is running.")
             return
         if len(detected) > 1:
-            model_list = "\n".join(f"  • {m} ({p})" for m, p in detected)
+            close_sdk_cameras()
+            model_list = "\n".join(f"  • {m} ({p or 'camera SDK'})" for m, p in detected)
             QMessageBox.warning(self, "Multiple Cameras Connected",
                                 f"More than one camera was detected:\n{model_list}\n\n"
                                 "Disconnect all cameras except the one to test, then try again.")
@@ -887,10 +903,11 @@ class EquipmentPage(QWizardPage):
             "also sets the camera clock and checks the result, and takes one test picture and one test "
             "burst to measure how long the camera needs for them.")
         if full is None:
+            close_sdk_cameras()
             return
 
         def run():
-            cam = get_camera_by_port(model_name, port)
+            cam = sdk_cameras[model_name] if port is None else get_camera_by_port(model_name, port)
             try:
                 return check_camera(cam, full=full)
             finally:

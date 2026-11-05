@@ -34,8 +34,14 @@ See [Fire the body through a relay](#fire-the-body-through-a-relay).
   time call.  Set the clock on the body by hand.  Each run log has the time at
   which each command released the shutter, in UTC.
 - **No live view.**  The live view window is for gphoto2 cameras only.
-- **No camera test in the wizard.**  `Test Camera...` and `Verify with
-  Camera...` read gphoto2 settings, and do not support a Fuji body yet.
+- **The camera test cannot read everything.**  `Test Camera...` and `Verify
+  with Camera...` in the wizard work with a Fuji body.  They show the shutter
+  speeds and ISO values that the body takes, the body settings that the SDK
+  checks, and how long a test picture and a test burst take.  A speed that the
+  body refuses is shown as the speed that the body takes instead.  The SDK does
+  not list the apertures of the lens, and an X-T4 does not report its battery
+  level.  The test cannot read the auto power off setting or the clock.  Check
+  these on the body.
 - **Shutter speeds from 1/8000 to 30 s.**  A faster speed needs the electronic
   shutter, which is a setting on the body.  An exposure past either end is taken
   at the end of the scale.

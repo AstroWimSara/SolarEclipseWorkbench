@@ -54,6 +54,7 @@ try:
         FOCUS_MODE_NAMES,
         ITEM_MEDIASLOT1 as SDK_ITEM_MEDIASLOT1,
         ITEM_MEDIASLOT2 as SDK_ITEM_MEDIASLOT2,
+        POWERCAPACITY_PERCENT,
         SDK_FOCUS_MANUAL,
         SHUTTER_SPEED_NAMES,
     )
@@ -69,6 +70,7 @@ except ImportError as _exc:
     SHUTTER_SPEED_NAMES = {}
     BUFFER_SLOTS = 32
     DRAIN_AT = 0.75
+    POWERCAPACITY_PERCENT = {}
 
     class BusyError(Exception):
         """Stand-in so the retry helpers below import without the bindings."""
@@ -352,6 +354,11 @@ def _parse_shutter_speed(speed_str: str, measured: Optional[Sequence[float]] = N
     return val
 
 
+def _script_speed(value: int) -> str:
+    """A shutter speed from the SDK table, as a script writes it: '1/2000' or '1.6'."""
+    return str(SHUTTER_SPEED_NAMES.get(value, value)).rstrip('"').strip()
+
+
 def _distinct(speeds) -> list:
     """Drop speeds that repeat one already in the list.
 
@@ -393,11 +400,12 @@ def _parse_iso(iso_val) -> Optional[int]:
 # ======================================================================
 
 class _FujiWidgetStub:
-    """The get_value()/set_value() part of a gphoto2 config widget."""
+    """The get_value()/set_value() and choices part of a gphoto2 config widget."""
 
-    def __init__(self, name: str, value: Any):
+    def __init__(self, name: str, value: Any, choices: Sequence[str] = ()):
         self._name = name
         self._value = value
+        self._choices = list(choices)
 
     def get_value(self):
         return self._value
@@ -405,12 +413,20 @@ class _FujiWidgetStub:
     def set_value(self, v: Any):
         self._value = v
 
+    def count_choices(self) -> int:
+        return len(self._choices)
+
+    def get_choice(self, index: int) -> str:
+        return self._choices[index]
+
 
 class _FujiConfigStub:
     """The get_child_by_name() part of a gphoto2 config.
 
-    Maps the widget names the status helpers in camera.py read (battery level,
-    focus mode, shooting mode, ...) to values read from the body over the SDK.
+    Maps the widget names the status helpers in camera.py and the camera check
+    read (battery level, focus mode, shooting mode, ...) to values read from the
+    body over the SDK.  The shutter speed and ISO widgets also carry the values
+    the body takes, as choices.
     """
 
     def __init__(self, fuji_camera: FujiCamera):
@@ -423,10 +439,15 @@ class _FujiConfigStub:
         if name_lower == 'batterylevel':
             # The body reports a coarse state, not a percentage, and some SDK
             # modules (the X-T4's) do not implement the battery API at all.
+            # camera.py reads a percentage, as gphoto2 gives it, so a state is
+            # given as its approximate percentage.  A state without one (mains
+            # power, charging) is given by name.  The level is that of the body.
             try:
-                return _FujiWidgetStub(name, sdk_cam.get_battery_info().describe())
+                info = sdk_cam.get_battery_info()
             except Exception:
                 return _FujiWidgetStub(name, "Unknown")
+            percent = POWERCAPACITY_PERCENT.get(info.body)
+            return _FujiWidgetStub(name, f"{percent}%" if percent is not None else info.describe())
 
         if name_lower == 'focusmode':
             try:
@@ -447,17 +468,21 @@ class _FujiConfigStub:
         if name_lower == 'shutterspeed':
             try:
                 speed, _ = sdk_cam.get_shutter_speed()
-                return _FujiWidgetStub(name, SHUTTER_SPEED_NAMES.get(speed, str(speed)))
+                value = SHUTTER_SPEED_NAMES.get(speed, str(speed))
             except Exception:
-                return _FujiWidgetStub(name, "")
+                value = ""
+            return _FujiWidgetStub(name, value, self._cam.offered_speeds())
 
         if name_lower == 'iso':
             try:
-                return _FujiWidgetStub(name, str(sdk_cam.get_iso()))
+                value = str(sdk_cam.get_iso())
             except Exception:
-                return _FujiWidgetStub(name, "")
+                value = ""
+            return _FujiWidgetStub(name, value, self._cam.offered_isos())
 
         if name_lower in ('aperture', 'f-number'):
+            # No choices: the SDK lists the apertures per zoom position, and
+            # that call is not used.
             try:
                 return _FujiWidgetStub(name, f"{sdk_cam.get_aperture() / 100:.1f}")
             except Exception:
@@ -1245,6 +1270,27 @@ class FujiCamera(BaseCamera):
 
     def validate(self) -> list[CameraIssue]:
         return validate_for_eclipse(self._sdk)
+
+    def offered_speeds(self) -> list[str]:
+        """The shutter speeds this body takes, as a script writes them, shortest first.
+
+        These are the speeds of :func:`_accepted_grid`, so a speed the body is
+        known to refuse is not in the list.  When the body gives its own list,
+        only the speeds in both lists are kept.  The X-T4 gives an empty list.
+        """
+        try:
+            listed = {value for value in self._sdk.get_supported_shutter_speeds() if value > 0}
+        except Exception:
+            listed = set()
+        return [_script_speed(value) for _, value in _accepted_grid(self._measured)
+                if not listed or value in listed]
+
+    def offered_isos(self) -> list[str]:
+        """The fixed ISO values the body lists, lowest first.  The auto values are left out."""
+        try:
+            return [str(value) for value in sorted(set(self._sdk.get_supported_iso())) if value > 0]
+        except Exception:
+            return []
 
     def describe_speeds(self, speeds: Sequence[int]) -> str:
         """The shutter speeds of a list of SDK values, as text."""
