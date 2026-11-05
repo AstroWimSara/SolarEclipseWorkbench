@@ -249,10 +249,10 @@ def parse_timing_directives(lines) -> Dict[str, TimingProfile]:
 def vendor_from_name(camera_name: str) -> Optional[str]:
     """Guess the vendor from a camera name as written in a script.
 
-    Returns 'Canon', 'Nikon', 'Sony' or None (e.g. for a user-defined alias).
+    Returns 'Canon', 'Nikon', 'Sony', 'Fuji' or None (e.g. for a user-defined alias).
     """
     name = (camera_name or "").lower()
-    for vendor in ("Canon", "Nikon", "Sony"):
+    for vendor in ("Canon", "Nikon", "Sony", "Fuji"):
         if vendor.lower() in name:
             return vendor
     return None
