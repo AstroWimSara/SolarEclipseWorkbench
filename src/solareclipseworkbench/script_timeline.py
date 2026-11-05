@@ -24,8 +24,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from solareclipseworkbench import scripts
-from solareclipseworkbench.command_timing import DEFAULT_PROFILE, parse_timing_directives
-from solareclipseworkbench.utils import (CameraBusyWindow, ReplayedWindow, camera_busy_window,
+from solareclipseworkbench.command_timing import DEFAULT_PROFILE, parse_timing_directives, relay_duration_s
+from solareclipseworkbench.hardware_registry import HARDWARE_COMMANDS
+from solareclipseworkbench.utils import (RELAY_BUSY_NAME, CameraBusyWindow, ReplayedWindow, camera_busy_window,
                                          replay_camera_windows)
 
 # Commands that do not use a camera
@@ -167,15 +168,25 @@ def build_timeline(filename: str, reference_moments: dict, cameras: Optional[dic
         start = reference + delta if sign == "+" else reference - delta
         latest = start if latest is None else max(latest, start)
 
-        camera_name = script_args[0].strip() if script_args and func_name not in NON_CAMERA_COMMANDS else None
+        if func_name in HARDWARE_COMMANDS:
+            # The relay commands have no camera argument.  They share one row.
+            camera_name = RELAY_BUSY_NAME
+        elif script_args and func_name not in NON_CAMERA_COMMANDS:
+            camera_name = script_args[0].strip()
+        else:
+            camera_name = None
         command = TimelineCommand(func_name, camera_name, start, f"{ref_moment}{sign}{fields[3].strip()}",
                                   description)
         commands.append(command)
         if camera_name is None:
             continue
-        profile = timing_profiles.get(camera_name, DEFAULT_PROFILE)
-        window = camera_busy_window(start, func_name, script_args, description,
-                                    (cameras or {}).get(camera_name), profile)
+        if func_name in HARDWARE_COMMANDS:
+            busy_s = relay_duration_s(func_name, [arg.strip() for arg in script_args if arg.strip()])
+            window = CameraBusyWindow(RELAY_BUSY_NAME, start, busy_s, description) if busy_s is not None else None
+        else:
+            profile = timing_profiles.get(camera_name, DEFAULT_PROFILE)
+            window = camera_busy_window(start, func_name, script_args, description,
+                                        (cameras or {}).get(camera_name), profile)
         if window is not None:
             windows.append(window)
             window_of[id(window)] = command
