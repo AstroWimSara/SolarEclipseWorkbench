@@ -21,9 +21,9 @@ from typing import Union, Optional
 import numpy as np
 import pandas as pd
 import pytz
-from PyQt6.QtCore import (QTimer, QRect, Qt, QAbstractTableModel, QModelIndex,
+from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
                          QSettings, QSignalBlocker, pyqtSignal)
-from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor, \
+from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
@@ -48,7 +48,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size, get_exposure_compensation, \
     set_exposure_compensation, compensated_shutter_speed, EXPOSURE_COMPENSATION_STEP_EV, \
     MAX_EXPOSURE_COMPENSATION_EV
-from solareclipseworkbench import hardware_problems, job_text
+from solareclipseworkbench import hardware_problems, job_text, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
@@ -3314,6 +3314,10 @@ class LiveViewWindow(QWidget):
     lets it be changed (Canon EOS, recent Nikon bodies), ``Preview size``
     selects another one for as long as the window is open; the camera's own
     setting is restored when the window closes.
+
+    The focus tools (peaking, focus score, loupe, histogram) and the crosshair
+    work on the frames of every camera.  A click on the preview sets the zoom
+    centre and the part of the frame that the loupe shows.
     """
 
     def __init__(self, camera, parent=None):
@@ -3328,10 +3332,11 @@ class LiveViewWindow(QWidget):
 
         self.setWindowTitle(f"Live View — {camera.name}")
 
-        # Image display
-        self._image_label = QLabel("Waiting for first preview frame…")
+        # Image display.  A click sets the zoom centre.
+        self._image_label = live_view_tools.ClickableImageLabel("Waiting for first preview frame…")
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_label.setMinimumSize(320, 240)
+        self._image_label.clicked.connect(self._on_image_clicked)
 
         # Timestamp of last received frame
         self._timestamp_label = QLabel()
@@ -3354,6 +3359,10 @@ class LiveViewWindow(QWidget):
         self._zoom_combo.setCurrentIndex(0)
         self._zoom_factor = 1.0
         self._zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
+        # The zoom centre as a part of the frame, from 0 to 1 on each axis
+        self._zoom_centre = QPointF(0.5, 0.5)
+        # The part of the frame that the image label shows
+        self._shown_rect: Union[QRect, None] = None
 
         # Preview size: only offered when the camera lets it be changed
         self._size_combo = QComboBox()
@@ -3378,8 +3387,42 @@ class LiveViewWindow(QWidget):
             )
         self._size_combo.currentTextChanged.connect(self._on_size_changed)
 
+        # Focus and framing tools
+        self._peaking_box = QCheckBox("Focus peaking")
+        self._peaking_box.setToolTip("Colour the pixels on sharp edges.  Turn the focus until the limb has "
+                                     "the most colour.")
+        self._peaking_colour_combo = QComboBox()
+        for name in live_view_tools.PEAKING_COLOURS:
+            self._peaking_colour_combo.addItem(name.capitalize(), name)
+        self._peaking_colour_combo.setCurrentIndex(
+            self._peaking_colour_combo.findData(live_view_tools.DEFAULT_PEAKING_COLOUR))
+        self._peaking_colour_combo.setToolTip("Colour of the focus peaking.  Use another colour than red "
+                                              "for a red Sun.")
+        self._peaking_sensitivity_combo = QComboBox()
+        for name in live_view_tools.PEAKING_SENSITIVITY:
+            self._peaking_sensitivity_combo.addItem(name.capitalize(), name)
+        self._peaking_sensitivity_combo.setCurrentIndex(
+            self._peaking_sensitivity_combo.findData(live_view_tools.DEFAULT_PEAKING_SENSITIVITY))
+        self._peaking_sensitivity_combo.setToolTip("High shows weak edges, such as the limb through a "
+                                                   "filter.  Low shows only the strongest edges.")
+        self._loupe_box = QCheckBox("Loupe")
+        self._histogram_box = QCheckBox("Histogram")
+        self._crosshair_box = QCheckBox("Crosshair")
+        self._crosshair_box.setChecked(True)
+        for box in (self._peaking_box, self._loupe_box, self._histogram_box, self._crosshair_box):
+            box.toggled.connect(self._on_tools_changed)
+        for combo in (self._peaking_colour_combo, self._peaking_sensitivity_combo):
+            combo.currentIndexChanged.connect(self._on_tools_changed)
+
+        self._focus_graph = live_view_tools.FocusScoreGraph()
+        self._focus_graph.setToolTip("Focus score of the shown part of the frame.  A higher score is sharper.")
+        self._loupe = live_view_tools.LoupeWidget()
+        self._loupe.setVisible(False)
+        self._histogram = live_view_tools.HistogramWidget()
+        self._histogram.setVisible(False)
+
         # Pan controls (hidden until a zoom > 1 is selected)
-        self._last_pixmap: Union[QPixmap, None] = None
+        self._last_image: Union[QImage, None] = None
         self._last_ts: Union[datetime.datetime, None] = None
         self._h_slider = QSlider(Qt.Orientation.Horizontal)
         self._h_slider.setRange(0, 0)
@@ -3401,24 +3444,38 @@ class LiveViewWindow(QWidget):
         btn_layout.addWidget(QLabel("Zoom:"))
         btn_layout.addWidget(self._zoom_combo)
 
-        # Image area with optional vertical pan slider
+        tools_layout = QHBoxLayout()
+        tools_layout.addWidget(self._peaking_box)
+        tools_layout.addWidget(self._peaking_colour_combo)
+        tools_layout.addWidget(self._peaking_sensitivity_combo)
+        tools_layout.addWidget(self._loupe_box)
+        tools_layout.addWidget(self._histogram_box)
+        tools_layout.addWidget(self._crosshair_box)
+        tools_layout.addStretch(1)
+
+        # Image area with optional vertical pan slider and the loupe
         layout = QVBoxLayout()
         image_area = QHBoxLayout()
         image_area.addWidget(self._image_label, stretch=1)
         image_area.addWidget(self._v_slider)
-        layout.addLayout(image_area)
+        image_area.addWidget(self._loupe, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(image_area, stretch=1)
         layout.addWidget(self._h_slider)
+        layout.addWidget(self._focus_graph)
+        layout.addWidget(self._histogram)
         layout.addWidget(self._timestamp_label)
         layout.addWidget(self._status_label)
+        layout.addLayout(tools_layout)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        # Poll the frame queue every 500 ms on the GUI thread
+        # Poll the frame queue on the GUI thread
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._poll_frame)
         self._poll_timer.start()
 
+        self._on_tools_changed()
         self._start_thread()
 
     # ------------------------------------------------------------------
@@ -3460,10 +3517,9 @@ class LiveViewWindow(QWidget):
         image = QImage.fromData(jpeg_bytes)
         if image.isNull():
             return
-        pixmap = QPixmap.fromImage(image)
         # Store and render using the centralized renderer so pan/zoom UI
         # remains in sync with the latest frame.
-        self._render_pixmap(pixmap, ts)
+        self._render_image(image, ts, new_frame=True)
 
     def _apply_state(self):
         """Push the user+totality state into the thread and refresh the button."""
@@ -3520,6 +3576,16 @@ class LiveViewWindow(QWidget):
         if not set_live_view_size(self._camera, size):
             QMessageBox.warning(self, "Preview size", f"The camera did not accept preview size {size}.")
 
+    def _on_tools_changed(self, *_args):
+        """Read the tool controls, and show the last frame with them."""
+        self._peaking_colour_combo.setEnabled(self._peaking_box.isChecked())
+        self._peaking_sensitivity_combo.setEnabled(self._peaking_box.isChecked())
+        self._loupe.setVisible(self._loupe_box.isChecked())
+        self._histogram.setVisible(self._histogram_box.isChecked())
+        if not self._histogram_box.isChecked():
+            self._histogram.clear()
+        self._rerender()
+
     def _on_zoom_changed(self, index: int):
         """Slot for zoom combo box changes."""
         text = self._zoom_combo.currentText() if hasattr(self, "_zoom_combo") else "Fit"
@@ -3531,31 +3597,70 @@ class LiveViewWindow(QWidget):
                 self._zoom_factor = float(text.rstrip('x'))
             except Exception:
                 self._zoom_factor = 1.0
+        # A score of another zoom cannot be compared with this one
+        self._focus_graph.reset()
         # Re-render the last frame with the new zoom (if any)
-        if getattr(self, "_last_pixmap", None) is not None:
-            self._render_pixmap(self._last_pixmap, getattr(self, "_last_ts", datetime.datetime.now()))
+        self._rerender()
 
     def _on_pan_changed(self, _value: int):
-        """Called when either pan slider moves; re-render using last pixmap."""
-        if getattr(self, "_last_pixmap", None) is not None:
-            self._render_pixmap(self._last_pixmap, getattr(self, "_last_ts", datetime.datetime.now()))
+        """Called when either pan slider moves; re-render using last frame."""
+        self._focus_graph.reset()
+        self._rerender()
 
-    def _render_pixmap(self, pixmap: QPixmap, ts: datetime.datetime):
-        """Render the given QPixmap into the image label respecting zoom and pan.
+    def _on_image_clicked(self, nx: float, ny: float):
+        """Set the zoom centre to the clicked point of the frame."""
+        if self._last_image is None or self._shown_rect is None:
+            return
+        self._zoom_centre = live_view_tools.click_to_source(
+            nx, ny, self._shown_rect, self._last_image.width(), self._last_image.height())
+        self._focus_graph.reset()
+        self._loupe.reset()
+        if self._zoom_factor > 1.0:
+            self._centre_sliders()
+        self._rerender()
 
-        Stores the last pixmap/timestamp so slider updates can trigger re-renders.
+    def _centre_sliders(self):
+        """Move the pan sliders so that the zoom centre is in the middle of the view."""
+        if self._last_image is None:
+            return
+        ow, oh = self._last_image.width(), self._last_image.height()
+        crop_w = max(1, int(ow / self._zoom_factor))
+        crop_h = max(1, int(oh / self._zoom_factor))
+        rect = live_view_tools.crop_rect(ow, oh, self._zoom_centre, crop_w, crop_h)
+        self._h_slider.blockSignals(True)
+        self._v_slider.blockSignals(True)
+        self._h_slider.setRange(0, max(0, ow - crop_w))
+        self._v_slider.setRange(0, max(0, oh - crop_h))
+        self._h_slider.setValue(rect.x())
+        self._v_slider.setValue(rect.y())
+        self._h_slider.blockSignals(False)
+        self._v_slider.blockSignals(False)
+
+    def _rerender(self):
+        if getattr(self, "_last_image", None) is not None:
+            self._render_image(self._last_image, getattr(self, "_last_ts", None) or datetime.datetime.now())
+
+    def _render_image(self, image: QImage, ts: datetime.datetime, new_frame: bool = False):
+        """Render the given frame into the image label respecting zoom, pan and the tools.
+
+        Stores the last frame/timestamp so slider and tool changes can trigger re-renders.
+        The focus score, histogram and loupe are updated only for a new frame.
         """
-        self._last_pixmap = pixmap
+        self._last_image = image
         self._last_ts = ts
 
         zoom = getattr(self, "_zoom_factor", 1.0)
-        ow, oh = pixmap.width(), pixmap.height()
+        ow, oh = image.width(), image.height()
 
         if zoom and zoom > 1.0 and ow > 0 and oh > 0:
             crop_w = max(1, int(ow / zoom))
             crop_h = max(1, int(oh / zoom))
             max_x = max(0, ow - crop_w)
             max_y = max(0, oh - crop_h)
+
+            # If sliders were previously hidden, start at the zoom centre
+            if not self._h_slider.isVisible():
+                self._centre_sliders()
 
             # Update slider ranges and make visible
             self._h_slider.blockSignals(True)
@@ -3564,13 +3669,6 @@ class LiveViewWindow(QWidget):
             self._h_slider.setPageStep(max(1, crop_w))
             self._v_slider.setRange(0, max_y)
             self._v_slider.setPageStep(max(1, crop_h))
-
-            # If sliders were previously hidden, default to centred view
-            if not self._h_slider.isVisible():
-                self._h_slider.setValue(max_x // 2)
-            if not self._v_slider.isVisible():
-                self._v_slider.setValue(max_y // 2)
-
             self._h_slider.setVisible(True)
             self._v_slider.setVisible(True)
             self._h_slider.blockSignals(False)
@@ -3578,40 +3676,44 @@ class LiveViewWindow(QWidget):
 
             x0 = min(self._h_slider.value(), max_x) if max_x > 0 else 0
             y0 = min(self._v_slider.value(), max_y) if max_y > 0 else 0
-
-            try:
-                crop = pixmap.copy(x0, y0, crop_w, crop_h)
-            except Exception:
-                crop = pixmap
-
-            disp = crop.scaled(
-                self._image_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            shown_rect = QRect(x0, y0, crop_w, crop_h)
+            shown = image.copy(shown_rect)
         else:
             # Hide pan controls when not zoomed
             self._h_slider.setVisible(False)
             self._v_slider.setVisible(False)
-            disp = pixmap.scaled(
-                self._image_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            shown_rect = QRect(0, 0, ow, oh)
+            shown = image
+        self._shown_rect = shown_rect
 
-        # Draw blue crosshair at the centre of the displayed pixmap
-        w, h = disp.width(), disp.height()
-        painter = QPainter(disp)
-        pen = QPen(QColor(0, 120, 255))
-        pen.setWidth(1)
-        painter.setPen(pen)
-        painter.drawLine(0, h // 2, w, h // 2)  # horizontal
-        painter.drawLine(w // 2, 0, w // 2, h)  # vertical
-        painter.end()
+        if new_frame and self._histogram_box.isChecked():
+            # The full frame: the exposure is of the scene, not of the zoomed part
+            self._histogram.set_image(image)
+        if new_frame and self._loupe_box.isChecked():
+            # The frame as the camera sent it, before the peaking colour
+            self._loupe.set_image(image, self._zoom_centre)
+
+        # One Laplacian for the focus score and the peaking
+        lap = live_view_tools.laplacian(shown)
+        if lap is not None:
+            if new_frame:
+                self._focus_graph.set_score(live_view_tools.focus_score(lap))
+            if self._peaking_box.isChecked():
+                colour = live_view_tools.PEAKING_COLOURS[self._peaking_colour_combo.currentData()]
+                threshold = live_view_tools.PEAKING_SENSITIVITY[self._peaking_sensitivity_combo.currentData()]
+                shown = live_view_tools.paint_peaking(shown, lap, colour, threshold)
+
+        disp = QPixmap.fromImage(shown).scaled(
+            self._image_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        if self._crosshair_box.isChecked():
+            live_view_tools.draw_crosshair(disp)
 
         self._image_label.setPixmap(disp)
         self._timestamp_label.setText("Last frame: " + ts.strftime("%Y-%m-%d  %H:%M:%S")
-                                      + f"  ({pixmap.width()}\u00d7{pixmap.height()})")
+                                      + f"  ({image.width()}\u00d7{image.height()})")
 
     def closeEvent(self, event):
         self._poll_timer.stop()
