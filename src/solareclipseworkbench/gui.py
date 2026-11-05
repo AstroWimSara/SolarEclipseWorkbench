@@ -58,7 +58,7 @@ from solareclipseworkbench.limb_correction import (is_enabled as limb_correction
                                                    ensure_limb_profile)
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.phone_dashboard import (DashboardServer, ACTION_ABORT, ACTION_EV_DOWN, ACTION_EV_RESET,
-                                                   ACTION_EV_UP, ACTION_LIVE_POINT)
+                                                   ACTION_EV_UP, ACTION_LIVE_CAMERA, ACTION_LIVE_POINT)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
@@ -1565,16 +1565,9 @@ class SolarEclipseController(Observer):
 
         # Auto-pause live view 15 s before C2 until 15 s after C3 so scheduled
         # shots around second and third contact have uncontested USB access.
+        self._reference_now = reference_now
         if self._live_view_window is not None:
-            c2 = self.model.c2_info
-            c3 = self.model.c3_info
-            _MARGIN = datetime.timedelta(seconds=15)
-            in_totality = (
-                c2 is not None
-                and c3 is not None
-                and (c2.time_utc - _MARGIN) <= reference_now <= (c3.time_utc + _MARGIN)
-            )
-            self._live_view_window.set_totality_paused(in_totality)
+            self._live_view_window.set_totality_paused(self._live_view_paused_at(reference_now))
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
@@ -2037,6 +2030,64 @@ class SolarEclipseController(Observer):
         except Exception:
             logging.exception('Exception while checking camera state')
 
+    def _live_view_paused_at(self, reference_now: Optional[datetime.datetime]) -> bool:
+        """Whether live view is paused at this time: from 15 s before C2 until 15 s after C3."""
+        c2 = self.model.c2_info
+        c3 = self.model.c3_info
+        margin = datetime.timedelta(seconds=15)
+        return (reference_now is not None and c2 is not None and c3 is not None
+                and (c2.time_utc - margin) <= reference_now <= (c3.time_utc + margin))
+
+    def _live_view_cameras(self) -> list:
+        """The cameras that live view can show, as (name, camera), each camera once.
+
+        The name is the primary alias when one is configured (the name used in scripts),
+        otherwise the gphoto2 model name.
+        """
+        cam_dict = getattr(self.model.camera_overview, 'camera_overview_dict', None) or {}
+        from solareclipseworkbench.camera import GPhotoCameraAdapter, VirtualCamera
+        seen_ids: set = set()
+        cameras: list = []
+        for cam in cam_dict.values():
+            if isinstance(cam, (GPhotoCameraAdapter, VirtualCamera)) and id(cam) not in seen_ids:
+                seen_ids.add(id(cam))
+                cameras.append((cam.name, cam))
+        return cameras
+
+    def _show_live_view(self, camera):
+        """Open the live view window on this camera (the open one, if any, must be closed first)."""
+        window = LiveViewWindow(camera, parent=None)
+        # Paused right away when opened around totality, not only at the next clock tick
+        window.set_totality_paused(self._live_view_paused_at(getattr(self, "_reference_now", None)))
+        window.share_with_phone = self._phone_dashboard is not None
+        self._live_view_window = window
+        window.show()
+
+    def _switch_live_view_from_phone(self, name: str):
+        """Show the live view of the named camera, or close live view with "" (from the phone).
+
+        Refused around totality: closing and opening live view is USB traffic.
+        """
+        if self._live_view_paused_at(getattr(self, "_reference_now", None)):
+            LOGGER.warning("Live view camera not changed from the phone: live view is paused around totality")
+            return
+        window = self._live_view_window
+        current = window._camera.name if window is not None and window.isVisible() else None
+        if name == (current or ""):
+            return
+        camera = dict(self._live_view_cameras()).get(name) if name else None
+        if name and camera is None:
+            LOGGER.warning("Phone dashboard: no camera %r for live view", name)
+            return
+        if window is not None:
+            window.close()
+            self._live_view_window = None
+        if camera is not None:
+            LOGGER.info("Live view switched to %s from the phone dashboard", name)
+            self._show_live_view(camera)
+        else:
+            LOGGER.info("Live view closed from the phone dashboard")
+
     def _open_live_view(self):
         """Open (or bring to front) the live view window.
 
@@ -2051,18 +2102,7 @@ class SolarEclipseController(Observer):
             self._live_view_window.raise_()
             return
 
-        # Collect all real gphoto cameras (deduplicated by object identity).
-        # Use cam.name as the display label: when an alias is configured it is
-        # set to the primary alias (i.e. the name used in scripts); when no alias
-        # is configured it falls back to the gphoto2 model name.
-        cam_dict = getattr(self.model.camera_overview, 'camera_overview_dict', None) or {}
-        from solareclipseworkbench.camera import GPhotoCameraAdapter, VirtualCamera
-        seen_ids: set = set()
-        real_cameras: list = []  # list of (display_name, camera) tuples
-        for cam in cam_dict.values():
-            if isinstance(cam, (GPhotoCameraAdapter, VirtualCamera)) and id(cam) not in seen_ids:
-                seen_ids.add(id(cam))
-                real_cameras.append((cam.name, cam))
+        real_cameras = self._live_view_cameras()
 
         if not real_cameras:
             QMessageBox.warning(
@@ -2091,8 +2131,7 @@ class SolarEclipseController(Observer):
                 return
             camera = dict(real_cameras)[chosen]
 
-        self._live_view_window = LiveViewWindow(camera, parent=None)
-        self._live_view_window.show()
+        self._show_live_view(camera)
 
     def _open_timeline_window(self):
         """Open (or bring to front) the script timeline, on the script loaded last."""
@@ -2461,6 +2500,8 @@ class SolarEclipseController(Observer):
                     self._apply_exposure_compensation(get_exposure_compensation() - EXPOSURE_COMPENSATION_STEP_EV)
                 elif action == ACTION_EV_RESET:
                     self._apply_exposure_compensation(0)
+                elif action == ACTION_LIVE_CAMERA:
+                    self._switch_live_view_from_phone(data["camera"])
                 elif action == ACTION_LIVE_POINT:
                     window = self._live_view_window
                     if window is not None and window.isVisible():
@@ -2530,6 +2571,9 @@ class SolarEclipseController(Observer):
             "ev_max": MAX_EXPOSURE_COMPENSATION_EV,
             "cameras": self.model.camera_overview.status_rows(),
             "live": live,
+            "live_cameras": [name for name, _ in self._live_view_cameras()],
+            "live_camera": live["camera"] if live else "",
+            "live_switch": not self._live_view_paused_at(reference_now),
         }
 
     def _shutdown_scheduler(self):

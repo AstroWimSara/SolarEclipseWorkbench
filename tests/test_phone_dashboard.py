@@ -14,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from solareclipseworkbench.camera import (EXPOSURE_COMPENSATION_STEP_EV, get_exposure_compensation,
                                           set_exposure_compensation)
 from solareclipseworkbench.phone_dashboard import (ACTION_ABORT, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_EV_UP,
-                                                   ACTION_LIVE_POINT,
+                                                   ACTION_LIVE_CAMERA, ACTION_LIVE_POINT,
                                                    DashboardServer)
 
 
@@ -296,3 +296,117 @@ def test_dashboard_shows_the_frames_of_the_live_view_window(controller):
     controller._stop_phone_dashboard()
     assert not window.share_with_phone
     controller._live_view_window = None
+
+
+def test_a_camera_for_live_view_must_be_a_name():
+    received = []
+    srv = DashboardServer(on_action=lambda action, data: received.append(data))
+    body = lambda **d: json.dumps({"action": ACTION_LIVE_CAMERA, **d}).encode()
+    assert srv._handle_action(body(camera="Canon EOS R5")) == 200
+    assert srv._handle_action(body(camera="")) == 200
+    for bad in (body(), body(camera=3), body(camera="x" * 201)):
+        assert srv._handle_action(bad) == 400
+    assert received == [{"action": ACTION_LIVE_CAMERA, "camera": "Canon EOS R5"},
+                        {"action": ACTION_LIVE_CAMERA, "camera": ""}]
+
+
+@pytest.fixture
+def two_cameras(controller, monkeypatch):
+    """Two virtual cameras, and a LiveViewWindow that touches no camera."""
+    from solareclipseworkbench import gui
+    from solareclipseworkbench.camera import VirtualCamera
+
+    class _Window:
+        opened = []
+
+        def __init__(self, camera, parent=None):
+            self._camera = camera
+            self.visible = False
+            self.paused = None
+            self.share_with_phone = False
+            _Window.opened.append(self)
+
+        def set_totality_paused(self, paused):
+            self.paused = paused
+
+        def show(self):
+            self.visible = True
+
+        def isVisible(self):
+            return self.visible
+
+        def close(self):
+            self.visible = False
+
+        def phone_frame(self):
+            return None, 0, None
+
+        def phone_tools(self):
+            return {}, None
+
+        def phone_status(self):
+            return "paused" if self.paused else "active"
+
+    monkeypatch.setattr(gui, "LiveViewWindow", _Window)
+    first, second = VirtualCamera(), VirtualCamera()
+    first.name, second.name = "Canon EOS R5", "Nikon Z8"
+    controller.model.camera_overview.camera_overview_dict = {"Canon EOS R5": first, "Nikon Z8": second}
+    return controller, _Window
+
+
+def _contacts(controller, c2_in_s):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    c2, c3 = now + timedelta(seconds=c2_in_s), now + timedelta(seconds=c2_in_s + 120)
+    controller.model.c2_info = SimpleNamespace(time_utc=c2, time_local=c2)
+    controller.model.c3_info = SimpleNamespace(time_utc=c3, time_local=c3)
+    return now
+
+
+def test_the_phone_picks_the_camera_for_live_view(two_cameras):
+    controller, window_class = two_cameras
+    controller._reference_now = _contacts(controller, 3600)
+    controller._open_phone_dashboard()
+
+    state = controller._phone_dashboard_state(controller._reference_now)
+    assert state["live_cameras"] == ["Canon EOS R5", "Nikon Z8"]
+    assert state["live_camera"] == "" and state["live_switch"] is True
+
+    controller._switch_live_view_from_phone("Nikon Z8")
+    first = controller._live_view_window
+    assert first._camera.name == "Nikon Z8" and first.visible and first.share_with_phone
+    assert controller._phone_dashboard_state(controller._reference_now)["live_camera"] == "Nikon Z8"
+
+    controller._switch_live_view_from_phone("Canon EOS R5")
+    assert not first.visible
+    assert controller._live_view_window._camera.name == "Canon EOS R5"
+
+    # An unknown camera changes nothing; "" closes live view
+    controller._switch_live_view_from_phone("Sony A1")
+    assert controller._live_view_window._camera.name == "Canon EOS R5"
+    controller._switch_live_view_from_phone("")
+    assert controller._live_view_window is None
+    assert len(window_class.opened) == 2
+
+
+def test_the_camera_is_not_changed_around_totality(two_cameras):
+    controller, window_class = two_cameras
+    controller._reference_now = _contacts(controller, 60)
+    controller._switch_live_view_from_phone("Canon EOS R5")
+    assert controller._live_view_window is not None and controller._live_view_window.paused is False
+
+    controller._reference_now = _contacts(controller, 10)   # within 15 s of C2
+    controller._open_phone_dashboard()
+    assert controller._phone_dashboard_state(controller._reference_now)["live_switch"] is False
+    controller._switch_live_view_from_phone("Nikon Z8")
+    controller._switch_live_view_from_phone("")
+    assert controller._live_view_window._camera.name == "Canon EOS R5"
+    assert controller._live_view_window.visible
+    assert len(window_class.opened) == 1
+
+
+def test_a_live_view_opened_around_totality_starts_paused(two_cameras):
+    controller, _ = two_cameras
+    controller._reference_now = _contacts(controller, -30)  # in totality
+    controller._show_live_view(controller.model.camera_overview.camera_overview_dict["Nikon Z8"])
+    assert controller._live_view_window.paused is True

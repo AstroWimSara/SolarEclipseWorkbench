@@ -53,7 +53,9 @@ ACTION_EV_RESET = "ev_reset"
 ACTION_ABORT = "abort"
 # A tap on the live view: "x" and "y" from 0 to 1 on the preview; moves the loupe (the zoom centre)
 ACTION_LIVE_POINT = "live_point"
-ACTIONS = (ACTION_EV_UP, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_ABORT, ACTION_LIVE_POINT)
+# Show the live view of another camera: "camera" is its name, or "" to close live view
+ACTION_LIVE_CAMERA = "live_camera"
+ACTIONS = (ACTION_EV_UP, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_ABORT, ACTION_LIVE_POINT, ACTION_LIVE_CAMERA)
 
 # Largest request body accepted for an action
 _MAX_BODY = 1024
@@ -111,6 +113,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   #loupeBox { width:140px; flex:none; text-align:center; }
   #loupe { width:140px; height:140px; image-rendering:pixelated; display:block; background:#000; border-radius:6px; }
   #loupeText { font-size:13px; margin-top:2px; }
+  #camRow { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  #camRow label { font-size:14px; color:var(--dim); }
+  #camSel { flex:1; min-width:0; font-size:16px; padding:8px; border-radius:8px; background:#21262d;
+            color:var(--fg); border:1px solid var(--line); }
   #liveHead label { font-size:13px; color:var(--dim); text-transform:none; letter-spacing:0; font-weight:400; }
   #msg { min-height:1.3em; text-align:center; font-size:14px; margin-top:8px; color:var(--warn); }
 </style>
@@ -147,6 +153,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <label><input type="checkbox" id="histOn" onchange="liveToggled()"> histogram</label>
   <label><input type="checkbox" id="loupeOn" onchange="liveToggled()"> loupe</label></span></h2>
 <div class="panel" id="liveBox">
+  <div id="camRow"><label for="camSel">Camera</label>
+    <select id="camSel" onchange="pickCamera()"></select></div>
   <img id="live" alt="" hidden onclick="livePoint(event)">
   <div id="liveNote">&nbsp;</div>
   <div id="tools" hidden>
@@ -172,6 +180,32 @@ function liveToggled() {
     try { localStorage.setItem(name, box.checked ? 'on' : 'off'); } catch (err) {}
   }
   liveShown = loupeShown = histShown = -1; renderLive();
+}
+
+// The choice made on the phone wins over the state until the laptop has had time to switch
+let camPicked = null, camPickedAt = 0;
+function pickCamera() {
+  const sel = document.getElementById('camSel');
+  camPicked = sel.value; camPickedAt = performance.now();
+  liveShown = loupeShown = histShown = -1;
+  act('live_camera', {camera: sel.value}, sel.value ? 'Switching to ' + sel.value + '\u2026' : 'Live view off.');
+}
+
+function renderCameras() {
+  const sel = document.getElementById('camSel');
+  const names = state.live_cameras || [];
+  const options = [''].concat(names);
+  const key = options.join('\\n');
+  if (sel.dataset.key !== key) {
+    sel.innerHTML = options.map(n => '<option value="' + esc(n) + '">' + (n ? esc(n) : 'Off') + '</option>').join('');
+    sel.dataset.key = key;
+  }
+  if (camPicked !== null && performance.now() - camPickedAt < 4000) sel.value = camPicked;
+  else { camPicked = null; sel.value = state.live_camera || ''; }
+  const stale = !lastOk || (performance.now() - lastOk) > 5000;
+  sel.disabled = stale || !state.live_switch || !names.length;
+  document.getElementById('camRow').title = state.live_switch ? '' :
+    'Live view is paused around totality: the camera cannot be changed now';
 }
 
 function livePoint(ev) {
@@ -207,9 +241,13 @@ function renderLive() {
   const img = document.getElementById('live'), note = document.getElementById('liveNote');
   const live = state && state.live;
   const tools = document.getElementById('tools');
+  if (state) renderCameras();
   if (!live) {
     img.hidden = true; tools.hidden = true; liveShown = loupeShown = histShown = -1;
-    note.textContent = 'Open Live View on the laptop to see it here.'; return;
+    const names = (state && state.live_cameras) || [];
+    note.textContent = !names.length ? 'No camera for live view: detect the cameras on the laptop.'
+      : (state.live_switch ? 'Live view is off: pick a camera.' : 'Live view is paused around totality.');
+    return;
   }
   renderTools(live);
   if (!liveOn.checked) { img.hidden = true; img.removeAttribute('src'); note.textContent = live.camera; return; }
@@ -222,7 +260,7 @@ function renderLive() {
   const old = age == null || age > 5 || live.status !== 'active';
   img.className = old ? 'old' : '';
   let text = live.camera;
-  if (live.status === 'paused') text += ' \u00b7 paused around totality (the script has the USB)';
+  if (live.status === 'paused') text += ' \u00b7 paused around totality (the script has the USB); the camera cannot be changed';
   else if (live.status === 'disabled') text += ' \u00b7 disabled on the laptop';
   else if (!live.frame) text += ' \u00b7 waiting for the first frame';
   if (age != null && age > 5) text += ' \u00b7 last frame ' + fmt(age) + ' ago';
@@ -462,7 +500,14 @@ class DashboardServer:
             if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
                 return 400
             data = {"action": action, "x": x, "y": y}
-        if action == ACTION_LIVE_POINT:
+        if action == ACTION_LIVE_CAMERA:
+            camera = data.get("camera")
+            if not isinstance(camera, str) or len(camera) > 200:
+                return 400
+            data = {"action": action, "camera": camera}
+        if action == ACTION_LIVE_CAMERA:
+            LOGGER.info("Phone dashboard: live view of %r", data["camera"] or "no camera")
+        elif action == ACTION_LIVE_POINT:
             LOGGER.debug("Phone dashboard: loupe moved to %.3f, %.3f", data["x"], data["y"])
         else:
             LOGGER.info("Phone dashboard: %s", action)
