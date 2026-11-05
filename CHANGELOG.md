@@ -37,6 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- With the Fujifilm SDK installed and no Fuji body connected, camera detection (at start-up, `Camera(s)` and the wizard's `Test Camera...`) took about 13 s.  The USB bus is now read first (sysfs on Linux, `ioreg` on macOS).  Without a Fujifilm device on it, the bus is read again for 1.5 s, the SDK looks once and detection continues.  With a Fujifilm device, or when the bus cannot be read (Windows), the SDK tries three times as before, but without the 2 s wait after the last try.  On macOS the camera daemons are no longer stopped when no Fuji body is connected - by @mrosseel
 - The Sun was not the same size everywhere: the check for when the Moon's bite becomes visible after C1 and before C4 used 959.63", while the contact times and the drawing of the eclipse used 959.95".  Everything now uses the selected solar radius (Issue #197)
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
 
