@@ -9,9 +9,14 @@ The SDK libraries are not part of this project: Fujifilm distributes them under
 its own licence.  :func:`find_fuji_sdk_path` finds them, and
 :func:`maybe_reexec_for_fuji_sdk` puts them on the library path at start-up.
 
-Every frame is released over the SDK, one at a time.  The body must therefore be
-on single-frame drive (S): on CH the SDK release is refused.  A take_burst is a
-run of single frames, at the rate the SDK can release them.
+Without a relay, every frame is released over the SDK, one at a time.  The body
+must then be on single-frame drive (S): on CH the SDK release is refused.  A
+take_burst is a run of single frames, at the rate the SDK can release them.
+
+With a USB relay on the remote jack of the body (see relay_trigger), the relay
+fires every frame and the SDK only sets the exposure and empties the transfer
+queue.  The body can then be on CL, and a take_burst holds the release for the
+body's own continuous drive.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from typing import Any, NamedTuple, Optional, Sequence
 
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import BaseCamera, CameraError, SdkDetection, register_sdk_backend
+from solareclipseworkbench.hardware_registry import get_hardware
 
 # The bindings import without the SDK libraries, which are only loaded when a
 # camera is opened.  The import itself can fail when the package is missing.
@@ -51,12 +57,17 @@ try:
         SHUTTER_SPEED_NAMES,
     )
     from fujixsdk._errors import BusyError, CommunicationError
+    # The size of the transfer queue and the part of it that may fill are facts
+    # of the body, so they are kept with the bindings.
+    from fujixsdk.camera import BUFFER_SLOTS, DRAIN_AT
     FUJIXSDK_AVAILABLE = True
     FUJIXSDK_IMPORT_ERROR = None
 except ImportError as _exc:
     FUJIXSDK_AVAILABLE = False
     FUJIXSDK_IMPORT_ERROR = str(_exc)
     SHUTTER_SPEED_NAMES = {}
+    BUFFER_SLOTS = 32
+    DRAIN_AT = 0.75
 
     class BusyError(Exception):
         """Stand-in so the retry helpers below import without the bindings."""
@@ -93,6 +104,65 @@ MAX_EXPOSURE_WAIT_S = 8.0
 # A lost session reports itself once per setting per frame.  Rebuilding it on
 # every one would spend the eclipse reconnecting, so one attempt per this long.
 RECOVERY_INTERVAL_S = 10.0
+
+
+# ======================================================================
+# Relay
+#
+# An SDK release costs about 280 ms per frame, and the SDK cannot start the
+# body's continuous drive.  A relay on the remote jack fires the body at the
+# rate of its drive dial.  All values below were measured on an X-T4 with the
+# drive dial on CL and CL LOW SPEED BURST set to 8 fps.
+# ======================================================================
+
+#: Frames per second while the relay holds the release on CL.  Measured 7.6 to
+#: 7.7 fps over 8 s holds.  The SDK cannot read the drive dial, so this rate is
+#: only correct when the dial is on CL at 8 fps.
+RELAY_FPS = 7.7
+
+#: The most frames one held release may ask for.  A held burst of 61 frames
+#: reached the card in full.  This limit is for the image buffer of the body.
+#: The transfer queue of the SDK is a different limit, and the hold empties it
+#: while it runs.
+MAX_BURST_FRAMES = 60
+
+#: The longest hold: the frames the body takes, at the rate it takes them.
+MAX_BURST_S = MAX_BURST_FRAMES / RELAY_FPS
+
+#: To close and open the relay adds this much to every hold.
+RELAY_HOLD_OVERHEAD_S = 0.15
+
+#: How long the relay closes the release for one frame.  On CL a longer tap can
+#: fire two frames, and a ladder must take one frame per exposure.  At 0.03 s,
+#: ten ladders of seven exposures fired every exposure once.
+TAP_S = 0.03
+
+#: The shortest time from one tap to the next.  A long exposure adds its own
+#: length and TAP_EXPOSURE_MARGIN_S, so the frame is complete before the next
+#: speed is sent.
+TAP_GAP_S = 0.35
+TAP_EXPOSURE_MARGIN_S = 0.3
+
+#: The time for one speed change between two taps of a ladder.  A write took
+#: 178 ms (median) and 256 ms (worst of 40), and up to 490 ms between taps.
+BRACKET_STEP_BUDGET_S = 0.8
+
+#: Before a drain after the shutter stops: the frames of a tap take up to 0.75 s
+#: to show in the count of the queue.
+SETTLE_BEFORE_DRAIN_S = 1.0
+
+#: A full drain repeats until a round finds the queue empty, because the frames
+#: of a burst keep arriving for more than 2 s after the contact opens.
+DRAIN_ROUNDS = 4
+SETTLE_BETWEEN_DRAINS_S = 0.6
+
+#: The longest one drain round may run while the release is held.  The hold
+#: checks its own end between the rounds.  A delete takes about 0.15 s while the
+#: body fires, so one round frees about a dozen slots.
+MID_BURST_DRAIN_S = 2.0
+
+#: How often the hold looks at the queue again while the release is held.
+HOLD_POLL_S = 0.05
 
 
 def _through_busy(action, what: str, deadline: float, recover=None):
@@ -396,6 +466,93 @@ class _FujiStorageEntry:
 
 
 # ======================================================================
+# Shooting through the relay
+# ======================================================================
+
+def _tap_gap(speed: int) -> float:
+    """The time from one tap to the next, for a frame at the SDK speed ``speed``."""
+    return max(TAP_GAP_S, speed / 1_000_000 + TAP_EXPOSURE_MARGIN_S)
+
+
+class _RelayShooter:
+    """Fires a Fuji body through the relay, in place of the SDK's EclipseShooter.
+
+    The relay fires the frames.  The SDK sets the shutter speed between the
+    frames of a ladder and empties the transfer queue.
+    """
+
+    def __init__(self, camera: FujiCamera, relay):
+        self.camera = camera
+        self.relay = relay
+
+    def burst(self, seconds: float) -> int:
+        """Hold the release for ``seconds``, at most ``max_relay_hold_s``.
+
+        Returns the number of frames that the hold gives at RELAY_FPS.  The
+        relay cannot count the frames, so this is an estimate.
+        """
+        seconds = min(max(TAP_S, seconds), self.camera.max_relay_hold_s)
+        self.camera.hold_and_drain(self.relay, seconds)
+        # One round.  The rest of the burst arrives for seconds after the
+        # contact opens, and the next command checks the queue itself.
+        self.camera.drain(rounds=1)
+        return max(1, int(seconds * RELAY_FPS))
+
+    def bracket_no_download(self, speeds: Sequence[int]) -> int:
+        """One tap per speed, with the speed set over the SDK before each tap.
+
+        The ladder opens every contact first and never closes S1 between taps.
+        With S1 held the drive of the body keeps running, and the body refuses
+        every speed change: six exposures with S1 held set one speed of six.
+
+        Returns the number of taps.
+        """
+        camera = self.camera
+        relay = self.relay
+        taken = 0
+        relay.release_all()
+        try:
+            for speed in speeds:
+                name = camera.describe_speeds([speed])
+                try:
+                    _through_busy(lambda s=speed: camera._sdk.set_shutter_speed(s),
+                                  f'{camera.name}: set shutter speed {name}',
+                                  time.monotonic() + BRACKET_STEP_BUDGET_S, camera.recover_session)
+                except Exception as exc:
+                    # The frame is taken at the previous speed: a frame at the
+                    # wrong exposure is better than no frame.  The image looks
+                    # normal, so the fault goes to the problems list.
+                    hardware_problems.report(
+                        camera.name,
+                        'Bracket frames were taken at the wrong shutter speed',
+                        detail=f'{name} could not be set ({exc}); the frame was taken anyway',
+                        severity='warning',
+                    )
+                relay.shoot(pulse=TAP_S)
+                taken += 1
+                time.sleep(_tap_gap(speed))
+                self._keep_buffer_clear()
+        finally:
+            relay.release_all()
+        # One round, so that the ladder ends in time for the next command.  The
+        # check between taps already empties a queue that fills.
+        camera.drain(rounds=1)
+        return taken
+
+    def _keep_buffer_clear(self) -> None:
+        """Empty the transfer queue between two taps when it fills.
+
+        A fast exposure can give two frames for one tap, so a long ladder can
+        fill the 32 slots.  A full queue stops the body until its battery is
+        removed.  The contacts are open between taps, so the drain does not wait
+        for anything.
+        """
+        if self.camera.buffer_is_filling():
+            logging.info('%s: draining the transfer queue in the ladder', self.camera.name)
+            self.camera.drain(rounds=1)
+
+
+# ======================================================================
 # FujiCamera
 # ======================================================================
 
@@ -403,8 +560,9 @@ class FujiCamera(BaseCamera):
     """A Fujifilm X body opened through the Shooting SDK.
 
     camera.py applies the exposure with :meth:`apply_settings`, and shoots with
-    :meth:`capture`, :meth:`shoot_burst` and :meth:`shoot_ladder`.  The
-    gphoto2-style ``get_config`` and ``get_storageinfo`` stubs let the status
+    :meth:`capture`, :meth:`shoot_burst` and :meth:`shoot_ladder`.  When a relay
+    is connected, these fire the body through the relay (see :attr:`shooter`).
+    The gphoto2-style ``get_config`` and ``get_storageinfo`` stubs let the status
     helpers in camera.py (battery, focus mode, free space) read the body.
     """
 
@@ -574,12 +732,21 @@ class FujiCamera(BaseCamera):
             raise CameraError(f"{self.name}: could not apply " + "; ".join(failures))
 
     def capture(self):
-        """Release the shutter once.
+        """Release the shutter once, through the relay when one is connected.
 
-        When the release fails with anything but busy, the session is rebuilt,
-        the last exposure is applied again, and the release is tried once more.
+        When the SDK release fails with anything but busy, the session is
+        rebuilt, the last exposure is applied again, and the release is tried
+        once more.
         """
         with self._lock:
+            relay = self.relay
+            if relay is not None:
+                relay.shoot(pulse=TAP_S)
+                self._note_frame_fired()
+                # A drain costs a settle and the deletes, more than a second, so
+                # a single frame only drains a queue that fills.
+                self.drain_if_filling()
+                return
             try:
                 released = self.shooter.shoot_fast()
             except Exception as first_err:
@@ -624,16 +791,25 @@ class FujiCamera(BaseCamera):
             )
 
     def shoot_burst(self, seconds: float) -> int:
-        """Release single frames, one after the other, for ``seconds``.
+        """Shoot for ``seconds``.  At least one frame is taken.
 
-        The SDK cannot start the body's own continuous drive, so this is the
-        fastest the SDK releases frames.  At least one frame is taken.
+        With a relay, the relay holds the release and the body shoots at the
+        rate of its drive dial (see :meth:`_RelayShooter.burst`).  Without one,
+        the SDK releases single frames, one after the other.  The SDK cannot
+        start the continuous drive of the body.
 
-        Returns the number of frames taken.
+        Returns the number of frames taken.  For the relay, an estimate.
         """
         deadline = time.monotonic() + max(0.0, seconds)
         taken = 0
         with self._lock:
+            relay = self.relay
+            if relay is not None:
+                taken = _RelayShooter(self, relay).burst(seconds)
+                self._note_frame_fired()
+                logging.info('%s: take_burst held the relay for %.1f s, about %d frame(s)',
+                             self.name, seconds, taken)
+                return taken
             while True:
                 if not self.shooter.shoot_fast():
                     break
@@ -699,10 +875,28 @@ class FujiCamera(BaseCamera):
     # --- Session ------------------------------------------------------
 
     @property
-    def shooter(self) -> EclipseShooter:
+    def shooter(self):
+        """What fires this body: the relay when one is connected, else the SDK."""
+        relay = self.relay
+        if relay is not None:
+            return _RelayShooter(self, relay)
         if self._shooter is None:
             self._shooter = EclipseShooter(self._sdk)
         return self._shooter
+
+    @property
+    def relay(self):
+        """The connected relay trigger, or None.
+
+        The relay does not know which body its cable goes to.  A connected relay
+        is taken to be on the remote jack of this body.
+        """
+        return get_hardware('relay')
+
+    @property
+    def max_relay_hold_s(self) -> float:
+        """The longest time the relay may hold the release of this body."""
+        return MAX_BURST_S
 
     @property
     def _sdk(self):
@@ -774,6 +968,98 @@ class FujiCamera(BaseCamera):
         """
         exposure_s = (self._applied_speed or 0) / 1_000_000.0
         self._frame_busy_until = time.monotonic() + exposure_s + FRAME_WRITE_S
+
+    # --- Transfer queue -----------------------------------------------
+    #
+    # The SDK queues a PC transfer of every frame on the body, also when the
+    # frame is on the card, in BUFFER_SLOTS slots.  The frames on the card do not
+    # free a slot.  A full queue stops the body until its battery is removed.  A
+    # drain deletes the queued transfers, and the frames on the card stay.
+
+    def drain(self, rounds: Optional[int] = None, settle_s: Optional[float] = None,
+              budget_s: Optional[float] = None) -> int:
+        """Delete the queued PC transfers, and return how many were deleted.
+
+        Each round first waits ``settle_s`` (SETTLE_BEFORE_DRAIN_S by default),
+        because the frames of a tap take up to 0.75 s to show in the count.
+        Rounds repeat, up to ``rounds`` (DRAIN_ROUNDS by default), until one
+        finds the queue empty.  ``rounds=1`` frees the slots that are full now,
+        for a caller that needs room and not an empty queue.  ``budget_s`` limits
+        the time of each round.
+
+        Never raises: a failed drain is logged, and the shooting goes on.
+        """
+        drained = 0
+        settle = SETTLE_BEFORE_DRAIN_S if settle_s is None else settle_s
+        for _ in range(max(1, DRAIN_ROUNDS if rounds is None else rounds)):
+            if settle > 0:
+                time.sleep(settle)
+            try:
+                this_round = self._sdk.drain_buffer(budget_s=budget_s)
+            except Exception:
+                logging.exception('%s: drain failed; shooting is unaffected', self.name)
+                break
+            drained += this_round
+            if this_round == 0:
+                break
+            if settle_s is None:
+                settle = SETTLE_BETWEEN_DRAINS_S
+        return drained
+
+    def buffer_is_filling(self) -> bool:
+        """Whether the transfer queue holds DRAIN_AT of its slots or more.
+
+        Compared with BUFFER_SLOTS, not with the total that the SDK returns: that
+        total is three above the count while frames are written.  A queue that
+        cannot be read counts as not filling, because a later drain runs anyway.
+        """
+        try:
+            captured, _ = self._sdk.get_buffer_capacity()
+        except Exception:
+            logging.debug('%s: buffer unreadable', self.name, exc_info=True)
+            return False
+        return captured >= BUFFER_SLOTS * DRAIN_AT
+
+    def drain_if_filling(self) -> int:
+        """Drain one round, but only when the queue fills."""
+        if not self.buffer_is_filling():
+            return 0
+        return self.drain(rounds=1)
+
+    def hold_and_drain(self, trigger, seconds: float) -> int:
+        """Hold the release for ``seconds``, and drain the queue while it is held.
+
+        The body fires the whole time, and the drain frees the slots as the
+        frames fill them.  Without the drain, the body stops at BUFFER_SLOTS
+        frames.  Deletes while S1 and S2 are held do not stop the session: a
+        12 s hold gave 81 frames.
+
+        The drain runs on this thread, between the reads of the deadline.  On a
+        separate thread it did not keep up with the shutter: the queue filled at
+        32 frames and the body stopped.  Each round is limited to the time the
+        hold has left, so the hold ends on time.
+
+        Returns the number of transfers deleted during the hold.
+        """
+        deadline = time.monotonic() + seconds
+        drained = 0
+        draining = True
+        with trigger.pressed():
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                if draining:
+                    try:
+                        drained += self._sdk.drain_buffer(budget_s=min(MID_BURST_DRAIN_S, left))
+                    except Exception:
+                        # The burst goes on.  It stops when the queue is full.
+                        logging.warning('%s: drain during the relay hold failed; the burst '
+                                        'goes on without it', self.name, exc_info=True)
+                        draining = False
+                time.sleep(min(HOLD_POLL_S, max(0.0, deadline - time.monotonic())))
+        logging.info('%s: %d transfer(s) deleted during the %.2f s hold', self.name, drained, seconds)
+        return drained
 
     # --- gphoto2-style stubs ------------------------------------------
 
@@ -1028,6 +1314,7 @@ def detect_for_workbench() -> SdkDetection:
         logging.info('Any Fuji body on the bus is left to the Fujifilm SDK: gphoto2 cannot shoot '
                      'it tethered, and its claim would lock the SDK out')
     return SdkDetection(detection.cameras, ('fuji',))
+
 
 
 register_sdk_backend(detect_for_workbench)
