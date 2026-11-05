@@ -208,7 +208,7 @@ _LIVE_VIEW_CAMERAS: dict = {}
 
 
 def simulated_live_view_jpeg() -> Optional[bytes]:
-    """A live-view frame (JPEG) of the sun where the connected simulated mount points, or None.
+    """A live-view frame (JPEG) of the sun where the connected mount points, or None.
 
     For the virtual camera in simulation mode: with a simulated mount connected,
     its live view shows the sun, a little off-centre and turned, so the
@@ -219,7 +219,10 @@ def simulated_live_view_jpeg() -> Optional[bytes]:
     from solareclipseworkbench.hardware_registry import get_hardware
 
     mount = get_hardware('mount')
-    if mount is None or getattr(mount, "_simulator", None) is None or not mount.connected:
+    # Any connected mount: the built-in simulated one, or a real INDI driver (indi_simulator_telescope,
+    # or a real mount indoors) to try the calibration and the centring against.  Only the virtual
+    # camera of simulation mode calls this.
+    if mount is None or not mount.connected:
         return None
     camera = _LIVE_VIEW_CAMERAS.get(id(mount))
     if camera is None or camera.mount is not mount:

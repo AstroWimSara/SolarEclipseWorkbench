@@ -58,6 +58,7 @@ Setup: `sudo apt install indi-bin`, then `indiserver -vvv indi_simulator_telesco
 | 1.N3 Lost release | Hold **E ▶**, and move the mouse off the button and release it outside the window; or close the window while holding | The mount stops within a second |
 | 1.N4 Stop | Start a **Park** (in the `Mount` window), then click **Stop** next to the nudge buttons | The park stops; tracking is left as it was |
 | 1.N5 Phone | Phone dashboard: hold the buttons of the `Mount` panel | As 1.N2; switch the phone's Wi-Fi off while holding: the mount stops within about a second |
+| 1.S1 Calibrate on the INDI simulator | `sew --sim`, connect to `localhost` (the INDI simulator, not the built-in one), open `Live View` on the virtual camera | The virtual camera shows the sun where `indi_simulator_telescope` points; **Track sun**, then **Calibrate** works (slower: its guide rate is 0.5×), and **Keep the sun centred** brings a nudged-off sun back |
 | 1.13 Bench console | `sew_hardware --debug`, then `mount connect localhost`, `mount track`, `mount guide N 1000`, `mount status` | Same results; the XML is logged |
 
 ## Stage 2 — The real mount, indoors
