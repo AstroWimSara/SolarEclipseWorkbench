@@ -52,6 +52,7 @@ More background, eclipse reports and the story behind SEW are on the [Deep Sky W
       - [Script timeline](#script-timeline)
       - [Run report](#run-report)
       - [Compare sites](#compare-sites)
+      - [Phone dashboard](#phone-dashboard)
   - [Running the Configuration Wizard](#running-the-configuration-wizard)
   - [USB GPS device](#usb-gps-device)
     - [Supported hardware](#supported-hardware)
@@ -667,6 +668,14 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - `Compare beads` shows the Baily's beads of the sites with totality next to each other, drawn like in the [`Baily's beads`](#lunar-limb-correction-and-bailys-beads) window (as a profile or as a picture, with the same exaggeration).  One slider moves every site to the same number of seconds from its own C2 or C3, so the views show how many beads each site gets and for how long at the same stage of the contact; under each view are its time in UTC and its bead window.  Near the limits of the path a bead window can last over ten seconds, and the slider then reaches further than ±8 s.  This needs the lunar limb profile.
 - `Use this site` (or a double click on a result) makes the selected site the observing location and recomputes the reference moments, and `Save as text...` writes the comparison, longest totality first.
 - From the command line: `sew --compare -d 2027-08-02` prints the shortlist of the window, `sew --compare "La Horra" "Tarifa" -d 2027-08-02 --forecast` the named saved locations with their cloud cover; `--longitude`, `--latitude` and `--altitude` add one more site.
+
+#### Phone dashboard
+
+- The **"Phone"** icon starts a small web page on the laptop for following the run from a phone, e.g. when the laptop is under a sunshade or away from the telescope.  Scan the QR code in the window that opens with a phone on the same network (the laptop's Wi-Fi, or the phone's hotspot).
+- The page shows the countdown to the next contact in large digits, the contacts with their local time, the next eight commands with their countdown, and the battery level and free memory of every camera.  It has the `−1 EV`, `Reset` and `+1 EV` buttons of the [exposure compensation](#exposure-compensation), and `Abort run`, which (after a confirmation on the phone) stops the scheduler like the `Stop` icon: every command still to come is cancelled.
+- The page counts down by itself between updates, and shows `NO CONNECTION` in red, with the buttons disabled, when it has not heard from the laptop for 5 seconds.
+- The URL contains a random key, so others on the same network cannot use the controls without it; a new key is made every time the dashboard is started.  The page is plain HTTP (it needs no HTTPS, unlike the phone GPS page, so the phone shows no certificate warning).  It listens on port 8766, or the next free port.
+- Closing the window leaves the dashboard running; `Stop dashboard` stops it.
 
 > **Note**: Live view via gphoto2 is tested on the Nikon Z8.  Support on other bodies depends on whether their gphoto2 driver implements `capture_preview`.  Canon EOS bodies and most modern Nikon and Sony Alpha bodies support it; some entry-level or older bodies do not.
 

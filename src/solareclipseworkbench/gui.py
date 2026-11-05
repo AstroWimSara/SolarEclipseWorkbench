@@ -57,11 +57,13 @@ from solareclipseworkbench.limb_correction import (is_enabled as limb_correction
                                                    set_enabled as set_limb_correction_enabled,
                                                    ensure_limb_profile)
 from solareclipseworkbench.observer import Observer, Observable
+from solareclipseworkbench.phone_dashboard import (DashboardServer, ACTION_ABORT, ACTION_EV_DOWN, ACTION_EV_RESET,
+                                                   ACTION_EV_UP)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
                                                  discover_relays, list_backends, make_backend)
-from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget
+from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget, make_qr_pixmap
 from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
 from solareclipseworkbench.constants import MOON_RADIUS
 from solareclipseworkbench import solar_radius
@@ -471,6 +473,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.timeline_action = QAction("Timeline", self)
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
+        self.phone_dashboard_action = QAction("Phone", self)
 
         self.place_time_frame = QFrame()
 
@@ -1002,6 +1005,15 @@ class SolarEclipseView(QMainWindow, Observable):
         self.compare_sites_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.compare_sites_action)
 
+        # Phone dashboard
+
+        self.phone_dashboard_action.setStatusTip("Follow the run on a phone: countdown, next commands, cameras, "
+                                                 "\u00b11 EV and abort")
+        self.phone_dashboard_action.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+        self.phone_dashboard_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.phone_dashboard_action)
+
         # Relay shutter trigger
 
         self.relay_action.setStatusTip("Connect and test the USB relay shutter trigger")
@@ -1330,6 +1342,14 @@ class SolarEclipseController(Observer):
         self._timeline_window = None
         self._run_report_window = None
         self._sites_window = None
+        # Phone dashboard: the server runs on its own thread; the controls sent from the phone
+        # are queued and carried out here, on the UI thread
+        self._phone_dashboard: Union[DashboardServer, None] = None
+        self._phone_dashboard_popup: Union['PhoneDashboardPopup', None] = None
+        self._phone_actions: "queue.Queue[str]" = queue.Queue()
+        self._phone_action_timer = QTimer()
+        self._phone_action_timer.setInterval(200)
+        self._phone_action_timer.timeout.connect(self._handle_phone_actions)
         # The script loaded last, for the timeline
         self.script_filename: Union[str, None] = None
 
@@ -1566,6 +1586,8 @@ class SolarEclipseController(Observer):
 
         self.update_jobs_countdown()
 
+        self._update_phone_dashboard(reference_now)
+
     def _animate_beads(self):
         """Redraw the bead window between clock ticks when a contact is near.
 
@@ -1773,6 +1795,8 @@ class SolarEclipseController(Observer):
                 self._beads_window.close()
                 self._beads_window = None
 
+            self._stop_phone_dashboard()
+
             for window in (self._timeline_window, self._run_report_window, self._sites_window):
                 if window is not None:
                     window.close()
@@ -1946,10 +1970,7 @@ class SolarEclipseController(Observer):
                 ev = get_exposure_compensation() + EXPOSURE_COMPENSATION_STEP_EV
             else:
                 ev = get_exposure_compensation() - EXPOSURE_COMPENSATION_STEP_EV
-            ev = set_exposure_compensation(ev)
-            self.view.show_exposure_compensation(ev)
-            if self.jobs_model:
-                self.jobs_model.update_commands()
+            self._apply_exposure_compensation(ev)
 
         elif text == "Datetime format":
             self.settings_popup = SettingsPopup(self)
@@ -1976,6 +1997,9 @@ class SolarEclipseController(Observer):
 
         elif text == "Compare sites":
             self._open_sites_window()
+
+        elif text == "Phone":
+            self._open_phone_dashboard()
 
         elif text == "Refresh Plot":
             self.update_visualization()
@@ -2369,6 +2393,126 @@ class SolarEclipseController(Observer):
             self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
             self._refresh_beads_window()
 
+    def _apply_exposure_compensation(self, ev: int):
+        """Set the exposure compensation for all following shots and show it."""
+
+        ev = set_exposure_compensation(ev)
+        self.view.show_exposure_compensation(ev)
+        if self.jobs_model:
+            self.jobs_model.update_commands()
+
+    # Phone dashboard
+
+    def _open_phone_dashboard(self):
+        """Start the phone dashboard (when it does not run yet) and show its QR code."""
+
+        if self._phone_dashboard is None:
+            server = DashboardServer(on_action=lambda action, data: self._phone_actions.put(action))
+            try:
+                server.start()
+            except OSError as exc:
+                LOGGER.exception("Could not start the phone dashboard")
+                QMessageBox.critical(self.view, "Phone dashboard", f"Could not start the phone dashboard:\n{exc}")
+                return
+            self._phone_dashboard = server
+            self._phone_action_timer.start()
+            self.update_time()
+
+        if self._phone_dashboard_popup is None:
+            self._phone_dashboard_popup = PhoneDashboardPopup(self._phone_dashboard, self._stop_phone_dashboard,
+                                                              self.view)
+        self._phone_dashboard_popup.show()
+        self._phone_dashboard_popup.raise_()
+        self._phone_dashboard_popup.activateWindow()
+
+    def _stop_phone_dashboard(self):
+        """Stop the phone dashboard and close its window."""
+
+        self._phone_action_timer.stop()
+        if self._phone_dashboard is not None:
+            self._phone_dashboard.stop()
+            self._phone_dashboard = None
+        if self._phone_dashboard_popup is not None:
+            popup, self._phone_dashboard_popup = self._phone_dashboard_popup, None
+            popup.close()
+        # Controls that arrived after the last check are not carried out
+        while not self._phone_actions.empty():
+            self._phone_actions.get_nowait()
+
+    def _handle_phone_actions(self):
+        """Carry out the controls sent from the phone (on the UI thread)."""
+
+        handled = False
+        while True:
+            try:
+                action = self._phone_actions.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if action == ACTION_ABORT:
+                    if self.scheduler is not None and self.scheduler.running:
+                        LOGGER.warning("Run aborted from the phone dashboard")
+                        self._shutdown_scheduler()
+                elif action == ACTION_EV_UP:
+                    self._apply_exposure_compensation(get_exposure_compensation() + EXPOSURE_COMPENSATION_STEP_EV)
+                elif action == ACTION_EV_DOWN:
+                    self._apply_exposure_compensation(get_exposure_compensation() - EXPOSURE_COMPENSATION_STEP_EV)
+                elif action == ACTION_EV_RESET:
+                    self._apply_exposure_compensation(0)
+                handled = True
+            except Exception:
+                LOGGER.exception("Phone dashboard action %s failed", action)
+        if handled:
+            self.update_time()
+
+    def _update_phone_dashboard(self, reference_now: datetime.datetime):
+        """Hand the phone dashboard the current state (called every second)."""
+
+        if self._phone_dashboard is None:
+            return
+        try:
+            self._phone_dashboard.set_state(self._phone_dashboard_state(reference_now))
+        except Exception:
+            LOGGER.debug("Could not update the phone dashboard", exc_info=True)
+
+    def _phone_dashboard_state(self, reference_now: datetime.datetime) -> dict:
+        """The state shown on the phone dashboard.
+
+        Times are sent as seconds from now, so the phone needs no clock of its own:
+        it counts down from the last update.
+
+        Args:
+            - reference_now: Current time of the eclipse (UTC, with the GPS and simulation offsets)
+        """
+
+        time_format = self.view.time_format
+        moments = []
+        for name, info in (("C1", self.model.c1_info), ("C2", self.model.c2_info), ("MAX", self.model.max_info),
+                           ("C3", self.model.c3_info), ("C4", self.model.c4_info)):
+            if info is None:
+                continue
+            moments.append({"name": name,
+                            "seconds": (info.time_utc - reference_now).total_seconds(),
+                            "local": format_time(info.time_local, time_format)})
+
+        running = bool(self.scheduler is not None and self.scheduler.running)
+        jobs, remaining = ([], 0)
+        if running and self.jobs_model is not None:
+            jobs, remaining = self.jobs_model.upcoming_jobs(limit=8)
+
+        return {
+            "now_utc": reference_now.isoformat(),
+            "simulation": self.is_simulator and self.sim_reference_moment is not None,
+            "moments": moments,
+            "running": running,
+            "script": os.path.basename(self.script_filename) if self.script_filename else None,
+            "jobs": jobs,
+            "jobs_remaining": remaining,
+            "ev": get_exposure_compensation(),
+            "ev_max": MAX_EXPOSURE_COMPENSATION_EV,
+            "cameras": self.model.camera_overview.status_rows(),
+        }
+
     def _shutdown_scheduler(self):
         """Safely shut down the scheduler and update UI."""
         try:
@@ -2690,6 +2834,60 @@ def identify_relay_port(port: str) -> tuple:
         pass
 
     return "silent", "no answer (normal for LCUS and Numato boards)"
+
+
+class PhoneDashboardPopup(QDialog):
+    """Window with the QR code and URL of the phone dashboard.
+
+    Closing the window leaves the dashboard running; `Stop dashboard` stops it.
+    """
+
+    def __init__(self, server: DashboardServer, on_stop, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Phone dashboard")
+
+        layout = QVBoxLayout(self)
+        intro = QLabel("Scan the QR code with a phone on the same network (Wi-Fi or the laptop's hotspot) "
+                       "to follow the run: countdown, next commands and cameras, with the \u00b11 EV and "
+                       "abort controls.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        qr = QLabel()
+        qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = make_qr_pixmap(server.lan_url)
+        if pixmap is not None:
+            qr.setPixmap(pixmap)
+            # Word-wrapped labels make the layout underestimate the height, which crops the code
+            qr.setMinimumSize(pixmap.size())
+        layout.addWidget(qr)
+
+        url = QLabel(f'<a href="{server.local_url}">{server.lan_url}</a>')
+        url.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        url.setOpenExternalLinks(True)
+        url.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        url.setToolTip("Click to open the dashboard on this computer")
+        layout.addWidget(url)
+
+        note = QLabel("The key in the URL keeps others on the network from using the controls; anyone with "
+                      "the URL can abort the run.  The page is plain HTTP.  The dashboard keeps running when "
+                      "this window is closed.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray;")
+        layout.addWidget(note)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        stop = QPushButton("Stop dashboard")
+        stop.clicked.connect(on_stop)
+        buttons.addWidget(stop)
+        close = QPushButton("Close")
+        close.setDefault(True)
+        close.clicked.connect(self.close)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        self.setMinimumWidth(480)
+        self.adjustSize()
 
 
 class RelayPopup(QWidget, Observable):
@@ -3846,6 +4044,20 @@ class CameraOverviewTableModel(QAbstractTableModel):
             else:
                 return Qt.AlignmentFlag.AlignRight
 
+    def status_rows(self) -> list[dict]:
+        """ Return the name, battery level and free memory of every camera, for the phone dashboard. """
+
+        rows = []
+        for i in range(self._data.shape[0]):
+            values = [("" if pd.isna(v) else str(v)) for v in self._data.iloc[i].values]
+            values += [""] * (4 - len(values))
+            name, battery, free_gb, free_pct = values[:4]
+            free = f"{free_gb} GB" if free_gb else ""
+            if free_pct:
+                free = f"{free} ({free_pct}%)" if free else f"{free_pct}%"
+            rows.append({"name": name, "battery": f"{battery}%" if battery else "?", "free": free})
+        return rows
+
     def update_camera_overview(self, user_requested: bool = True):
         """ Update the camera overview.
 
@@ -4432,12 +4644,39 @@ class JobsTableModel(QAbstractTableModel, Observable):
             self._data.loc[row, JobsTableColumnNames.COMMAND.value] = job_command_text(job, self.command_style)
         self.endResetModel()
 
+    def upcoming_jobs(self, limit: int = 8) -> tuple[list[dict], int]:
+        """ Return the next jobs still to run, for the phone dashboard, and how many there are in all.
+
+        Args:
+            - limit: Largest number of jobs returned
+
+        Returns: The first *limit* jobs still to run, each a dict with the seconds until it runs, its
+                 local execution time, its command and its description, and the number of jobs still to run.
+        """
+
+        now_utc = datetime.datetime.now(tz=datetime.timezone.utc) + self.gps_time_offset
+        upcoming = []
+        for row, execution_time_utc in enumerate(self.execution_times_utc_as_datetime):
+            seconds = (execution_time_utc - now_utc).total_seconds()
+            if seconds < 0 or row >= self._data.shape[0]:
+                continue
+            upcoming.append({
+                "seconds": seconds,
+                "local": str(self._data.loc[row, JobsTableColumnNames.EXEC_TIME_LOCAL.value]),
+                "command": str(self._data.loc[row, JobsTableColumnNames.COMMAND.value]),
+                "description": str(self._data.loc[row, JobsTableColumnNames.DESCRIPTION.value] or ""),
+            })
+        upcoming.sort(key=lambda job: job["seconds"])
+        return upcoming[:limit], len(upcoming)
+
     def clear_jobs_overview(self):
         """ Clear the scheduled jobs overview. """
 
         self.beginResetModel()
         self._data = pd.DataFrame(columns=self._data.columns)
         self.jobs = []
+        self.execution_times_utc_as_datetime = []
+        self.execution_times_local_as_datetime = []
         self.endResetModel()
 
     def rowCount(self, index):
