@@ -16,6 +16,7 @@ Use the relay for the bursts around C2 and C3.  The camera commands (`take_pictu
 - [Connecting the relay](#connecting-the-relay)
 - [Script commands](#script-commands)
 - [Drive mode](#drive-mode)
+- [A Fujifilm body on the SDK](#a-fujifilm-body-on-the-sdk)
 - [Measured on a Fujifilm X-T4](#measured-on-a-fujifilm-x-t4)
 - [Fault finding](#fault-finding)
 
@@ -173,6 +174,21 @@ The drive mode of the camera decides what a held contact does:
 - In CH or CL, a held contact gives a burst for as long as it is held.
 - With AE bracketing on, one pulse runs the complete bracket, also after the contact opens.  A
   held contact does not start a second bracket.
+
+## A Fujifilm body on the SDK
+
+A Fujifilm X body can be on the relay and on the Fujifilm SDK at the same time.
+The relay then fires every frame of the camera commands, and the SDK only sets
+the exposure.  See [Fujifilm X cameras](FUJI.md#fire-the-body-through-a-relay).
+
+The SDK queues a PC transfer of each frame on the body, also of a relay frame.
+When the Fuji body is the only one connected, the relay commands work on that
+queue and on the exposure:
+
+- `relay_burst` deletes the queued transfers while the release is held.
+  Without this, the body stops after 32 frames.
+- `relay_arm` and `relay_shoot` first send the exposure settings that a busy
+  body refused, but only while S1 is open.  This adds at most 0.8 s.
 
 ## Measured on a Fujifilm X-T4
 
