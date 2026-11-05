@@ -30,6 +30,7 @@ dependencies = [
     "geopy==2.5.0",
     "astropy-iers-data==0.2026.11.2.0.34.55",
     "requests==2.34.2",
+    "qrcode==8.2",
 ]
 
 [project.urls]

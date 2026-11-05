@@ -16,14 +16,13 @@ import math
 from datetime import date as Date
 from typing import Optional
 
+from solareclipseworkbench import solar_radius
 from solareclipseworkbench.solar_eclipse import get_element_coeffs, get_elements, get_local_circumstances
 
 # The notch has to be this many pixels deep to be seen
 MIN_PIXELS = 2.0
 # ... and deeper than the seeing (arcseconds); the Sun is often low at C1 or C4
 SEEING_ARCSEC = 3.0
-# Mean apparent diameter of the Sun (arcseconds) at 1 AU
-SUN_DIAMETER_1AU_ARCSEC = 2 * 959.63
 # Pixel size used when none is known (micrometres): a typical full-frame body of 24 to 45 MP
 DEFAULT_PIXEL_SIZE_UM = 4.5
 # Never look further than this from the contact
@@ -44,7 +43,7 @@ def sun_diameter_arcsec(day: Date) -> float:
     """Apparent diameter of the Sun on this day (Earth-Sun distance to about 0.1 %)."""
     days_from_perihelion = day.timetuple().tm_yday - 4
     distance_au = 1 - 0.01671 * math.cos(2 * math.pi * days_from_perihelion / 365.25)
-    return SUN_DIAMETER_1AU_ARCSEC / distance_au
+    return 2 * solar_radius.get_radius_arcsec() / distance_au
 
 
 def contact_step_s(eclipse_date: str, latitude: float, longitude: float, altitude: float,

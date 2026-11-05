@@ -3,7 +3,8 @@ from astropy.time import Time
 from solareclipseworkbench.nutation import Nutation
 from skyfield.api import load
 from solareclipseworkbench.vec import Vec, PolynomialRegression
-from solareclipseworkbench.constants import SOLAR_RADIUS as solar_radius, EARTH_RADIUS as earth_radius
+from solareclipseworkbench.constants import EARTH_RADIUS as earth_radius
+from solareclipseworkbench import solar_radius
 
 class BesselianElementGenerator:
     """
@@ -103,8 +104,8 @@ class BesselianElementGenerator:
         """
         # Constants
         theta = Nutation.era_gst00b(0, jd_tdb)
-        # Solar and Earth radii are provided by solareclipseworkbench.constants
-        ds = solar_radius / earth_radius
+        # The solar radius is the one the user selected (959.95" by default, see solar_radius.py)
+        ds = solar_radius.get_radius_m() / earth_radius
         # The k value taking into account the lunar limb is 0.272281.  Without the lunar limb, it is 0.2725076.
         k = 0.272281
         rad = math.pi / 180

@@ -18,7 +18,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Union, Optional
 
-import geopandas
 import numpy as np
 import pandas as pd
 import pytz
@@ -28,13 +27,13 @@ from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QIm
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle, \
+QDoubleSpinBox
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 from astropy.time import Time
-from geodatasets import get_path
 from gphoto2 import GPhoto2Error, Camera
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -58,8 +57,10 @@ from solareclipseworkbench.limb_correction import (is_enabled as limb_correction
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
-from solareclipseworkbench.location_ui import ConfigManager, LocationWidget
-from solareclipseworkbench.constants import SUN_RADIUS, MOON_RADIUS
+from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget
+from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
+from solareclipseworkbench.constants import MOON_RADIUS
+from solareclipseworkbench import solar_radius
 from solareclipseworkbench import configuration
 
 ICON_PATH = Path(__file__).parent.resolve() / "img"
@@ -73,6 +74,18 @@ LIMB_CORRECTION_TOOLTIP = (
     "Use the Moon's topography to apply the Maestro-style contact-point "
     "correction to C2/C3. A separate whole-arc photographic capture window "
     "is available when the configured illuminated-arc criterion can be solved."
+)
+SOLAR_RADIUS_TOOLTIP = (
+    'The solar radius sets the duration of totality: a larger Sun shortens it, by about '
+    '1 s per 100 s for the 0.32" between the two values, and more near the path limits.\n'
+    '959.95" (default): Quaglia et al. 2021, measured from eclipse contacts, which is '
+    'what contact times need.\n'
+    '959.63": Auwers 1891, the convention of published predictions (Espenak, '
+    'Solar Eclipse Maestro, eclipse-chaser-log); choose it to compare with those.'
+)
+SOLAR_RADIUS_LOCKED_TOOLTIP = (
+    "The solar radius cannot be changed while a script has pending jobs. "
+    "Stop the scheduler first, then change the radius and reload the script."
 )
 LIMB_CORRECTION_LOCKED_TOOLTIP = (
     "The lunar limb correction cannot be changed while a script has pending "
@@ -441,6 +454,9 @@ class SolarEclipseView(QMainWindow, Observable):
         self.save_action = QAction("Save", self)
         self.live_view_action = QAction("Live View", self)
         self.beads_action = QAction("Baily's beads", self)
+        self.timeline_action = QAction("Timeline", self)
+        self.run_report_action = QAction("Run report", self)
+        self.compare_sites_action = QAction("Compare sites", self)
 
         self.place_time_frame = QFrame()
 
@@ -462,6 +478,23 @@ class SolarEclipseView(QMainWindow, Observable):
         # The controller replaces this with whatever was remembered.
         self.limb_correction_checkbox.setChecked(True)
         self.limb_correction_checkbox.setToolTip(LIMB_CORRECTION_TOOLTIP)
+
+        # The controller selects whatever was remembered
+        self.solar_radius_combo = QComboBox()
+        for key, (value, description) in solar_radius.PRESETS.items():
+            self.solar_radius_combo.addItem(f'{value:.2f}"  {description}', key)
+        self.solar_radius_combo.addItem("Custom value", "custom")
+        self.solar_radius_combo.setToolTip(SOLAR_RADIUS_TOOLTIP)
+        self.solar_radius_spinbox = QDoubleSpinBox()
+        self.solar_radius_spinbox.setRange(solar_radius.MIN_ARCSEC, solar_radius.MAX_ARCSEC)
+        self.solar_radius_spinbox.setDecimals(2)
+        self.solar_radius_spinbox.setSingleStep(0.01)
+        self.solar_radius_spinbox.setSuffix('"')
+        # Recompute when the value is entered, not on every keystroke
+        self.solar_radius_spinbox.setKeyboardTracking(False)
+        self.solar_radius_spinbox.setValue(solar_radius.DEFAULT_ARCSEC)
+        self.solar_radius_spinbox.setEnabled(False)
+        self.solar_radius_spinbox.setToolTip(SOLAR_RADIUS_TOOLTIP)
 
         self.c1_time_local_label = QLabel()
         self.c1_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -759,6 +792,12 @@ class SolarEclipseView(QMainWindow, Observable):
         # The switch sits with the times it changes: turning it off moves C2 and
         # C3 by seconds, which is more than a bead burst is long.
         reference_moments_grid_layout.addWidget(self.limb_correction_checkbox, 10, 0, 1, 6)
+        # Like the limb correction, it changes C2 and C3 (by up to about half a second)
+        solar_radius_label = QLabel("Solar radius")
+        solar_radius_label.setToolTip(SOLAR_RADIUS_TOOLTIP)
+        reference_moments_grid_layout.addWidget(solar_radius_label, 11, 0)
+        reference_moments_grid_layout.addWidget(self.solar_radius_combo, 11, 1, 1, 4)
+        reference_moments_grid_layout.addWidget(self.solar_radius_spinbox, 11, 5)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
         # At least 600 pixels, but wider when a larger font needs it, so the row
         # titles are never cut off.  The countdown column is sized for its widest
@@ -909,6 +948,28 @@ class SolarEclipseView(QMainWindow, Observable):
         self.beads_action.setIcon(beads_icon(32))
         self.beads_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.beads_action)
+
+        # Script timeline
+
+        self.timeline_action.setStatusTip("Show the script per camera: which commands start late or are dropped")
+        self.timeline_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        self.timeline_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.timeline_action)
+
+        # Run report
+
+        self.run_report_action.setStatusTip("Show what became of every command of a run, from its log file")
+        self.run_report_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.run_report_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.run_report_action)
+
+        # Compare candidate sites
+
+        self.compare_sites_action.setStatusTip("Compare candidate sites: totality, Sun altitude, Baily's beads "
+                                               "and cloud forecast side by side")
+        self.compare_sites_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
+        self.compare_sites_action.triggered.connect(self.on_toolbar_button_click)
+        self.toolbar.addAction(self.compare_sites_action)
 
         # Refresh Plot
         if self.low_cpu_mode:
@@ -1206,6 +1267,21 @@ class SolarEclipseController(Observer):
 
         self._live_view_window: Union[LiveViewWindow, None] = None
         self._beads_window: Union[BeadsPanel, None] = None
+        self._timeline_window = None
+        self._run_report_window = None
+        self._sites_window = None
+        # The script loaded last, for the timeline
+        self.script_filename: Union[str, None] = None
+
+        # The beads live for three or four seconds, so a 1 Hz redraw shows them
+        # in two or three frames.  Near a contact, a 150 ms timer redraws the
+        # bead window on a clock extrapolated from the last update_time() tick.
+        self._beads_clock = None
+        self._beads_fast_timer = QTimer()
+        self._beads_fast_timer.setInterval(150)
+        self._beads_fast_timer.timeout.connect(self._animate_beads)
+        if not low_cpu_mode:
+            self._beads_fast_timer.start()
 
         # Keeps idle cameras from going to sleep before the script starts.
         # Started once the cameras are connected; update_time() pauses it
@@ -1223,6 +1299,65 @@ class SolarEclipseController(Observer):
         self.view.limb_correction_checkbox.setChecked(remembered)
         set_limb_correction_enabled(remembered)
         self.view.limb_correction_checkbox.toggled.connect(self.on_limb_correction_toggled)
+
+        # The radius itself was loaded at start-up (main), before anything was computed
+        self._show_solar_radius()
+        self.view.solar_radius_combo.currentIndexChanged.connect(self.on_solar_radius_choice_changed)
+        self.view.solar_radius_spinbox.valueChanged.connect(self.on_solar_radius_value_changed)
+
+    def _show_solar_radius(self):
+        """Show the solar radius in use, without triggering a recalculation."""
+        value = solar_radius.get_radius_arcsec()
+        key = solar_radius.preset_for(value) or "custom"
+        combo_blocker = QSignalBlocker(self.view.solar_radius_combo)
+        spinbox_blocker = QSignalBlocker(self.view.solar_radius_spinbox)
+        self.view.solar_radius_combo.setCurrentIndex(self.view.solar_radius_combo.findData(key))
+        self.view.solar_radius_spinbox.setValue(value)
+        self.view.solar_radius_spinbox.setEnabled(key == "custom" and not self._run_in_progress())
+        del combo_blocker, spinbox_blocker
+
+    def on_solar_radius_choice_changed(self, index: int):
+        """A preset was chosen, or 'Custom value' (then the value is typed in the spin box)."""
+        key = self.view.solar_radius_combo.itemData(index)
+        if key == "custom":
+            self.view.solar_radius_spinbox.setEnabled(True)
+            self._apply_solar_radius(self.view.solar_radius_spinbox.value())
+        else:
+            self.view.solar_radius_spinbox.setEnabled(False)
+            value, _ = solar_radius.PRESETS[key]
+            blocker = QSignalBlocker(self.view.solar_radius_spinbox)
+            self.view.solar_radius_spinbox.setValue(value)
+            del blocker
+            self._apply_solar_radius(value)
+
+    def on_solar_radius_value_changed(self, value: float):
+        """A custom radius was entered."""
+        if self.view.solar_radius_combo.currentData() == "custom":
+            self._apply_solar_radius(value)
+
+    def _apply_solar_radius(self, value: float):
+        """Use this solar radius, remember it and redo the contact times."""
+        if abs(value - solar_radius.get_radius_arcsec()) < 1e-9:
+            return
+        if self._run_in_progress():
+            # Same reason as for the limb correction: the absolute triggers of
+            # the loaded jobs were computed with the radius in use.
+            self._show_solar_radius()
+            logging.warning("Stop the scheduler before changing the solar radius")
+            return
+        try:
+            solar_radius.set_radius_arcsec(value)
+        except ValueError as exc:
+            logging.warning("%s", exc)
+            self._show_solar_radius()
+            return
+        self.view.settings.setValue(solar_radius.SETTINGS_KEY, solar_radius.get_radius_arcsec())
+        logging.info("Solar radius: %s", solar_radius.describe())
+
+        if self.model.is_location_set and self.model.is_eclipse_date_set:
+            self.set_reference_moments()
+        if self._beads_window is not None:
+            self._beads_window.refresh()
 
     def on_limb_correction_toggled(self, enabled: bool):
         """Apply or drop the lunar limb correction and redo the contact times.
@@ -1254,6 +1389,11 @@ class SolarEclipseController(Observer):
         self.view.limb_correction_checkbox.setEnabled(not locked)
         self.view.limb_correction_checkbox.setToolTip(
             LIMB_CORRECTION_LOCKED_TOOLTIP if locked else LIMB_CORRECTION_TOOLTIP)
+        self.view.solar_radius_combo.setEnabled(not locked)
+        self.view.solar_radius_spinbox.setEnabled(
+            not locked and self.view.solar_radius_combo.currentData() == "custom")
+        for widget in (self.view.solar_radius_combo, self.view.solar_radius_spinbox):
+            widget.setToolTip(SOLAR_RADIUS_LOCKED_TOOLTIP if locked else SOLAR_RADIUS_TOOLTIP)
 
     def _run_in_progress(self) -> bool:
         """True while a schedule is loaded and running."""
@@ -1347,12 +1487,32 @@ class SolarEclipseController(Observer):
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
+        self._beads_clock = (reference_now, time.monotonic())
 
         self._update_keep_alive_allowed(reference_now)
 
         # self.view.eclipse_visualization.plot(current_time_utc)    FIXME
 
         self.update_jobs_countdown()
+
+    def _animate_beads(self):
+        """Redraw the bead window between clock ticks when a contact is near.
+
+        The time is the reference time of the last update_time() tick plus the
+        time since that tick, so a simulation offset is already in it.  More than
+        two minutes from C2 and C3 the 1 Hz tick is sufficient, and nothing is done.
+        """
+        try:
+            if self._beads_clock is None or self._beads_window is None or not self._beads_window.isVisible():
+                return
+            reference, base = self._beads_clock
+            now = reference + datetime.timedelta(seconds=time.monotonic() - base)
+            for info in (self.model.c2_info, self.model.c3_info):
+                if info is not None and abs((info.time_utc - now).total_seconds()) < 120:
+                    self._beads_window.set_current_time(now)
+                    return
+        except Exception:
+            LOGGER.debug("Bead animation tick failed", exc_info=True)
 
     def _update_keep_alive_allowed(self, reference_now: datetime.datetime):
         """Allow keep-alive pings only when they cannot get in the way of a shot.
@@ -1455,6 +1615,13 @@ class SolarEclipseController(Observer):
 
             self.view.eclipse_visualization.set_location(longitude, latitude, altitude)
 
+            # The eclipse may have been changed on the map in the location window.
+            selected = changed_object.location_plot.selected_eclipse_date()
+            if selected and selected != changed_object.initial_eclipse_date:
+                eclipse_date = datetime.datetime.strptime(selected, "%Y-%m-%d")
+                self.model.set_eclipse_date(Time(eclipse_date))
+                self.view.eclipse_date.setText(eclipse_date.strftime(DATE_FORMATS[self.view.date_format]))
+
             return
 
         elif isinstance(changed_object, EclipsePopup):
@@ -1525,6 +1692,11 @@ class SolarEclipseController(Observer):
             if self._beads_window is not None:
                 self._beads_window.close()
                 self._beads_window = None
+
+            for window in (self._timeline_window, self._run_report_window, self._sites_window):
+                if window is not None:
+                    window.close()
+            self._timeline_window = self._run_report_window = self._sites_window = None
 
             if self.model.camera_overview.camera_overview_dict:
                 cameras = self.model.camera_overview.camera_overview_dict.values()
@@ -1615,6 +1787,10 @@ class SolarEclipseController(Observer):
                                             self.model.camera_overview.camera_overview_dict, self,
                                             self.sim_reference_moment, self.sim_offset_minutes,
                                             gps_time_offset=self.model.gps_time_offset)
+
+                self.script_filename = filename
+                if self._timeline_window is not None:
+                    self._timeline_window.set_script(filename)
 
                 # Remind Nikon users to set the release-mode dial for the bursts / brackets in this script
                 self.model.camera_overview.set_continuous_mode_commands(
@@ -1708,6 +1884,15 @@ class SolarEclipseController(Observer):
         elif text == "Baily's beads":
             self._open_beads_window()
 
+        elif text == "Timeline":
+            self._open_timeline_window()
+
+        elif text == "Run report":
+            self._open_run_report_window()
+
+        elif text == "Compare sites":
+            self._open_sites_window()
+
         elif text == "Refresh Plot":
             self.update_visualization()
 
@@ -1800,6 +1985,64 @@ class SolarEclipseController(Observer):
 
         self._live_view_window = LiveViewWindow(camera, parent=None)
         self._live_view_window.show()
+
+    def _open_timeline_window(self):
+        """Open (or bring to front) the script timeline, on the script loaded last."""
+        from solareclipseworkbench.report_ui import TimelineWindow
+        if self._timeline_window is None:
+            self._timeline_window = TimelineWindow(
+                lambda: (self.model.reference_moments, self.model.camera_overview.camera_overview_dict))
+        if self._timeline_window.filename is None and self.script_filename is None:
+            self._timeline_window.choose_script()
+        else:
+            self._timeline_window.set_script(self.script_filename if self._timeline_window.filename is None
+                                             else None)
+        self._timeline_window.show()
+        self._timeline_window.activateWindow()
+        self._timeline_window.raise_()
+
+    def _open_run_report_window(self):
+        """Open (or bring to front) the run report, on the newest log with a loaded script."""
+        from solareclipseworkbench.report_ui import RunReportWindow
+        if self._run_report_window is None:
+            self._run_report_window = RunReportWindow()
+        else:
+            self._run_report_window.fill_logs()
+        self._run_report_window.show()
+        self._run_report_window.activateWindow()
+        self._run_report_window.raise_()
+
+    def _sites_context(self):
+        """The eclipse date (YYYY-MM-DD) and the location of the main window, for the Compare sites window."""
+        from solareclipseworkbench.site_comparison import Site
+        date = None
+        if self.model.is_eclipse_date_set:
+            day = self.model.eclipse_date.datetime
+            date = f"{day.year:04d}-{day.month:02d}-{day.day:02d}"
+        site = None
+        if self.model.is_location_set:
+            site = Site("Current location", self.model.longitude, self.model.latitude, self.model.altitude)
+        return date, site
+
+    def _use_site(self, site):
+        """Make a site of the Compare sites window the observing location, and recompute the contacts."""
+        self.set_location(site.longitude, site.latitude, site.altitude)
+        LOGGER.info("Location set to %s (%s, %s, %s m) from Compare sites", site.name, site.longitude,
+                    site.latitude, site.altitude)
+        if self.model.is_eclipse_date_set:
+            self.set_reference_moments()
+
+    def _open_sites_window(self):
+        """Open (or bring to front) the Compare sites window."""
+        from solareclipseworkbench.sites_ui import SiteComparisonWindow
+        if self._sites_window is None:
+            self._sites_window = SiteComparisonWindow(self._sites_context, self._use_site)
+        else:
+            self._sites_window.fill_saved_locations()
+            self._sites_window.refresh_context()
+        self._sites_window.show()
+        self._sites_window.activateWindow()
+        self._sites_window.raise_()
 
     def _open_beads_window(self):
         """Open (or bring to front) the Baily's beads window."""
@@ -2070,8 +2313,11 @@ class LocationPopup(QWidget, Observable):
             - Altitude [meters].
 
         The window also provides a saved-locations drop-down and an address-search bar (when geopy is installed).  When
-        pressing the "Plot" button, the location will be displayed on a world map (as a red dot).  When pressing the
-        "OK" button, the controller will be notified.
+        coordinates change, the location is shown on a map (as a red dot) together with the path of totality or
+        annularity of the selected eclipse, and the distance from the centre line.  The eclipse can be changed in
+        the drop-down above the map.  When pressing the "OK" button, the controller will be notified (and takes over
+        a changed eclipse as the eclipse date).  A street map next to it shows the site in detail; double-clicking it
+        moves the site there (after confirmation).
 
         If the location had already been set before, the coordinate fields will be pre-filled.
 
@@ -2081,7 +2327,7 @@ class LocationPopup(QWidget, Observable):
 
         QWidget.__init__(self)
         self.setWindowTitle("Location")
-        self.setGeometry(QRect(100, 100, 1000, 800))
+        self.setGeometry(QRect(100, 100, 1300, 800))
         self.add_observer(observer)
 
         model = observer.model
@@ -2101,8 +2347,18 @@ class LocationPopup(QWidget, Observable):
             )
         layout.addWidget(self.location_widget)
 
-        self.location_plot = LocationPlot()
-        layout.addWidget(self.location_plot)
+        # Detailed street map of the site, next to the map with the path of the selected eclipse.  The eclipse
+        # can be changed above the path map; pressing OK then also makes it the eclipse date of the main window.
+        self.site_map = SiteMapWidget(self.location_widget)
+        self.location_plot = EclipsePathWidget(date_format=DATE_FORMATS[observer.view.date_format])
+        self.initial_eclipse_date = model.eclipse_date.strftime("%Y-%m-%d") if model.eclipse_date is not None \
+            else None
+        self.location_plot.set_eclipse_date(self.initial_eclipse_date)
+
+        maps_layout = QHBoxLayout()
+        maps_layout.addWidget(self.site_map, stretch=1)
+        maps_layout.addWidget(self.location_plot, stretch=1)
+        layout.addLayout(maps_layout, stretch=1)
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.accept_location)
@@ -2120,6 +2376,7 @@ class LocationPopup(QWidget, Observable):
 
         self.location_widget.longitude_edit.textChanged.connect(self._schedule_auto_plot)
         self.location_widget.latitude_edit.textChanged.connect(self._schedule_auto_plot)
+        self.location_widget.altitude_edit.textChanged.connect(self._schedule_auto_plot)
 
         # Plot whatever coordinates are currently in the fields — covers both the
         # case where the model already had a location and the case where LocationWidget
@@ -2151,7 +2408,7 @@ class LocationPopup(QWidget, Observable):
         self._plot_timer.start()
 
     def plot_location(self):
-        """Plot the selected location on the world map.
+        """Plot the selected location on the map and say where it is relative to the eclipse path.
 
         Silently ignored when longitude or latitude are empty or not yet valid numbers.
         """
@@ -2160,7 +2417,11 @@ class LocationPopup(QWidget, Observable):
             lat = float(self.latitude.text())
         except ValueError:
             return
-        self.location_plot.plot_location(longitude=lon, latitude=lat)
+        try:
+            alt = float(self.altitude.text())
+        except ValueError:
+            alt = 0.0
+        self.location_plot.plot_location(longitude=lon, latitude=lat, altitude=alt)
 
     def accept_location(self):
         """ Notify the observer about the selection of a new location and close the pop-up window.
@@ -2200,22 +2461,8 @@ class EclipsePopup(QWidget, Observable):
 
         date_format = DATE_FORMATS[observer.view.date_format]
 
-        formatted_eclipse_dates = []
-
-        from solareclipseworkbench.utils import calculate_next_solar_eclipses
-        for eclipse_date in calculate_next_solar_eclipses(20):
-            formatted_eclipse_date = datetime.datetime.strptime(eclipse_date['date'], "%d/%m/%Y").strftime(date_format) + " - " + eclipse_date['type']
-            if eclipse_date['type'] == "T" or eclipse_date['type'] == "A" or eclipse_date['type'] == "H":
-                # For total, annular, and hybrid eclipses, also show the duration
-                duration = eclipse_date["duration"]
-                # Convert duration to minutes:seconds
-                minutes, seconds = divmod(duration, 60)
-                formatted_eclipse_date += f" - {int(minutes)}m {int(seconds):02}s"
-                formatted_eclipse_dates.append(formatted_eclipse_date)
-            else:
-                formatted_eclipse_dates.append(formatted_eclipse_date + " - " + str(int(eclipse_date["magnitude"] * 100)) + "%")
-
-        self.eclipse_combobox.addItems(formatted_eclipse_dates)
+        # "<date> - <type> - <duration for central eclipses, magnitude for partial ones>"
+        self.eclipse_combobox.addItems([label for label, _ in eclipse_choices(20, date_format)])
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.load_eclipse_date)
@@ -2385,61 +2632,6 @@ class SettingsPopup(QWidget, Observable):
         """ Close the pop-up window without accepting any settings changes."""
 
         self.close()
-
-
-class LocationPlot(FigureCanvas):
-    """ Display the world with the selected location marked with a red dot."""
-
-    def __init__(self, parent=None, dpi=100):
-        """ Plot a world map."""
-
-        self.figure = Figure(dpi=dpi)
-        self.ax = self.figure.add_subplot(111, aspect='equal')
-
-        FigureCanvas.__init__(self, self.figure)
-        self.setParent(parent)
-
-        FigureCanvas.updateGeometry(self)
-
-        self.location_is_drawn = False
-        self.location = None
-        self.gdf = None
-
-        # noinspection SpellCheckingInspection
-        world = geopandas.read_file(get_path("naturalearth.land"))
-        # Crop -> min longitude, min latitude, max longitude, max latitude
-        world.clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", ax=self.ax)
-
-        self.ax.set_aspect("equal")
-
-        self.draw()
-
-    def plot_location(self, longitude: float, latitude: float):
-        """ Indicate the given location on the world map with a red dot.
-
-        Args:
-            - longitude: Longitude of the location [degrees]
-            - latitude: Latitude of the location [degrees]
-        """
-
-        if self.location_is_drawn:
-            self.gdf.plot(ax=self.ax, color="white")
-
-        df = pd.DataFrame(
-            {
-                "Latitude": [latitude],
-                "Longitude": [longitude],
-            }
-        )
-        self.gdf = geopandas.GeoDataFrame(df, geometry=geopandas.points_from_xy(df.Longitude, df.Latitude),
-                                          crs="EPSG:4326")
-        self.gdf.plot(ax=self.ax, color="red")
-
-        self.ax.set_aspect("equal")
-
-        self.draw()
-        self.location_is_drawn = True
-
 
 
 @dataclass(frozen=True)
@@ -2679,7 +2871,7 @@ class EclipsePlotWidget(QtWidgets.QWidget):
         # Apparent angular radii (radians)
         sun_distance = sun_app.distance().m     # Distance Earth - Sun [m]
         moon_dist = moon_app.distance().m     # Distance Earth - Moon [m]
-        sun_ang_radius = math.asin(SUN_RADIUS / sun_distance)   # Angular radius of the Sun [radians]
+        sun_ang_radius = math.asin(solar_radius.get_radius_m() / sun_distance)   # Angular radius of the Sun [radians]
         moon_ang_radius = math.asin(MOON_RADIUS / moon_dist)    # Angular radius of the Moon [radians]
 
         # Normalise to solar radius for plotting
@@ -3854,8 +4046,6 @@ def main():
     # Before anything else: when the Fujifilm SDK libraries are not on the
     # library path yet, the process restarts here, before a log file is made.
     maybe_reexec_for_fuji_sdk()
-    setup_logging("sew")
-    LOGGER.info("Starting up Solar Eclipse Workbench")
 
     parser = argparse.ArgumentParser(description="Solar Eclipse Workbench")
     parser.add_argument(
@@ -3917,7 +4107,61 @@ def main():
         help="Specify continuous mode name for Sony cameras"
     )
 
+    parser.add_argument(
+        "--check",
+        metavar="SCRIPT",
+        help="print the timeline of a script per camera, with the commands that start late or are dropped, "
+             "and exit (needs --longitude, --latitude, --altitude and --date)",
+    )
+
+    parser.add_argument(
+        "--plot",
+        metavar="PNG",
+        help="with --check: also draw the timeline around totality to this image file",
+    )
+
+    parser.add_argument(
+        "--report",
+        metavar="LOG",
+        nargs="?",
+        const="",
+        help="print what became of every command of the last run in a log file and exit "
+             "(default: the newest log in which a script was loaded)",
+    )
+
+    parser.add_argument(
+        "--compare",
+        metavar="LOCATION",
+        nargs="*",
+        help="compare candidate sites for the eclipse of --date and exit: the named saved locations, or the "
+             "shortlist of the Compare sites window when none are named (plus --longitude/--latitude/--altitude "
+             "when given)",
+    )
+
+    parser.add_argument(
+        "--forecast",
+        action="store_true",
+        help="with --compare: also fetch the cloud cover at maximum eclipse from Open-Meteo",
+    )
+
     args = parser.parse_args()
+
+    if args.report is not None:
+        return report_main(args.report)
+
+    # --check prints its own result; the log file still gets everything
+    setup_logging("sew", console_level=logging.WARNING if args.check or args.compare is not None else logging.INFO)
+    LOGGER.info("Starting up Solar Eclipse Workbench")
+    # Before any contact time is computed, also for --check and --compare
+    solar_radius.load_saved()
+    LOGGER.info("Solar radius: %s", solar_radius.describe())
+
+    if args.check:
+        return check_main(args)
+
+    if args.compare is not None:
+        return compare_main(args)
+
     configuration.SONY_CONTINUOUS_MODE = args.sony_cont_mode
     # args[1:1] = ["-stylesheet", str(styles_location)]
     app = QApplication(list(sys.argv))
@@ -3957,6 +4201,92 @@ def main():
         QTimer.singleShot(0, controller.set_reference_moments)
 
     return app.exec()
+
+
+def check_main(args) -> int:
+    """sew --check: print the timeline of a script and exit; 1 when a command will be dropped."""
+    from solareclipseworkbench.script_timeline import build_timeline, draw_timeline, format_timeline
+
+    if args.longitude is None or args.latitude is None or args.altitude is None or not args.date:
+        print("--check needs the location and the date: --longitude, --latitude, --altitude and --date")
+        return 2
+    reference_moments, _, eclipse_type = calculate_reference_moments(args.longitude, args.latitude, args.altitude,
+                                                                     Time(args.date))
+    timeline = build_timeline(args.check, reference_moments)
+    print(f"Script {args.check}, {eclipse_type} eclipse of {args.date} at {args.longitude}, {args.latitude}, "
+          f"{args.altitude} m\n")
+    print(format_timeline(timeline))
+    if args.plot:
+        from matplotlib.figure import Figure
+        figure = Figure(figsize=(14, 2 + 0.6 * max(1, len(timeline.cameras))))
+        draw_timeline(figure, timeline)
+        figure.savefig(args.plot, dpi=120)
+        print(f"Timeline drawn to {args.plot}")
+    return 1 if timeline.dropped or timeline.unknown_moments else 0
+
+
+def compare_main(args) -> int:
+    """sew --compare: print the candidate sites side by side and exit."""
+    from solareclipseworkbench import site_comparison
+    from solareclipseworkbench.site_comparison import Site
+
+    if not args.date:
+        print("--compare needs the date of the eclipse: --date YYYY-MM-DD")
+        return 2
+    config = ConfigManager()
+    sites = []
+    if args.compare:
+        for name in args.compare:
+            location = config.get_location(name)
+            if location is None:
+                saved = ", ".join(loc["name"] for loc in config.get_locations()) or "none"
+                print(f"No saved location called {name!r} (saved: {saved})")
+                return 2
+            sites.append(Site(location["name"], float(location["longitude"]), float(location["latitude"]),
+                              float(location.get("altitude", 0.0))))
+    else:
+        for data in config.get_candidate_sites():
+            try:
+                sites.append(Site.from_dict(data))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if args.longitude is not None and args.latitude is not None:
+        sites.append(Site("Command line location", args.longitude, args.latitude, args.altitude or 0.0))
+    if not sites:
+        print("No sites to compare: name saved locations, add sites in the Compare sites window, "
+              "or give --longitude, --latitude and --altitude")
+        return 2
+
+    results = site_comparison.compare_sites(sites, args.date)
+    forecasts = [site_comparison.fetch_cloud_cover_for(r) for r in results] if args.forecast else None
+    print(site_comparison.format_comparison(results, args.date, forecasts))
+    return 1 if all(r.error for r in results) else 0
+
+
+def report_main(log: str) -> int:
+    """sew --report: print the report of the last run in a log file and exit."""
+    from solareclipseworkbench import run_report
+
+    if log:
+        path = Path(log)
+    else:
+        logs = run_report.run_logs()
+        if not logs:
+            print(f"No log with a loaded script in {run_report.LOG_DIR}")
+            return 1
+        path = logs[0]
+    try:
+        runs = run_report.read_log(path)
+    except OSError as e:
+        print(f"Could not read {path}: {e}")
+        return 1
+    if not runs:
+        print(f"No script was loaded in {path}")
+        return 1
+    if len(runs) > 1:
+        print(f"{len(runs)} scripts were loaded in this log; this is the last one.\n")
+    print(run_report.format_report(runs[-1], path))
+    return 0
 
 
 def sync_cameras(controller: SolarEclipseController):

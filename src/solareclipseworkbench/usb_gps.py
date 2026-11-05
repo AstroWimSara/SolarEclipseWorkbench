@@ -242,6 +242,12 @@ def _make_usb_gps_worker():
                 return
 
             # --- device discovery ---
+            if not self._device:
+                try:
+                    from solareclipseworkbench import wsl_usb
+                    wsl_usb.attach_shared_devices()
+                except Exception:
+                    pass  # discovery carries on with what is already attached
             device = self._device or find_gps_device()
             if device is None:
                 self.error.emit(
