@@ -21,6 +21,12 @@ HARDWARE_COMMANDS = {
     'relay_release': 'relay',
 }
 
+#: The kind under which a camera registers when it keeps a USB session open
+#: while the relay fires it.  The relay commands call the hooks of this camera
+#: (relay_trigger lists them), so that it can prepare for the relay frames and
+#: clear up after them.
+TETHERED_CAMERA = 'tethered_camera'
+
 
 def register_hardware(kind: str, device) -> None:
     """Make a device (e.g. a relay trigger) available to scheduled commands.

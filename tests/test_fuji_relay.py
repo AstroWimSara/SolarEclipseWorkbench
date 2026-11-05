@@ -16,8 +16,10 @@ from fujixsdk import EclipseShooter
 
 from solareclipseworkbench import fuji_camera, hardware_problems
 from solareclipseworkbench.fuji_camera import FujiCamera
-from solareclipseworkbench.hardware_registry import register_hardware
-from solareclipseworkbench.relay_trigger import RelayTrigger, SimulatedBackend, Wiring
+from solareclipseworkbench.camera import SdkDetection
+from solareclipseworkbench.hardware_registry import TETHERED_CAMERA, get_hardware, register_hardware
+from solareclipseworkbench.relay_trigger import (RelayTrigger, SimulatedBackend, Wiring, relay_arm,
+                                                 relay_burst, relay_shoot)
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +33,10 @@ def _clean(monkeypatch):
     monkeypatch.setattr(fuji_camera, "SETTLE_BETWEEN_DRAINS_S", 0.0)
     hardware_problems.clear()
     register_hardware("relay", None)
+    register_hardware(TETHERED_CAMERA, None)
     yield
     register_hardware("relay", None)
+    register_hardware(TETHERED_CAMERA, None)
     hardware_problems.clear()
 
 
@@ -260,3 +264,188 @@ def test_the_longest_hold_follows_the_drive_rate():
     assert fuji_camera.MAX_BURST_S == fuji_camera.MAX_BURST_FRAMES / fuji_camera.RELAY_FPS
     cam, _ = _camera()
     assert cam.max_relay_hold_s == fuji_camera.MAX_BURST_S
+
+
+# ------------------------------------------------ the relay script commands
+#
+# relay_burst, relay_shoot and relay_arm get the relay, not the camera.  The
+# registered tethered camera gives them the work on its queue and exposure.
+
+
+def _tethered(capacity=(0, 32)):
+    cam, sdk = _camera(capacity)
+    register_hardware(TETHERED_CAMERA, cam)
+    return cam, sdk
+
+
+def test_relay_burst_drains_the_tethered_body_while_the_release_is_held():
+    cam, sdk = _tethered()
+    relay = _relay()
+    relay.half_press()                        # armed, as before a contact burst
+    seen = []
+    sdk.drain_buffer.side_effect = lambda budget_s=None: seen.append(
+        (relay.closed_channels.copy(), threading.current_thread())) or 0
+
+    relay_burst(relay, "0.2")
+
+    assert len(seen) >= 2, "relay_burst did not drain while the release was held"
+    assert seen[0][0] == {1, 2}
+    assert seen[0][1] is threading.current_thread()
+    # pressed() keeps the arm, so S1 is still held for the next relay command.
+    assert relay.closed_channels == {1}
+
+
+def test_relay_burst_without_a_tethered_camera_only_holds_the_release():
+    relay = _relay()
+
+    relay_burst(relay, "0.05")
+
+    assert relay.closed_channels == set()
+
+
+def test_relay_burst_does_not_drain_while_a_camera_command_has_the_body(monkeypatch):
+    # The SDK is not thread-safe.  When a camera command holds the body, the
+    # burst still fires, but it leaves the queue alone.
+    monkeypatch.setattr(fuji_camera, "RELAY_LOCK_WAIT_S", 0.01)
+    cam, sdk = _tethered()
+    relay = _relay()
+    taken = threading.Event()
+    done = threading.Event()
+
+    def _camera_command():
+        with cam._lock:
+            taken.set()
+            done.wait(5)
+
+    worker = threading.Thread(target=_camera_command)
+    worker.start()
+    taken.wait(5)
+    try:
+        relay_burst(relay, "0.05")
+    finally:
+        done.set()
+        worker.join(5)
+
+    assert not sdk.drain_buffer.called
+    assert relay.closed_channels == set()
+
+
+def test_a_paced_relay_burst_makes_room_first():
+    # The pulses own the timing, so the queue cannot be drained between them.
+    cam, sdk = _tethered(capacity=(30, 32))
+    relay = _relay()
+
+    relay_burst(relay, "0.1", "0.05")
+
+    assert sdk.drain_buffer.call_count >= 2   # room first, then one round after
+    assert relay.closed_channels == set()
+
+
+def test_relay_arm_sends_the_pending_exposure_before_s1_closes():
+    # With S1 held, the body can refuse the write, and the write can stop the
+    # drive.  So the catch-up comes first.
+    cam, sdk = _tethered()
+    relay = _relay()
+    cam._pending = {"shutter_speed": "1/500"}
+    order = []
+    sdk.set_shutter_speed.side_effect = lambda _speed: order.append(("write", relay.closed_channels.copy()))
+
+    relay_arm(relay)
+    order.append(("armed", relay.closed_channels.copy()))
+
+    assert order == [("write", set()), ("armed", {1})]
+    assert cam._pending == {}
+
+
+def test_relay_shoot_sends_no_exposure_while_s1_is_held():
+    cam, sdk = _tethered()
+    relay = _relay()
+    relay.half_press()
+    cam._pending = {"shutter_speed": "1/500"}
+
+    relay_shoot(relay)
+
+    assert not sdk.set_shutter_speed.called
+    assert cam._pending == {"shutter_speed": "1/500"}
+
+
+def test_relay_shoot_drains_the_tethered_body_when_its_queue_fills():
+    cam, sdk = _tethered(capacity=(30, 32))
+    relay = _relay()
+
+    relay_shoot(relay)
+
+    assert sdk.drain_buffer.called
+
+
+def test_a_catch_up_with_too_little_time_writes_nothing():
+    cam, sdk = _camera()
+    cam._pending = {"shutter_speed": "1/500"}
+
+    assert cam.apply_pending(budget_s=0.1) is False
+    assert not sdk.set_shutter_speed.called
+
+
+def test_a_catch_up_keeps_the_exposure_to_restore_after_a_reconnect():
+    cam, sdk = _camera()
+    cam._requested = {"shutter_speed": "1/500", "iso": 200}
+    cam._pending = {"shutter_speed": "1/500"}
+
+    assert cam.apply_pending(budget_s=0.8) is True
+    assert cam._requested == {"shutter_speed": "1/500", "iso": 200}
+
+
+def test_with_nothing_pending_a_drifted_speed_is_written_again():
+    # A write that raised no error is not proof that the body took it.
+    cam, sdk = _camera()
+    cam._applied_speed = 2000
+    sdk.get_shutter_speed.side_effect = [(1000, 0), (2000, 0)]
+
+    cam.apply_pending(budget_s=0.8)
+
+    sdk.set_shutter_speed.assert_called_once_with(2000)
+
+
+def test_with_nothing_pending_a_correct_speed_is_only_read():
+    cam, sdk = _camera()
+    cam._applied_speed = 2000
+    sdk.get_shutter_speed.return_value = (2000, 0)
+
+    cam.apply_pending(budget_s=0.8)
+
+    assert not sdk.set_shutter_speed.called
+
+
+# ------------------------------------------------------------- registration
+
+
+def _detect(monkeypatch, *names):
+    cameras = {name: _camera()[0] for name in names}
+    monkeypatch.setattr(fuji_camera, "find_fuji_sdk_path", lambda: "/sdk")
+    monkeypatch.setattr(fuji_camera, "detect_fuji",
+                        lambda _path: fuji_camera.FujiDetection(cameras, len(cameras)))
+    detection = fuji_camera.detect_for_workbench()
+    assert isinstance(detection, SdkDetection)
+    return cameras
+
+
+def test_one_fuji_body_is_given_to_the_relay_commands(monkeypatch):
+    cameras = _detect(monkeypatch, "Fuji Fujifilm X-T4")
+
+    assert get_hardware(TETHERED_CAMERA) is cameras["Fuji Fujifilm X-T4"]
+
+
+def test_with_two_fuji_bodies_the_relay_commands_get_neither(monkeypatch):
+    # It is not known which body the relay cable goes to.
+    _detect(monkeypatch, "Fuji Fujifilm X-T4")
+    _detect(monkeypatch, "Fuji Fujifilm X-T4", "Fuji Fujifilm X-H2")
+
+    assert get_hardware(TETHERED_CAMERA) is None
+
+
+def test_a_disconnected_body_leaves_the_relay_commands(monkeypatch):
+    cameras = _detect(monkeypatch, "Fuji Fujifilm X-T4")
+
+    cameras["Fuji Fujifilm X-T4"].disconnect()
+
+    assert get_hardware(TETHERED_CAMERA) is None

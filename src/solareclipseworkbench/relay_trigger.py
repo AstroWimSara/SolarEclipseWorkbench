@@ -45,6 +45,7 @@ import serial.tools.list_ports
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import _MAX_LOCK_WAIT_S
 from solareclipseworkbench.discovery import Candidate
+from solareclipseworkbench.hardware_registry import TETHERED_CAMERA, get_hardware
 from solareclipseworkbench.serial_ports import resolve_port, usb_serial_ports
 
 try:
@@ -771,6 +772,12 @@ class RelayTrigger:
             return
         self._set(self.wiring.s1_channel, True)
 
+    @property
+    def armed(self) -> bool:
+        """Whether S1 is held closed, by relay_arm or half_press().  Never on one channel."""
+        return (not self.wiring.is_single_channel
+                and self.wiring.s1_channel in self._closed_channels)
+
     def release_half_press(self) -> None:
         if self.wiring.is_single_channel:
             return
@@ -791,8 +798,7 @@ class RelayTrigger:
         keeps the camera awake as well, which is the reason the settle exists.
         """
         settle_s = self.wiring.settle_s if settle is None else settle
-        pre_armed = (not self.wiring.is_single_channel
-                     and self.wiring.s1_channel in self._closed_channels)
+        pre_armed = self.armed
         try:
             self.half_press()
             if not self.wiring.is_single_channel and settle_s > 0 and not pre_armed:
@@ -903,6 +909,61 @@ def open_trigger(kind: str = "auto", port: Optional[str] = None,
 # These mirror the camera command functions so eclipse scripts can drive the
 # relay the same way they drive a camera.  Arguments arrive from the script as
 # strings, so they are converted here.
+#
+# A camera can keep a USB session open while the relay fires it.  Such a camera
+# can need work around the relay frames: settings to send before the contacts
+# close, or a queue on the body to empty while and after they are closed.  It
+# registers itself as hardware_registry.TETHERED_CAMERA, and the commands below
+# call the hooks it has.  Each hook is optional:
+#
+#   catch_up_exposure(budget_s)          before relay_shoot and relay_arm, with
+#                                        S1 open.  It must return within budget_s.
+#   burst_through_relay(trigger, duration_s, interval_s) -> pulses
+#                                        runs the complete relay_burst in place
+#                                        of trigger.burst().
+#   after_relay_frame()                  after relay_shoot and relay_bulb.
+#
+# When catch_up_exposure or after_relay_frame fails, the failure is logged and
+# the relay command still fires.  burst_through_relay must fire the burst and
+# release the contacts itself, also when its own work on the camera fails.
+
+#: The most time the exposure catch-up may add before the contacts close.
+CATCH_UP_BUDGET_S = 0.8
+
+
+def _tethered_hook(name: str):
+    """The hook ``name`` of the registered tethered camera, or None."""
+    return getattr(get_hardware(TETHERED_CAMERA), name, None)
+
+
+def _catch_up_exposure(trigger: "RelayTrigger") -> None:
+    """Let the tethered camera send the settings it could not send before.
+
+    The relay fires at the exposure that is on the body, so a setting that a
+    busy body refused earlier is sent now.  Not while S1 is held: a body with S1
+    held can refuse the change, and the write can stop its drive.
+    """
+    hook = _tethered_hook('catch_up_exposure')
+    if hook is None:
+        return
+    if trigger.armed:
+        logger.debug("Exposure catch-up skipped: S1 is held")
+        return
+    try:
+        hook(CATCH_UP_BUDGET_S)
+    except Exception:
+        logger.warning("Exposure catch-up before the relay failed", exc_info=True)
+
+
+def _after_relay_frame() -> None:
+    """Let the tethered camera clear up after a relay frame."""
+    hook = _tethered_hook('after_relay_frame')
+    if hook is None:
+        return
+    try:
+        hook()
+    except Exception:
+        logger.warning("The camera could not clear up after the relay frame", exc_info=True)
 
 
 def _serialised_on_trigger(func):
@@ -937,7 +998,9 @@ def _serialised_on_trigger(func):
 def relay_shoot(trigger: RelayTrigger) -> None:
     """Take a single frame through the relay."""
     logger.info("relay_shoot")
+    _catch_up_exposure(trigger)
     trigger.shoot()
+    _after_relay_frame()
 
 
 @_serialised_on_trigger
@@ -951,7 +1014,13 @@ def relay_burst(trigger: RelayTrigger, duration, interval=None) -> None:
     interval = None if interval in (None, "") else float(interval)
     logger.info("relay_burst: %.3f s %s", duration,
                 "held" if interval is None else f"pulsed every {interval:.3f} s")
-    pulses = trigger.burst(duration, interval)
+    hook = _tethered_hook('burst_through_relay')
+    if hook is None:
+        pulses = trigger.burst(duration, interval)
+    else:
+        # The hook owns the contacts for the whole burst.  It releases them
+        # itself, also when it fails.
+        pulses = hook(trigger, duration, interval)
     logger.info("relay_burst issued %d pulse(s)", pulses)
 
 
@@ -961,6 +1030,7 @@ def relay_bulb(trigger: RelayTrigger, seconds) -> None:
     seconds = float(seconds)
     logger.info("relay_bulb: %.3f s", seconds)
     trigger.bulb(seconds)
+    _after_relay_frame()
 
 
 @_serialised_on_trigger
@@ -972,8 +1042,10 @@ def relay_arm(trigger: RelayTrigger) -> None:
     way out, so the arm stays through shots and bursts until relay_release.
 
     Do not keep S1 armed while the camera's exposure is changed over USB: a body
-    with S1 held can refuse the change.
+    with S1 held can refuse the change.  For that reason, a tethered camera
+    sends the settings it could not send before S1 closes.
     """
+    _catch_up_exposure(trigger)
     logger.info("relay_arm: S1 held")
     trigger.half_press()
 

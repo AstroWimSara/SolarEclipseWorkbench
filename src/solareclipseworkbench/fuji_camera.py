@@ -29,12 +29,13 @@ import platform
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple, Optional, Sequence
 
 from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import BaseCamera, CameraError, SdkDetection, register_sdk_backend
-from solareclipseworkbench.hardware_registry import get_hardware
+from solareclipseworkbench.hardware_registry import TETHERED_CAMERA, get_hardware, register_hardware
 
 # The bindings import without the SDK libraries, which are only loaded when a
 # camera is opened.  The import itself can fail when the package is missing.
@@ -163,6 +164,18 @@ MID_BURST_DRAIN_S = 2.0
 
 #: How often the hold looks at the queue again while the release is held.
 HOLD_POLL_S = 0.05
+
+#: How long a relay command waits for a camera command to free the body.  After
+#: that, the relay fires without the work on the queue or the exposure.
+RELAY_LOCK_WAIT_S = 2.0
+
+#: Below this there is no time for a catch-up write: one exposure write on a
+#: free body takes about 0.3 s.
+MIN_CATCHUP_BUDGET_S = 0.25
+
+#: The most time the read-back of the shutter speed may take before the relay
+#: fires.  A read takes about 20 ms and a write about 200 ms.
+VERIFY_SPEED_BUDGET_S = 0.6
 
 
 def _through_busy(action, what: str, deadline: float, recover=None):
@@ -598,6 +611,8 @@ class FujiCamera(BaseCamera):
         self._connected = True
 
     def disconnect(self) -> None:
+        if get_hardware(TETHERED_CAMERA) is self:
+            register_hardware(TETHERED_CAMERA, None)
         try:
             if self._sdk_cam is not None:
                 self._sdk_cam.close()
@@ -1020,6 +1035,25 @@ class FujiCamera(BaseCamera):
             return False
         return captured >= BUFFER_SLOTS * DRAIN_AT
 
+    def ensure_room_for(self, frames: int) -> int:
+        """Drain the queue unless it has room for ``frames`` more.
+
+        For a paced relay burst, which cannot stop to drain.  A queue that
+        cannot be read is drained: a second lost before the burst is better than
+        a queue that fills in it.
+        """
+        try:
+            captured, _ = self._sdk.get_buffer_capacity()
+        except Exception:
+            logging.warning('%s: buffer unreadable before a burst; draining it', self.name,
+                            exc_info=True)
+            return self.drain()
+        if BUFFER_SLOTS - captured >= frames:
+            return 0
+        logging.info('%s: draining before a burst: %d slot(s) free, %d needed',
+                     self.name, BUFFER_SLOTS - captured, frames)
+        return self.drain()
+
     def drain_if_filling(self) -> int:
         """Drain one round, but only when the queue fills."""
         if not self.buffer_is_filling():
@@ -1060,6 +1094,133 @@ class FujiCamera(BaseCamera):
                 time.sleep(min(HOLD_POLL_S, max(0.0, deadline - time.monotonic())))
         logging.info('%s: %d transfer(s) deleted during the %.2f s hold', self.name, drained, seconds)
         return drained
+
+    # --- Exposure before a relay frame --------------------------------
+
+    def apply_pending(self, budget_s: Optional[float] = None) -> bool:
+        """Send the settings that a busy body refused earlier.
+
+        When nothing is pending, read back the shutter speed instead, and write
+        it again when the body is on a different one: a write that raised no
+        error is not proof that the body took it.  Below MIN_CATCHUP_BUDGET_S
+        no write is tried.
+
+        Returns True when no setting is pending.
+        """
+        pending = dict(self._pending)
+        if not pending:
+            self._verify_speed(budget_s)
+            return True
+        if budget_s is not None and budget_s < MIN_CATCHUP_BUDGET_S:
+            logging.info('%s: %d setting(s) pending, and %.2f s is too short to send them',
+                         self.name, len(pending), budget_s)
+            return False
+        logging.info('%s: sending the setting(s) a busy body refused: %s', self.name, pending)
+        # configure() remembers what it is asked for, to restore it after a
+        # reconnect.  The catch-up asks for part of it only, so the full
+        # request is put back.
+        requested = self._requested
+        try:
+            self.configure(budget_s=budget_s, **pending)
+        except CameraError:
+            logging.warning('%s: some pending settings were refused again', self.name, exc_info=True)
+        finally:
+            self._requested = requested
+        return not self._pending
+
+    def _verify_speed(self, budget_s: Optional[float] = None) -> None:
+        """Read the shutter speed back, and write it again when it is wrong.
+
+        Never raises, and never takes more than ``budget_s`` or
+        VERIFY_SPEED_BUDGET_S: it runs just before the relay fires.
+        """
+        wanted = self._applied_speed
+        if wanted is None:
+            return
+        limit = VERIFY_SPEED_BUDGET_S if budget_s is None else min(budget_s, VERIFY_SPEED_BUDGET_S)
+        deadline = time.monotonic() + limit
+        try:
+            with self._lock:
+                got, _ = self._sdk.get_shutter_speed()
+                if got == wanted:
+                    return
+                logging.warning('%s: the body is on %s, but %s was set; writing it again',
+                                self.name, self.describe_speeds([got]), self.describe_speeds([wanted]))
+                while time.monotonic() < deadline:
+                    try:
+                        self._sdk.set_shutter_speed(wanted)
+                    except Exception:
+                        time.sleep(0.05)
+                        continue
+                    got, _ = self._sdk.get_shutter_speed()
+                    if got == wanted:
+                        return
+                logging.warning('%s: the speed could not be set again in %.2f s; the relay '
+                                'fires at the speed on the body', self.name, limit)
+        except Exception:
+            logging.debug('%s: speed read-back failed', self.name, exc_info=True)
+
+    # --- Hooks for the relay_* script commands ------------------------
+    #
+    # The relay commands run on their own thread and do not hold the lock of
+    # this camera.  Each hook takes the lock itself, and does not wait long for
+    # it: a camera command that holds it already works on the queue and the
+    # exposure itself.
+
+    @contextmanager
+    def _locked_for_relay(self, wait_s: float):
+        """Take the camera lock for a relay command.  Yields whether it was taken."""
+        acquired = (self._lock.acquire(timeout=wait_s) if wait_s > 0
+                    else self._lock.acquire(blocking=False))
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self._lock.release()
+
+    def catch_up_exposure(self, budget_s: float) -> None:
+        """Before relay_shoot and relay_arm: send the settings that are still pending."""
+        with self._locked_for_relay(0.0) as acquired:
+            if not acquired:
+                logging.info('%s: busy with a camera command; no exposure catch-up', self.name)
+                return
+            self.apply_pending(budget_s=budget_s)
+
+    def burst_through_relay(self, trigger, duration_s: float,
+                            interval_s: Optional[float] = None) -> int:
+        """Run a relay_burst, and keep the transfer queue clear.
+
+        Held: the queue is drained while the release is held (see
+        :meth:`hold_and_drain`).  Paced: the pulses own the timing, so the room
+        is made before.  Both end with one drain round.
+
+        Returns the number of S2 pulses, as RelayTrigger.burst() does.
+        """
+        if duration_s > self.max_relay_hold_s:
+            logging.warning('%s: a %.1f s hold is longer than the %.1f s the image buffer of '
+                            'the body takes', self.name, duration_s, self.max_relay_hold_s)
+        paced = interval_s is not None and not trigger.wiring.is_single_channel
+        with self._locked_for_relay(RELAY_LOCK_WAIT_S) as acquired:
+            if not acquired:
+                logging.warning('%s: busy with a camera command; the relay burst runs without '
+                                'draining the transfer queue', self.name)
+                return trigger.burst(duration_s, interval_s)
+            if paced:
+                self.ensure_room_for(math.ceil(duration_s / interval_s) + 1)
+                pulses = trigger.burst(duration_s, interval_s)
+            else:
+                self.hold_and_drain(trigger, duration_s)
+                pulses = 1
+            self._note_frame_fired()
+            self.drain(rounds=1)
+            return pulses
+
+    def after_relay_frame(self) -> None:
+        """After relay_shoot and relay_bulb: drain the queue when it fills."""
+        with self._locked_for_relay(0.0) as acquired:
+            if acquired:
+                self._note_frame_fired()
+                self.drain_if_filling()
 
     # --- gphoto2-style stubs ------------------------------------------
 
@@ -1313,8 +1474,26 @@ def detect_for_workbench() -> SdkDetection:
     if not detection.bodies_seen:
         logging.info('Any Fuji body on the bus is left to the Fujifilm SDK: gphoto2 cannot shoot '
                      'it tethered, and its claim would lock the SDK out')
+    _register_for_relay(list(detection.cameras.values()))
     return SdkDetection(detection.cameras, ('fuji',))
 
+
+def _register_for_relay(cameras: list) -> None:
+    """Give the relay commands the Fuji body that the relay fires.
+
+    relay_burst, relay_shoot and relay_arm get a relay, not a camera.  The body
+    queues a transfer for each relay frame, so they must find it to empty the
+    queue.  With more than one Fuji body, it is not known which one the relay
+    fires, and none is registered.
+    """
+    if len(cameras) == 1:
+        register_hardware(TETHERED_CAMERA, cameras[0])
+        return
+    if len(cameras) > 1:
+        logging.warning('%d Fuji bodies: the relay commands do not empty the transfer queue '
+                        'of any of them', len(cameras))
+    if isinstance(get_hardware(TETHERED_CAMERA), FujiCamera):
+        register_hardware(TETHERED_CAMERA, None)
 
 
 register_sdk_backend(detect_for_workbench)
