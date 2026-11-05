@@ -26,7 +26,8 @@ from PyQt6.QtWidgets import (
 )
 
 from solareclipseworkbench import solar_radius
-from solareclipseworkbench.location_ui import ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget
+from solareclipseworkbench.location_ui import (ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget,
+                                               SiteMapWidget)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme, _is_dark_mode_preferred, _build_dark_palette, dark_lineedit_style, apply_dark_to_lineedit
 
 # Import eclipse-specific modules
@@ -280,6 +281,11 @@ class EclipseConfigPage(QWizardPage):
 
         self.location_widget = LocationWidget(self.config_manager)
         location_layout.addWidget(self.location_widget)
+
+        # Street map of the site: check where the coordinates really are, and double-click to correct them.
+        self.site_map = SiteMapWidget(self.location_widget)
+        self.site_map.setMinimumHeight(340)
+        location_layout.addWidget(self.site_map)
 
         location_group.setLayout(location_layout)
         layout.addWidget(location_group)

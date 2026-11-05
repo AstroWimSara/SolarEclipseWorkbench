@@ -18,14 +18,15 @@ from pathlib import Path
 from typing import Optional, Dict, List
 
 import qrcode
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QDoubleValidator, QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QComboBox, QPushButton, QMessageBox,
-    QDialog, QDialogButtonBox,
+    QDialog, QDialogButtonBox, QSlider,
 )
 from solareclipseworkbench.qt_utils import dark_lineedit_style, apply_dark_to_lineedit
+from solareclipseworkbench.tile_map import TileMap, distance_metres, MIN_ZOOM, MAX_ZOOM
 
 try:
     from geopy.geocoders import Nominatim
@@ -1281,3 +1282,107 @@ class LocationWidget(QWidget):
             "QLabel { color: #c40000; font-style: italic; }"
         )
         QMessageBox.warning(self, "Geocoding Error", error_msg)
+
+
+class SiteMapWidget(QWidget):
+    """Street map of the observing site with a zoom slider, kept in step with a LocationWidget.
+
+    The map follows the coordinates in *location_widget* as they are typed (debounced), and a double-click on the
+    map asks whether to move the observing location to that spot.  Used by the `Location` window of the
+    application and by the location step of the wizard.
+    """
+
+    def __init__(self, location_widget: LocationWidget, parent=None):
+        super().__init__(parent)
+        self.location_widget = location_widget
+
+        self.tile_map = TileMap()
+
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(QLabel("Zoom"))
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(MIN_ZOOM, MAX_ZOOM)
+        self.zoom_slider.setValue(self.tile_map.zoom())
+        self.zoom_slider.valueChanged.connect(self.tile_map.set_zoom)
+        zoom_layout.addWidget(self.zoom_slider)
+        self.zoom_label = QLabel(f"{self.tile_map.zoom()}")
+        self.zoom_label.setFixedWidth(30)
+        self.zoom_slider.valueChanged.connect(lambda value: self.zoom_label.setText(f"{value}"))
+        self.tile_map.zoom_changed.connect(self.zoom_slider.setValue)
+        zoom_layout.addWidget(self.zoom_label)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.tile_map, stretch=1)
+        layout.addLayout(zoom_layout)
+        self.setLayout(layout)
+
+        # Follow the coordinate fields, 300 ms after the last change.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(300)
+        self._refresh_timer.timeout.connect(self.refresh)
+        location_widget.longitude_edit.textChanged.connect(self._refresh_timer.start)
+        location_widget.latitude_edit.textChanged.connect(self._refresh_timer.start)
+        location_widget.location_name_edit.textChanged.connect(self._refresh_timer.start)
+        location_widget.location_combo.currentTextChanged.connect(self._refresh_timer.start)
+
+        self.tile_map.location_picked.connect(self.confirm_picked_location)
+
+        self.refresh()
+
+    def refresh(self):
+        """Put the marker at the coordinates in the location widget (ignored while they are not valid numbers)."""
+        try:
+            longitude = float(self.location_widget.longitude_edit.text())
+            latitude = float(self.location_widget.latitude_edit.text())
+        except ValueError:
+            return
+        self.tile_map.set_location(longitude, latitude, label=self.location_label())
+
+    def location_label(self) -> str:
+        """What to call the current spot on the map: its own name, or the saved one."""
+        name = self.location_widget.location_combo.currentText()
+        if name == "Custom":
+            return self.location_widget.location_name_edit.text().strip()
+        return name[:-len(" (Saved)")] if name.endswith(" (Saved)") else name
+
+    def confirm_picked_location(self, longitude: float, latitude: float):
+        """Ask before moving the site to a spot double-clicked on the map.
+
+        The map is the one place where the ground can be checked, so a pin that
+        landed in the next field is fixed here rather than by editing degrees.
+        """
+        moved = ""
+        try:
+            here_lon = float(self.location_widget.longitude_edit.text())
+            here_lat = float(self.location_widget.latitude_edit.text())
+        except ValueError:
+            pass
+        else:
+            metres = distance_metres(here_lon, here_lat, longitude, latitude)
+            moved = (f"\n\nThat is {metres:.0f} m from the current pin."
+                     if metres < 10000 else
+                     f"\n\nThat is {metres / 1000:.1f} km from the current pin.")
+
+        name = self.location_label()
+        answer = QMessageBox.question(
+            self,
+            "Correct location to new pin spot?",
+            f"Move the observing location to\n\n"
+            f"    {abs(latitude):.5f}° {'N' if latitude >= 0 else 'S'}    "
+            f"{abs(longitude):.5f}° {'E' if longitude >= 0 else 'W'}"
+            f"{moved}\n\n"
+            "It becomes a custom location.  The altitude is looked up again when "
+            "there is a connection, and otherwise stays as it is — check it.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            # Nothing moved, but the map may have been dragged to get here.
+            self.tile_map.centre_on_marker()
+            return
+
+        self.location_widget.set_picked_location(longitude, latitude,
+                                                 name=moved_location_name(name))
+        self.refresh()

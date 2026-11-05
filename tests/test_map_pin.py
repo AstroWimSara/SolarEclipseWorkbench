@@ -11,7 +11,9 @@ import pytest
 from PyQt6.QtCore import QPoint, QPointF, Qt
 from PyQt6.QtGui import QMouseEvent
 
-from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, moved_location_name
+from PyQt6.QtWidgets import QMessageBox
+
+from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget, moved_location_name
 from solareclipseworkbench.tile_map import TileMap, deg2num, distance_metres, num2deg
 
 SITE = (-2.929, 41.764)
@@ -179,3 +181,47 @@ def test_a_moved_location_says_so_once(tile_map):
     # Moving it twice must not stack suffixes.
     assert moved_location_name("Calle Torrecilla (moved)") == "Calle Torrecilla (moved)"
     assert moved_location_name("") == "Custom pin (moved)"
+
+
+@pytest.fixture
+def site_map(location_widget):
+    location_widget._start_elevation_lookup = lambda lat, lon: None
+    location_widget.set_coordinates(SITE[0], SITE[1], 1200.0)
+    widget = SiteMapWidget(location_widget)
+    widget.resize(800, 500)
+    yield widget
+    widget.close()
+
+
+def test_the_site_map_follows_the_coordinate_fields(site_map, location_widget):
+    assert (site_map.tile_map._longitude, site_map.tile_map._latitude) == pytest.approx(SITE)
+
+    location_widget.longitude_edit.setText("-3.5")
+    location_widget.latitude_edit.setText("40.4")
+    site_map.refresh()
+
+    assert (site_map.tile_map._longitude, site_map.tile_map._latitude) == pytest.approx((-3.5, 40.4))
+
+
+def test_the_site_map_ignores_coordinates_that_are_not_numbers(site_map, location_widget):
+    location_widget.longitude_edit.setText("-")
+    site_map.refresh()
+
+    assert (site_map.tile_map._longitude, site_map.tile_map._latitude) == pytest.approx(SITE)
+
+
+@pytest.mark.parametrize("answer, moves", [(QMessageBox.StandardButton.Yes, True),
+                                           (QMessageBox.StandardButton.No, False)])
+def test_a_double_click_on_the_site_map_moves_the_site_only_when_confirmed(site_map, location_widget,
+                                                                           monkeypatch, answer, moves):
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: answer)
+    location_widget.location_name_edit.setText("Field")
+
+    site_map.confirm_picked_location(-2.9, 41.75)
+
+    expected = (-2.9, 41.75) if moves else SITE
+    assert (float(location_widget.longitude_edit.text()),
+            float(location_widget.latitude_edit.text())) == pytest.approx(expected)
+    assert (site_map.tile_map._longitude, site_map.tile_map._latitude) == pytest.approx(expected)
+    assert (location_widget.location_name_edit.text() == "Field (moved)") is moves
+

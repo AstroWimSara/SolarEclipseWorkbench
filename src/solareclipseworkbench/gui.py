@@ -56,9 +56,8 @@ from solareclipseworkbench.limb_correction import (is_enabled as limb_correction
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
-from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, moved_location_name
+from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget
 from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
-from solareclipseworkbench.tile_map import TileMap, distance_metres, MIN_ZOOM, MAX_ZOOM
 from solareclipseworkbench.constants import MOON_RADIUS
 from solareclipseworkbench import solar_radius
 from solareclipseworkbench import configuration
@@ -2319,31 +2318,16 @@ class LocationPopup(QWidget, Observable):
 
         # Detailed street map of the site, next to the map with the path of the selected eclipse.  The eclipse
         # can be changed above the path map; pressing OK then also makes it the eclipse date of the main window.
-        self.tile_map = TileMap()
+        self.site_map = SiteMapWidget(self.location_widget)
         self.location_plot = EclipsePathWidget(date_format=DATE_FORMATS[observer.view.date_format])
         self.initial_eclipse_date = model.eclipse_date.strftime("%Y-%m-%d") if model.eclipse_date is not None \
             else None
         self.location_plot.set_eclipse_date(self.initial_eclipse_date)
 
         maps_layout = QHBoxLayout()
-        maps_layout.addWidget(self.tile_map, stretch=1)
+        maps_layout.addWidget(self.site_map, stretch=1)
         maps_layout.addWidget(self.location_plot, stretch=1)
         layout.addLayout(maps_layout, stretch=1)
-
-        # Zoom slider for the street map.
-        zoom_layout = QHBoxLayout()
-        zoom_layout.addWidget(QLabel("Zoom"))
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(MIN_ZOOM, MAX_ZOOM)
-        self.zoom_slider.setValue(self.tile_map.zoom())
-        self.zoom_slider.valueChanged.connect(self.tile_map.set_zoom)
-        zoom_layout.addWidget(self.zoom_slider)
-        self.zoom_label = QLabel(f"{self.tile_map.zoom()}")
-        self.zoom_label.setFixedWidth(30)
-        self.zoom_slider.valueChanged.connect(lambda value: self.zoom_label.setText(f"{value}"))
-        self.tile_map.zoom_changed.connect(self.zoom_slider.setValue)
-        zoom_layout.addWidget(self.zoom_label)
-        layout.addLayout(zoom_layout)
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(self.accept_location)
@@ -2362,7 +2346,6 @@ class LocationPopup(QWidget, Observable):
         self.location_widget.longitude_edit.textChanged.connect(self._schedule_auto_plot)
         self.location_widget.latitude_edit.textChanged.connect(self._schedule_auto_plot)
         self.location_widget.altitude_edit.textChanged.connect(self._schedule_auto_plot)
-        self.tile_map.location_picked.connect(self.confirm_picked_location)
 
         # Plot whatever coordinates are currently in the fields — covers both the
         # case where the model already had a location and the case where LocationWidget
@@ -2408,53 +2391,6 @@ class LocationPopup(QWidget, Observable):
         except ValueError:
             alt = 0.0
         self.location_plot.plot_location(longitude=lon, latitude=lat, altitude=alt)
-        self.tile_map.set_location(lon, lat, label=self._location_label())
-
-    def _location_label(self) -> str:
-        """What to call the current spot on the map: its own name, or the saved one."""
-        name = self.location_widget.location_combo.currentText()
-        if name == "Custom":
-            return self.location_widget.location_name_edit.text().strip()
-        return name[:-len(" (Saved)")] if name.endswith(" (Saved)") else name
-
-    def confirm_picked_location(self, longitude: float, latitude: float):
-        """Ask before moving the site to a spot double-clicked on the map.
-
-        The map is the one place where the ground can be checked, so a pin that
-        landed in the next field is fixed here rather than by editing degrees.
-        """
-        moved = ""
-        try:
-            here_lon = float(self.longitude.text())
-            here_lat = float(self.latitude.text())
-        except ValueError:
-            pass
-        else:
-            metres = distance_metres(here_lon, here_lat, longitude, latitude)
-            moved = (f"\n\nThat is {metres:.0f} m from the current pin."
-                     if metres < 10000 else
-                     f"\n\nThat is {metres / 1000:.1f} km from the current pin.")
-
-        name = self._location_label()
-        answer = QMessageBox.question(
-            self,
-            "Correct location to new pin spot?",
-            f"Move the observing location to\n\n"
-            f"    {abs(latitude):.5f}° {'N' if latitude >= 0 else 'S'}    "
-            f"{abs(longitude):.5f}° {'E' if longitude >= 0 else 'W'}"
-            f"{moved}\n\n"
-            "It becomes a custom location.  The altitude is looked up again when "
-            "there is a connection, and otherwise stays as it is — check it.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            # Nothing moved, but the map may have been dragged to get here.
-            self.tile_map.centre_on_marker()
-            return
-
-        self.location_widget.set_picked_location(longitude, latitude,
-                                                 name=moved_location_name(name))
 
     def accept_location(self):
         """ Notify the observer about the selection of a new location and close the pop-up window.
