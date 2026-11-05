@@ -140,6 +140,17 @@ def luminance_histogram(grey: np.ndarray) -> tuple[np.ndarray, float, float]:
     return bins, clipped, black
 
 
+def histogram_summary(bins: np.ndarray, columns: int = 128) -> list[float]:
+    """The histogram on a log scale in *columns* columns from 0 to 1, as the widget draws it.
+
+    Each column is the highest bin it covers, so a narrow peak (the disc) is not averaged away.
+    """
+    log_bins = np.log1p(np.asarray(bins, dtype=float))
+    peak = log_bins.max() or 1.0
+    edges = np.linspace(0, len(log_bins), columns + 1).astype(int)
+    return [round(float(log_bins[lo:max(lo + 1, hi)].max() / peak), 3) for lo, hi in zip(edges[:-1], edges[1:])]
+
+
 class HistogramWidget(QWidget):
     """The luminance histogram of the preview, on a log scale.
 
@@ -295,6 +306,19 @@ def crop_rect(width: int, height: int, centre: QPointF, side_w: int, side_h: int
     return QRect(x, y, side_w, side_h)
 
 
+def loupe_patch(img: QImage, centre: QPointF, side_px: int = 96) -> tuple[Optional[QImage], Optional[float]]:
+    """The part of the frame around the centre at its own pixels, and its focus score.
+
+    Returns (None, None) when the frame is too small.
+    """
+    side = min(side_px, img.width(), img.height())
+    if side < MIN_SIDE_PX:
+        return None, None
+    patch = img.copy(crop_rect(img.width(), img.height(), centre, side, side))
+    lap = laplacian(patch)
+    return patch, (None if lap is None else focus_score(lap))
+
+
 class LoupeWidget(QWidget):
     """A part of the frame at its own pixels, magnified without smoothing.
 
@@ -328,12 +352,9 @@ class LoupeWidget(QWidget):
 
     def set_image(self, img: QImage, centre: QPointF) -> None:
         """Take the part of the frame around the centre, and its focus score."""
-        side = min(self.PATCH_PX, img.width(), img.height())
-        if side < MIN_SIDE_PX:
+        patch, score = loupe_patch(img, centre, self.PATCH_PX)
+        if patch is None:
             return
-        patch = img.copy(crop_rect(img.width(), img.height(), centre, side, side))
-        lap = laplacian(patch)
-        score = None if lap is None else focus_score(lap)
         view = min(self.width(), self.height()) - 2
         self._pixmap = QPixmap.fromImage(patch).scaled(
             view, view, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)

@@ -197,3 +197,57 @@ def test_the_tool_boxes_show_and_hide_their_widgets(qapp, no_gphoto):
         assert window._loupe.isHidden()
     finally:
         window.close()
+
+
+def test_frames_are_shared_with_the_phone_dashboard_only_when_asked(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        window._on_frame(_disc_jpeg())
+        window._poll_frame()
+        assert window.phone_frame() == (None, 0, None)
+
+        window.share_with_phone = True
+        window._on_frame(_disc_jpeg())
+        window._poll_frame()
+        jpeg, frame_id, age = window.phone_frame()
+        assert jpeg[:2] == b"\xff\xd8" and frame_id == 1 and age < 5
+        # The zoomed part is what the phone gets, like the window shows
+        window._zoom_combo.setCurrentText("5x")
+        window._on_frame(_disc_jpeg())
+        window._poll_frame()
+        jpeg, frame_id, _ = window.phone_frame()
+        assert frame_id == 2 and QImage.fromData(jpeg).size().width() == 64
+
+        assert window.phone_status() == "active"
+        window.set_totality_paused(True)
+        assert window.phone_status() == "paused"
+    finally:
+        window.close()
+
+
+def test_the_phone_gets_the_histogram_and_loupe_also_when_they_are_off_here(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        window._loupe_box.setChecked(False)
+        window._histogram_box.setChecked(False)
+        window.share_with_phone = True
+        window._on_frame(_disc_jpeg())
+        window._poll_frame()
+
+        tools, png = window.phone_tools()
+        histogram = tools["histogram"]
+        assert len(histogram["bins"]) == 128 and max(histogram["bins"]) == 1.0
+        # Most of the frame is the black sky, and the white disc is in the top bins
+        assert histogram["black"] > 50 and histogram["bins"][-1] > 0
+        assert png[:4] == b"\x89PNG"
+        assert QImage.fromData(png).width() == gui.live_view_tools.LoupeWidget.PATCH_PX
+        assert tools["loupe"]["share"] == 1.0
+
+        # A tap on the phone moves the loupe like a click in the window
+        window.set_zoom_centre_from_phone(0.25, 0.75)
+        assert (window._zoom_centre.x(), window._zoom_centre.y()) == pytest.approx((0.25, 0.75))
+        window._on_frame(_disc_jpeg())
+        window._poll_frame()
+        assert window.phone_tools()[0]["loupe"]["x"] == pytest.approx(0.25)
+    finally:
+        window.close()
