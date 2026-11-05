@@ -554,6 +554,14 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - The **"Baily's beads"** toolbar button (a diamond ring icon) opens a window that shows the beads for the current location and eclipse.  `Profile` plots the true lunar limb (purple) against the Sun's limb (orange) around the contact point, with the sunlight that still gets through filled in yellow; `Preview` draws the whole Moon over the Sun, with the limb relief exaggerated (10x to 100x) so the beads are visible.  With `Free`, the slider moves through the 8 seconds before and after C2 or C3 (the C2 and C3 shown in the reference moments); with `Live`, the window follows the clock (including the simulation offset) and counts down to the beads.  It switches to `Live` when a script is loaded.  The line above the drawing summarises the corrections, the length of both bead windows and the change in the duration of totality, and warns when a correction is larger than 15 s.  The window was written by @mrosseel.
 - The two small lunar orientation kernels it needs (`moon_080317.tf` and `moon_pa_de421_1900-2050.bpc`) are downloaded from NAIF automatically, the same way the ephemeris is.
 
+##### Solar radius
+
+- The `Solar radius` row below the table sets the radius of the Sun used for all contact times.  Solar Eclipse Workbench computes its own Besselian elements, so this radius sets the size of the Moon's shadow and with it the duration of totality.  It is the largest systematic in the contact times, larger than the lunar limb correction: a larger Sun shortens totality.  For the 2026 eclipse in Spain (41.7639°, −2.9294°, 1180 m), 959.63" gives 0.9 s more totality than 959.95", with C2 0.4 s earlier and C3 0.5 s later; the middle of totality moves by less than 0.1 s.  Close to the edge of the path the difference grows much larger (Issue #197).
+- **959.95" (default), Quaglia et al. 2021.**  Quaglia, Irwin, Emmanouilidis and Pessi ([arXiv:2107.09416](https://arxiv.org/abs/2107.09416)) measured 959.95" ± 0.05" from flash-spectrum video at the southern limit of the 2017 eclipse.  We use it because it is measured from eclipse contacts: the radius at which the photosphere is completely hidden, which is exactly what a contact time is.  Other techniques measure a different edge of the Sun.  Other eclipse measurements agree: IOTA's Baily's bead timings give 959.99" ± 0.06" and Jubier suggests 959.98".  The standard value below lies well outside this group of modern measurements.
+- **959.63", Auwers 1891.**  The conventional value of eclipse prediction, used by Espenak's canon, Solar Eclipse Maestro (by default) and Eclipse Chaser Log.  It is a convention rather than a current measurement.  Choose it to compare the contact times directly with published predictions: any remaining difference then has another cause.
+- **Custom value**: any radius between 955" and 965" can be typed in.
+- The radius is the apparent radius at a distance of 1 au.  The choice is saved in `~/.SolarEclipseWorkbench.ini` and also used by the wizard, `sew --check` and `sew --compare`, and the log file records which radius a run used.  Like the limb correction, it is locked while a script has pending jobs.
+
 #### Camera overview
 
 - When pressing the "Camera" icon, the camera overview in the top section of the UI will be updated.  This shows for each camera the following information:
@@ -937,7 +945,7 @@ endfor
 
 - Astropy/IERS is used to compute Delta T (TT − UT1) for eclipse reference times.  This is the most up to date information available, but it requires an internet connection to download the latest IERS tables.  If no internet is available, a CSV-based fallback is used.
   - For the 2026 eclipse, the fallback value for Delta T is 69.1085.
-- The used solar radius is equal to 959.95 ±0.05 arcseconds. This value is slightly larger than the canonical solar radius (i.e. 959.63 arcseconds).  This is the latest value from the Besselian Elements team (L. Quaglia et al.).
+- The solar radius is 959.95" ± 0.05" by default (Quaglia et al. 2021), measured from eclipse contacts.  This is slightly larger than the conventional 959.63" (Auwers 1891) of published predictions, which can be selected instead, as can a value of your own.  See [Solar radius](#solar-radius) for why this value is the default.
 
 ## Shortcomings
 

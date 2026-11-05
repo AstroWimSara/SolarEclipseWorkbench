@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QPushButton, QMessageBox, QProgressDialog, QDialog, QPlainTextEdit, QProgressBar, QWidget, QScrollArea
 )
 
+from solareclipseworkbench import solar_radius
 from solareclipseworkbench.location_ui import ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget
 from solareclipseworkbench.qt_utils import apply_system_color_scheme, _is_dark_mode_preferred, _build_dark_palette, dark_lineedit_style, apply_dark_to_lineedit
 
@@ -3212,6 +3213,9 @@ class SEWConfigWizard(QWizard):
 def main():
     """Main entry point for the wizard application."""
     setup_logging("sew_wizard")
+    # The same solar radius as chosen in sew, for the same contact times
+    solar_radius.load_saved()
+    logging.info("Solar radius: %s", solar_radius.describe())
     app = QApplication(sys.argv)
     app.setApplicationName("Solar Eclipse Workbench Configuration Wizard")
     apply_system_color_scheme(app)

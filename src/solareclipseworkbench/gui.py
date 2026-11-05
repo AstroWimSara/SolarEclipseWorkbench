@@ -27,7 +27,8 @@ from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QIm
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle, \
+QDoubleSpinBox
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -57,7 +58,8 @@ from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget
 from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
-from solareclipseworkbench.constants import SUN_RADIUS, MOON_RADIUS
+from solareclipseworkbench.constants import MOON_RADIUS
+from solareclipseworkbench import solar_radius
 from solareclipseworkbench import configuration
 
 ICON_PATH = Path(__file__).parent.resolve() / "img"
@@ -71,6 +73,18 @@ LIMB_CORRECTION_TOOLTIP = (
     "Use the Moon's topography to apply the Maestro-style contact-point "
     "correction to C2/C3. A separate whole-arc photographic capture window "
     "is available when the configured illuminated-arc criterion can be solved."
+)
+SOLAR_RADIUS_TOOLTIP = (
+    'The solar radius sets the duration of totality: a larger Sun shortens it, by about '
+    '1 s per 100 s for the 0.32" between the two values, and more near the path limits.\n'
+    '959.95" (default): Quaglia et al. 2021, measured from eclipse contacts, which is '
+    'what contact times need.\n'
+    '959.63": Auwers 1891, the convention of published predictions (Espenak, '
+    'Solar Eclipse Maestro, eclipse-chaser-log); choose it to compare with those.'
+)
+SOLAR_RADIUS_LOCKED_TOOLTIP = (
+    "The solar radius cannot be changed while a script has pending jobs. "
+    "Stop the scheduler first, then change the radius and reload the script."
 )
 LIMB_CORRECTION_LOCKED_TOOLTIP = (
     "The lunar limb correction cannot be changed while a script has pending "
@@ -464,6 +478,23 @@ class SolarEclipseView(QMainWindow, Observable):
         self.limb_correction_checkbox.setChecked(True)
         self.limb_correction_checkbox.setToolTip(LIMB_CORRECTION_TOOLTIP)
 
+        # The controller selects whatever was remembered
+        self.solar_radius_combo = QComboBox()
+        for key, (value, description) in solar_radius.PRESETS.items():
+            self.solar_radius_combo.addItem(f'{value:.2f}"  {description}', key)
+        self.solar_radius_combo.addItem("Custom value", "custom")
+        self.solar_radius_combo.setToolTip(SOLAR_RADIUS_TOOLTIP)
+        self.solar_radius_spinbox = QDoubleSpinBox()
+        self.solar_radius_spinbox.setRange(solar_radius.MIN_ARCSEC, solar_radius.MAX_ARCSEC)
+        self.solar_radius_spinbox.setDecimals(2)
+        self.solar_radius_spinbox.setSingleStep(0.01)
+        self.solar_radius_spinbox.setSuffix('"')
+        # Recompute when the value is entered, not on every keystroke
+        self.solar_radius_spinbox.setKeyboardTracking(False)
+        self.solar_radius_spinbox.setValue(solar_radius.DEFAULT_ARCSEC)
+        self.solar_radius_spinbox.setEnabled(False)
+        self.solar_radius_spinbox.setToolTip(SOLAR_RADIUS_TOOLTIP)
+
         self.c1_time_local_label = QLabel()
         self.c1_time_local_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.c2_time_local_label = QLabel()
@@ -760,6 +791,12 @@ class SolarEclipseView(QMainWindow, Observable):
         # The switch sits with the times it changes: turning it off moves C2 and
         # C3 by seconds, which is more than a bead burst is long.
         reference_moments_grid_layout.addWidget(self.limb_correction_checkbox, 10, 0, 1, 6)
+        # Like the limb correction, it changes C2 and C3 (by up to about half a second)
+        solar_radius_label = QLabel("Solar radius")
+        solar_radius_label.setToolTip(SOLAR_RADIUS_TOOLTIP)
+        reference_moments_grid_layout.addWidget(solar_radius_label, 11, 0)
+        reference_moments_grid_layout.addWidget(self.solar_radius_combo, 11, 1, 1, 4)
+        reference_moments_grid_layout.addWidget(self.solar_radius_spinbox, 11, 5)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
         # At least 600 pixels, but wider when a larger font needs it, so the row
         # titles are never cut off.  The countdown column is sized for its widest
@@ -1252,6 +1289,65 @@ class SolarEclipseController(Observer):
         set_limb_correction_enabled(remembered)
         self.view.limb_correction_checkbox.toggled.connect(self.on_limb_correction_toggled)
 
+        # The radius itself was loaded at start-up (main), before anything was computed
+        self._show_solar_radius()
+        self.view.solar_radius_combo.currentIndexChanged.connect(self.on_solar_radius_choice_changed)
+        self.view.solar_radius_spinbox.valueChanged.connect(self.on_solar_radius_value_changed)
+
+    def _show_solar_radius(self):
+        """Show the solar radius in use, without triggering a recalculation."""
+        value = solar_radius.get_radius_arcsec()
+        key = solar_radius.preset_for(value) or "custom"
+        combo_blocker = QSignalBlocker(self.view.solar_radius_combo)
+        spinbox_blocker = QSignalBlocker(self.view.solar_radius_spinbox)
+        self.view.solar_radius_combo.setCurrentIndex(self.view.solar_radius_combo.findData(key))
+        self.view.solar_radius_spinbox.setValue(value)
+        self.view.solar_radius_spinbox.setEnabled(key == "custom" and not self._run_in_progress())
+        del combo_blocker, spinbox_blocker
+
+    def on_solar_radius_choice_changed(self, index: int):
+        """A preset was chosen, or 'Custom value' (then the value is typed in the spin box)."""
+        key = self.view.solar_radius_combo.itemData(index)
+        if key == "custom":
+            self.view.solar_radius_spinbox.setEnabled(True)
+            self._apply_solar_radius(self.view.solar_radius_spinbox.value())
+        else:
+            self.view.solar_radius_spinbox.setEnabled(False)
+            value, _ = solar_radius.PRESETS[key]
+            blocker = QSignalBlocker(self.view.solar_radius_spinbox)
+            self.view.solar_radius_spinbox.setValue(value)
+            del blocker
+            self._apply_solar_radius(value)
+
+    def on_solar_radius_value_changed(self, value: float):
+        """A custom radius was entered."""
+        if self.view.solar_radius_combo.currentData() == "custom":
+            self._apply_solar_radius(value)
+
+    def _apply_solar_radius(self, value: float):
+        """Use this solar radius, remember it and redo the contact times."""
+        if abs(value - solar_radius.get_radius_arcsec()) < 1e-9:
+            return
+        if self._run_in_progress():
+            # Same reason as for the limb correction: the absolute triggers of
+            # the loaded jobs were computed with the radius in use.
+            self._show_solar_radius()
+            logging.warning("Stop the scheduler before changing the solar radius")
+            return
+        try:
+            solar_radius.set_radius_arcsec(value)
+        except ValueError as exc:
+            logging.warning("%s", exc)
+            self._show_solar_radius()
+            return
+        self.view.settings.setValue(solar_radius.SETTINGS_KEY, solar_radius.get_radius_arcsec())
+        logging.info("Solar radius: %s", solar_radius.describe())
+
+        if self.model.is_location_set and self.model.is_eclipse_date_set:
+            self.set_reference_moments()
+        if self._beads_window is not None:
+            self._beads_window.refresh()
+
     def on_limb_correction_toggled(self, enabled: bool):
         """Apply or drop the lunar limb correction and redo the contact times.
 
@@ -1282,6 +1378,11 @@ class SolarEclipseController(Observer):
         self.view.limb_correction_checkbox.setEnabled(not locked)
         self.view.limb_correction_checkbox.setToolTip(
             LIMB_CORRECTION_LOCKED_TOOLTIP if locked else LIMB_CORRECTION_TOOLTIP)
+        self.view.solar_radius_combo.setEnabled(not locked)
+        self.view.solar_radius_spinbox.setEnabled(
+            not locked and self.view.solar_radius_combo.currentData() == "custom")
+        for widget in (self.view.solar_radius_combo, self.view.solar_radius_spinbox):
+            widget.setToolTip(SOLAR_RADIUS_LOCKED_TOOLTIP if locked else SOLAR_RADIUS_TOOLTIP)
 
     def _run_in_progress(self) -> bool:
         """True while a schedule is loaded and running."""
@@ -2733,7 +2834,7 @@ class EclipsePlotWidget(QtWidgets.QWidget):
         # Apparent angular radii (radians)
         sun_distance = sun_app.distance().m     # Distance Earth - Sun [m]
         moon_dist = moon_app.distance().m     # Distance Earth - Moon [m]
-        sun_ang_radius = math.asin(SUN_RADIUS / sun_distance)   # Angular radius of the Sun [radians]
+        sun_ang_radius = math.asin(solar_radius.get_radius_m() / sun_distance)   # Angular radius of the Sun [radians]
         moon_ang_radius = math.asin(MOON_RADIUS / moon_dist)    # Angular radius of the Moon [radians]
 
         # Normalise to solar radius for plotting
@@ -4010,6 +4111,9 @@ def main():
     # --check prints its own result; the log file still gets everything
     setup_logging("sew", console_level=logging.WARNING if args.check or args.compare is not None else logging.INFO)
     LOGGER.info("Starting up Solar Eclipse Workbench")
+    # Before any contact time is computed, also for --check and --compare
+    solar_radius.load_saved()
+    LOGGER.info("Solar radius: %s", solar_radius.describe())
 
     if args.check:
         return check_main(args)

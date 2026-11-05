@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
 from solareclipseworkbench import solar_eclipse as se
+from solareclipseworkbench import solar_radius
 
 EARTH_RADIUS_KM = 6371.0088
 
@@ -342,9 +343,16 @@ def path_bounds(path: EclipsePath, margin_deg: float = 5.0) -> Optional[Tuple[fl
             min(180.0, max(lons) + margin_deg), min(90.0, max(lats) + margin_deg))
 
 
-@functools.lru_cache(maxsize=8)
 def eclipse_path_for_date(date: str) -> EclipsePath:
-    """Cached ``compute_eclipse_path`` for a 'YYYY-MM-DD' date string (the path does not change between calls)."""
+    """Cached ``compute_eclipse_path`` for a 'YYYY-MM-DD' date string.
+
+    The path depends on the solar radius, so the cache is per radius.
+    """
+    return _eclipse_path_for_date_and_radius(date, solar_radius.get_radius_arcsec())
+
+
+@functools.lru_cache(maxsize=8)
+def _eclipse_path_for_date_and_radius(date: str, radius_arcsec: float) -> EclipsePath:
     return compute_eclipse_path(date)
 
 
