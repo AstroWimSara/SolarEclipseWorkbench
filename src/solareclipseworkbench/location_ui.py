@@ -10,14 +10,16 @@ Provides:
       gui.py (LocationPopup) and wizard.py (EclipseConfigPage).
 """
 import json
+import logging
 import time
 import requests
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
 
+import qrcode
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QDoubleValidator
+from PyQt6.QtGui import QDoubleValidator, QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QComboBox, QPushButton, QMessageBox,
@@ -31,6 +33,43 @@ try:
     GEOPY_AVAILABLE = True
 except ImportError:
     GEOPY_AVAILABLE = False
+
+
+def make_qr_pixmap(text: str, module_pixels: int = 6, quiet_zone: int = 3) -> Optional[QPixmap]:
+    """Render *text* as a QR code and return it as a QPixmap.
+
+    The QR matrix is drawn directly into a QImage rather than going through the ``qrcode``
+    library's image factories, so Pillow is not needed.  Colours are fixed black-on-white
+    because that is what phone cameras scan most reliably — a QR code that follows a dark UI
+    theme is markedly harder to read.
+
+    Returns None when the code cannot be produced, so the caller can fall back to showing
+    just the URL rather than failing to offer GPS capture at all.
+    """
+    try:
+        qr = qrcode.QRCode(border=quiet_zone, box_size=1)
+        qr.add_data(text)
+        qr.make(fit=True)
+        matrix = qr.get_matrix()
+    except Exception:
+        logging.exception("Could not generate QR code for %s", text)
+        return None
+
+    size = len(matrix) * module_pixels
+    image = QImage(size, size, QImage.Format.Format_RGB32)
+    image.fill(QColor("white"))
+
+    black = QColor("black").rgb()
+    for row, cells in enumerate(matrix):
+        for col, is_dark in enumerate(cells):
+            if not is_dark:
+                continue
+            for dy in range(module_pixels):
+                scan_y = row * module_pixels + dy
+                for dx in range(module_pixels):
+                    image.setPixel(col * module_pixels + dx, scan_y, black)
+
+    return QPixmap.fromImage(image)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +466,21 @@ class ElevationWorker(QThread):
 # LocationWidget
 # ---------------------------------------------------------------------------
 
+#: Added to the name of a location that was moved on the map, so a set of
+#: coordinates cannot quietly keep the name of the place it no longer is.
+MOVED_SUFFIX = "(moved)"
+
+
+def moved_location_name(name: str) -> str:
+    """The name to show for *name* after it was re-pinned on the map."""
+
+    name = (name or "").strip()
+    if not name:
+        return f"Custom pin {MOVED_SUFFIX}"
+    if name.endswith(MOVED_SUFFIX):
+        return name
+    return f"{name} {MOVED_SUFFIX}"
+
 class LocationWidget(QWidget):
     """Self-contained widget for choosing an observation location.
 
@@ -477,6 +531,7 @@ class LocationWidget(QWidget):
         self._gps_dialog: Optional[QDialog] = None
         self._gps_status_label: Optional[QLabel] = None
         self._gps_url_label: Optional[QLabel] = None
+        self._gps_qr_label: Optional[QLabel] = None
         self._usb_gps_worker = None
         self._usb_gps_dialog: Optional[QDialog] = None
         self._usb_gps_status_label: Optional[QLabel] = None
@@ -514,6 +569,30 @@ class LocationWidget(QWidget):
             self.latitude_edit.setText(str(latitude))
         if altitude is not None:
             self.altitude_edit.setText(str(altitude))
+
+    def set_picked_location(self, longitude: float, latitude: float,
+                            name: Optional[str] = None) -> None:
+        """Move to a spot the user picked on the map.
+
+        A picked spot is by definition not the saved location any more, so the
+        drop-down goes back to "Custom" and the fields become editable.
+        """
+        # The altitude belongs to the old spot, but it is the best number in the
+        # room until the lookup answers, and offline it is the only one there
+        # will be.  Switching to "Custom" empties every field, so it is carried
+        # across by hand rather than left to survive that.
+        altitude = self.altitude_edit.text()
+
+        self.location_combo.setCurrentText("Custom")
+        self._set_fields_editable(True)
+
+        self.longitude_edit.setText(f"{longitude:.6f}")
+        self.latitude_edit.setText(f"{latitude:.6f}")
+        self.altitude_edit.setText(altitude)
+        if name is not None:
+            self.location_name_edit.setText(name)
+
+        self._start_elevation_lookup(latitude, longitude)
 
     def get_coordinates(self):
         """Return ``(longitude, latitude, altitude)`` as floats.
@@ -713,6 +792,13 @@ class LocationWidget(QWidget):
         self._gps_url_label.setMinimumHeight(80)
         dlg_layout.addWidget(self._gps_url_label)
 
+        # QR code for the LAN URL, so the phone can be pointed at the screen instead of
+        # the URL (including its port and https scheme) being typed in by hand.
+        self._gps_qr_label = QLabel("")
+        self._gps_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._gps_qr_label.setVisible(False)
+        dlg_layout.addWidget(self._gps_qr_label)
+
         note = QLabel(
             "<small><i>"
             "No WiFi at your eclipse site? Enable your phone\u2019s hotspot,<br>"
@@ -756,6 +842,19 @@ class LocationWidget(QWidget):
                 "</small></p>"
             )
 
+        if self._gps_qr_label:
+            pixmap = make_qr_pixmap(lan_url)
+            if pixmap:
+                self._gps_qr_label.setPixmap(pixmap)
+                self._gps_qr_label.setToolTip(lan_url)
+                # The dialog is already on screen by the time the server reports its URL, so
+                # it does not re-fit itself around the new pixmap: reserve the space the QR
+                # needs and grow the dialog explicitly, otherwise the code is clipped.
+                self._gps_qr_label.setMinimumHeight(pixmap.height())
+                self._gps_qr_label.setVisible(True)
+                if self._gps_dialog:
+                    self._gps_dialog.adjustSize()
+
     def _on_gps_location_received(self, data: dict) -> None:
         """Fill coordinate fields with the received GPS fix and close the dialog."""
         # Switch combo to Custom so fields become editable
@@ -774,11 +873,7 @@ class LocationWidget(QWidget):
             self.altitude_edit.setText(f"{alt:.1f}")
         elif lat is not None and lon is not None:
             # Browser did not supply altitude — fetch it from Open-Elevation
-            self.altitude_edit.setPlaceholderText("Fetching elevation…")
-            self._elevation_worker = ElevationWorker(lat, lon)
-            self._elevation_worker.finished.connect(self._on_elevation_received)
-            self._elevation_worker.error.connect(self._on_elevation_error)
-            self._elevation_worker.start()
+            self._start_elevation_lookup(lat, lon)
 
         if self._gps_dialog:
             self._gps_dialog.accept()
@@ -787,6 +882,14 @@ class LocationWidget(QWidget):
         if self._gps_worker:
             self._gps_worker.stop_server()
             self._gps_worker = None
+
+    def _start_elevation_lookup(self, latitude: float, longitude: float) -> None:
+        """Fill the altitude field from Open-Elevation, in the background."""
+        self.altitude_edit.setPlaceholderText("Fetching elevation…")
+        self._elevation_worker = ElevationWorker(latitude, longitude)
+        self._elevation_worker.finished.connect(self._on_elevation_received)
+        self._elevation_worker.error.connect(self._on_elevation_error)
+        self._elevation_worker.start()
 
     def _on_elevation_received(self, elevation: float) -> None:
         """Fill the altitude field after a successful Open-Elevation lookup."""
@@ -798,10 +901,16 @@ class LocationWidget(QWidget):
             worker.wait(1000)
 
     def _on_elevation_error(self, message: str) -> None:
-        """Clear the placeholder text when the elevation lookup fails."""
+        """Keep whatever altitude is already there when the lookup fails.
+
+        In the field there is usually no network, and an altitude typed in or
+        carried over from the location this one was moved from is worth more
+        than sea level.  Only an empty field falls back to 0.
+        """
         self.altitude_edit.setPlaceholderText("Altitude above sea level")
-        self.altitude_edit.setText("0.0")
-        print(f"Elevation lookup failed: {message}")
+        if not self.altitude_edit.text().strip():
+            self.altitude_edit.setText("0.0")
+        logging.warning("Elevation lookup failed, keeping the altitude in the field: %s", message)
         worker = self._elevation_worker
         self._elevation_worker = None
         if worker is not None:
@@ -938,11 +1047,7 @@ class LocationWidget(QWidget):
         if alt is not None and alt != 0.0:
             self.altitude_edit.setText(f"{alt:.1f}")
         elif lat is not None and lon is not None:
-            self.altitude_edit.setPlaceholderText("Fetching elevation\u2026")
-            self._elevation_worker = ElevationWorker(lat, lon)
-            self._elevation_worker.finished.connect(self._on_elevation_received)
-            self._elevation_worker.error.connect(self._on_elevation_error)
-            self._elevation_worker.start()
+            self._start_elevation_lookup(lat, lon)
 
         # Store the measured GPS\u2013computer time offset
         self.gps_time_offset = time_offset
