@@ -30,12 +30,37 @@ other brands.
 - **The camera clock cannot be set from the computer.**  The SDK has no date and
   time call.  Set the clock on the body by hand.  Each run log has the time at
   which each command released the shutter, in UTC.
-- **No live view.**  The live view window is for gphoto2 cameras only.
+- **Live view stops before each camera job.**  See [Live view](#live-view).
 - **No camera test in the wizard.**  `Test Camera...` and `Verify with
   Camera...` read gphoto2 settings, and do not support a Fuji body yet.
 - **Shutter speeds from 1/8000 to 30 s.**  A faster speed needs the electronic
   shutter, which is a setting on the body.  An exposure past either end is taken
   at the end of the scale.
+
+## Live view
+
+The `Live View` button of the toolbar shows the live view of a Fuji body, as for
+a gphoto2 camera.  The window shows up to five frames per second.
+
+- **The body is in PC priority while the live view runs.**  When the live view
+  stops, the workbench gives priority back to the body.  The workbench does not
+  release the shutter to start the live view.
+- **The live view stops 8 s before each scheduled camera job.**  In live view
+  the body refuses settings and the shutter release, also between two frames.
+  The live view stays off until you click `Enable Live View`.  Voice prompts do
+  not stop it.  From 15 s before C2 until 15 s after C3, the live view is off,
+  as for the other brands.
+- **The preview size cannot be changed.**  The workbench sets the largest
+  size.
+- **A body that is switched off or disconnected gets no more SDK calls.**  The
+  window shows why the live view stopped.  Switch the body on and detect it
+  again.
+
+The focus tools of the live view window work for every camera: focus peaking
+(with a colour and a sensitivity), the focus score, a loupe, a histogram and a
+crosshair with a ring.  Click the preview to set the zoom centre and the part
+of the frame in the loupe.  The histogram is of the JPEG of the live view, not
+of the RAW file.
 
 ## Install the SDK
 

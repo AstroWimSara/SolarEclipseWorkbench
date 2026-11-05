@@ -21,7 +21,7 @@ from typing import Union, Optional
 import numpy as np
 import pandas as pd
 import pytz
-from PyQt6.QtCore import (QTimer, QRect, Qt, QAbstractTableModel, QModelIndex,
+from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
                          QSettings, QSignalBlocker, pyqtSignal)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, QPainter, QPen, QColor, \
     QFontMetrics
@@ -46,8 +46,8 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
     MIN_AUTO_POWER_OFF_S, get_live_view_sizes, set_live_view_size, get_exposure_compensation, \
     set_exposure_compensation, compensated_shutter_speed, EXPOSURE_COMPENSATION_STEP_EV, \
-    MAX_EXPOSURE_COMPENSATION_EV
-from solareclipseworkbench import hardware_problems
+    MAX_EXPOSURE_COMPENSATION_EV, has_preview_source
+from solareclipseworkbench import hardware_problems, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
@@ -1236,6 +1236,8 @@ class SolarEclipseController(Observer):
         self.is_simulator: bool = is_simulator
 
         self.scheduler: Union[BackgroundScheduler, None] = None
+        # Says if a scheduled job uses a camera; set when a script is loaded
+        self._job_touches_camera = None
         self.sim_reference_moment: Union[str, None] = None
         self.sim_offset_minutes: Union[int, None] = None
 
@@ -1484,6 +1486,7 @@ class SolarEclipseController(Observer):
                 and (c2.time_utc - _MARGIN) <= reference_now <= (c3.time_utc + _MARGIN)
             )
             self._live_view_window.set_totality_paused(in_totality)
+            self._stop_live_view_before_camera_jobs()
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
@@ -1545,6 +1548,23 @@ class SolarEclipseController(Observer):
             self._keep_alive_allowed.set()
         else:
             self._keep_alive_allowed.clear()
+
+    def _stop_live_view_before_camera_jobs(self):
+        """Tell the live view window if a scheduled camera job is due soon.
+
+        The window stops the preview of an SDK camera then.  Jobs that do not
+        use a camera, such as voice prompts, do not count.
+        """
+        window = self._live_view_window
+        if window is None or not self.scheduler:
+            return
+        try:
+            jobs = self.scheduler.get_jobs()
+        except Exception:
+            LOGGER.debug("Could not read the scheduled jobs", exc_info=True)
+            return
+        gap = seconds_to_next_camera_job(jobs, self._job_touches_camera)
+        window.set_camera_job_due(gap is not None and gap < LIVE_VIEW_CLEAR_BEFORE_S)
 
     def _start_keep_alive(self):
         """Start the camera keep-alive thread once; it follows camera refreshes by itself."""
@@ -1780,13 +1800,15 @@ class SolarEclipseController(Observer):
                 self._shutdown_scheduler()
 
             try:
-                from solareclipseworkbench.utils import observe_solar_eclipse, get_continuous_mode_commands
+                from solareclipseworkbench.utils import observe_solar_eclipse, get_continuous_mode_commands, \
+                    job_touches_camera
                 self.scheduler: BackgroundScheduler
                 self.scheduler, unknown_moments \
                     = observe_solar_eclipse(self.model.reference_moments, filename,
                                             self.model.camera_overview.camera_overview_dict, self,
                                             self.sim_reference_moment, self.sim_offset_minutes,
                                             gps_time_offset=self.model.gps_time_offset)
+                self._job_touches_camera = job_touches_camera
 
                 self.script_filename = filename
                 if self._timeline_window is not None:
@@ -1943,7 +1965,8 @@ class SolarEclipseController(Observer):
             self._live_view_window.raise_()
             return
 
-        # Collect all real gphoto cameras (deduplicated by object identity).
+        # Collect all real gphoto cameras, and the cameras that give their own
+        # live-view frames (deduplicated by object identity).
         # Use cam.name as the display label: when an alias is configured it is
         # set to the primary alias (i.e. the name used in scripts); when no alias
         # is configured it falls back to the gphoto2 model name.
@@ -1952,7 +1975,8 @@ class SolarEclipseController(Observer):
         seen_ids: set = set()
         real_cameras: list = []  # list of (display_name, camera) tuples
         for cam in cam_dict.values():
-            if isinstance(cam, (GPhotoCameraAdapter, VirtualCamera)) and id(cam) not in seen_ids:
+            previews = isinstance(cam, (GPhotoCameraAdapter, VirtualCamera)) or has_preview_source(cam)
+            if previews and id(cam) not in seen_ids:
                 seen_ids.add(id(cam))
                 real_cameras.append((cam.name, cam))
 
@@ -1984,6 +2008,9 @@ class SolarEclipseController(Observer):
             camera = dict(real_cameras)[chosen]
 
         self._live_view_window = LiveViewWindow(camera, parent=None)
+        # Before the first frame: the preview of an SDK camera must not start
+        # when a camera job is due
+        self._stop_live_view_before_camera_jobs()
         self._live_view_window.show()
 
     def _open_timeline_window(self):
@@ -2965,6 +2992,35 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
 CAMERA_DEFAULT_SIZE = "Camera default"
 
+#: How many seconds before a scheduled camera job the preview of an SDK camera
+#: stops.  In live view such a camera refuses settings and the shutter release,
+#: also when its lock is free.  The time covers the stop of the stream and the
+#: settings that the camera refused while the stream ran.
+LIVE_VIEW_CLEAR_BEFORE_S = 8.0
+
+
+def seconds_to_next_camera_job(jobs, touches_camera=None, now=None) -> Optional[float]:
+    """Seconds until the next scheduled job that uses a camera, or None.
+
+    Args:
+        - jobs: The jobs of the scheduler
+        - touches_camera: Says if a job uses a camera.  Without it, every job counts.
+        - now: The time to count from (UTC).  Without it, the time of the computer clock,
+               because the run times of the jobs are on that clock.
+
+    A job that is due now but has not started yet gives 0.
+    """
+    now = now or datetime.datetime.now(tz=datetime.timezone.utc)
+    soonest = None
+    for job in jobs:
+        when = getattr(job, 'next_run_time', None)
+        if when is None or (touches_camera is not None and not touches_camera(job)):
+            continue
+        gap = max(0.0, (when - now).total_seconds())
+        if soonest is None or gap < soonest:
+            soonest = gap
+    return soonest
+
 
 def live_view_size_items(current: str, choices: list) -> tuple:
     """Items of the preview size box, and the one to select first.
@@ -2979,7 +3035,7 @@ def live_view_size_items(current: str, choices: list) -> tuple:
 
 
 class LiveViewWindow(QWidget):
-    """Floating window that shows a live-view preview from a gphoto2 camera.
+    """Floating window that shows a live-view preview from a camera.
 
     A background ``LiveViewThread`` grabs one preview frame per second.  When
     the camera USB lock is held by a scheduled shot the frame is silently
@@ -2994,24 +3050,41 @@ class LiveViewWindow(QWidget):
     lets it be changed (Canon EOS, recent Nikon bodies), ``Preview size``
     selects another one for as long as the window is open; the camera's own
     setting is restored when the window closes.
+
+    A camera that gives its own live-view frames (see ``has_preview_source``)
+    refuses settings and the shutter release while its live view runs.  The
+    controller calls ``set_camera_job_due(True)`` before each scheduled camera
+    job, and the preview of such a camera then stops until it is enabled again.
+    Such a camera gets frames more often, and its preview size is not offered.
+
+    The focus tools (peaking, focus score, loupe, histogram) and the crosshair
+    work on the frames of every camera.  A click on the preview sets the zoom
+    centre and the part of the frame that the loupe shows.
     """
+
+    #: The interval between frames of a camera that gives its own frames.
+    SDK_FRAME_INTERVAL_S = 0.2
 
     def __init__(self, camera, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setMinimumSize(480, 400)
 
         self._camera = camera
+        self._sdk_preview = has_preview_source(camera)
         self._thread = None
         self._frame_queue: queue.Queue = queue.Queue(maxsize=1)
         self._user_enabled: bool = True
         self._totality_paused: bool = False
+        # Why the preview stopped by itself, shown until it is enabled again
+        self._stop_reason: Union[str, None] = None
 
         self.setWindowTitle(f"Live View — {camera.name}")
 
-        # Image display
-        self._image_label = QLabel("Waiting for first preview frame…")
+        # Image display.  A click sets the zoom centre.
+        self._image_label = live_view_tools.ClickableImageLabel("Waiting for first preview frame…")
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_label.setMinimumSize(320, 240)
+        self._image_label.clicked.connect(self._on_image_clicked)
 
         # Timestamp of last received frame
         self._timestamp_label = QLabel()
@@ -3034,11 +3107,15 @@ class LiveViewWindow(QWidget):
         self._zoom_combo.setCurrentIndex(0)
         self._zoom_factor = 1.0
         self._zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
+        # The zoom centre as a part of the frame, from 0 to 1 on each axis
+        self._zoom_centre = QPointF(0.5, 0.5)
+        # The part of the frame that the image label shows
+        self._shown_rect: Union[QRect, None] = None
 
         # Preview size: only offered when the camera lets it be changed
         self._size_combo = QComboBox()
         self._original_size: Union[str, None] = None
-        sizes = get_live_view_sizes(camera)
+        sizes = None if self._sdk_preview else get_live_view_sizes(camera)
         if sizes is None:
             self._size_combo.addItem(CAMERA_DEFAULT_SIZE)
             self._size_combo.setEnabled(False)
@@ -3058,8 +3135,42 @@ class LiveViewWindow(QWidget):
             )
         self._size_combo.currentTextChanged.connect(self._on_size_changed)
 
+        # Focus and framing tools
+        self._peaking_box = QCheckBox("Focus peaking")
+        self._peaking_box.setToolTip("Colour the pixels on sharp edges.  Turn the focus until the limb has "
+                                     "the most colour.")
+        self._peaking_colour_combo = QComboBox()
+        for name in live_view_tools.PEAKING_COLOURS:
+            self._peaking_colour_combo.addItem(name.capitalize(), name)
+        self._peaking_colour_combo.setCurrentIndex(
+            self._peaking_colour_combo.findData(live_view_tools.DEFAULT_PEAKING_COLOUR))
+        self._peaking_colour_combo.setToolTip("Colour of the focus peaking.  Use another colour than red "
+                                              "for a red Sun.")
+        self._peaking_sensitivity_combo = QComboBox()
+        for name in live_view_tools.PEAKING_SENSITIVITY:
+            self._peaking_sensitivity_combo.addItem(name.capitalize(), name)
+        self._peaking_sensitivity_combo.setCurrentIndex(
+            self._peaking_sensitivity_combo.findData(live_view_tools.DEFAULT_PEAKING_SENSITIVITY))
+        self._peaking_sensitivity_combo.setToolTip("High shows weak edges, such as the limb through a "
+                                                   "filter.  Low shows only the strongest edges.")
+        self._loupe_box = QCheckBox("Loupe")
+        self._histogram_box = QCheckBox("Histogram")
+        self._crosshair_box = QCheckBox("Crosshair")
+        self._crosshair_box.setChecked(True)
+        for box in (self._peaking_box, self._loupe_box, self._histogram_box, self._crosshair_box):
+            box.toggled.connect(self._on_tools_changed)
+        for combo in (self._peaking_colour_combo, self._peaking_sensitivity_combo):
+            combo.currentIndexChanged.connect(self._on_tools_changed)
+
+        self._focus_graph = live_view_tools.FocusScoreGraph()
+        self._focus_graph.setToolTip("Focus score of the shown part of the frame.  A higher score is sharper.")
+        self._loupe = live_view_tools.LoupeWidget()
+        self._loupe.setVisible(False)
+        self._histogram = live_view_tools.HistogramWidget()
+        self._histogram.setVisible(False)
+
         # Pan controls (hidden until a zoom > 1 is selected)
-        self._last_pixmap: Union[QPixmap, None] = None
+        self._last_image: Union[QImage, None] = None
         self._last_ts: Union[datetime.datetime, None] = None
         self._h_slider = QSlider(Qt.Orientation.Horizontal)
         self._h_slider.setRange(0, 0)
@@ -3081,24 +3192,38 @@ class LiveViewWindow(QWidget):
         btn_layout.addWidget(QLabel("Zoom:"))
         btn_layout.addWidget(self._zoom_combo)
 
-        # Image area with optional vertical pan slider
+        tools_layout = QHBoxLayout()
+        tools_layout.addWidget(self._peaking_box)
+        tools_layout.addWidget(self._peaking_colour_combo)
+        tools_layout.addWidget(self._peaking_sensitivity_combo)
+        tools_layout.addWidget(self._loupe_box)
+        tools_layout.addWidget(self._histogram_box)
+        tools_layout.addWidget(self._crosshair_box)
+        tools_layout.addStretch(1)
+
+        # Image area with optional vertical pan slider and the loupe
         layout = QVBoxLayout()
         image_area = QHBoxLayout()
         image_area.addWidget(self._image_label, stretch=1)
         image_area.addWidget(self._v_slider)
+        image_area.addWidget(self._loupe, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addLayout(image_area)
         layout.addWidget(self._h_slider)
+        layout.addWidget(self._focus_graph)
+        layout.addWidget(self._histogram)
         layout.addWidget(self._timestamp_label)
         layout.addWidget(self._status_label)
+        layout.addLayout(tools_layout)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        # Poll the frame queue every 500 ms on the GUI thread
+        # Poll the frame queue on the GUI thread
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(500)
+        self._poll_timer.setInterval(100 if self._sdk_preview else 500)
         self._poll_timer.timeout.connect(self._poll_frame)
         self._poll_timer.start()
 
+        self._on_tools_changed()
         self._start_thread()
 
     # ------------------------------------------------------------------
@@ -3111,7 +3236,7 @@ class LiveViewWindow(QWidget):
         self._thread = LiveViewThread(
             camera=self._camera,
             frame_callback=self._on_frame,
-            interval_s=1.0,
+            interval_s=self.SDK_FRAME_INTERVAL_S if self._sdk_preview else 1.0,
         )
         self._thread.start()
         self._update_status_label()
@@ -3125,6 +3250,7 @@ class LiveViewWindow(QWidget):
 
     def _poll_frame(self):
         """Called on the Qt main thread by the poll timer; updates the image."""
+        self._check_thread_error()
         try:
             jpeg_bytes, ts = self._frame_queue.get_nowait()
         except queue.Empty:
@@ -3140,10 +3266,20 @@ class LiveViewWindow(QWidget):
         image = QImage.fromData(jpeg_bytes)
         if image.isNull():
             return
-        pixmap = QPixmap.fromImage(image)
         # Store and render using the centralized renderer so pan/zoom UI
         # remains in sync with the latest frame.
-        self._render_pixmap(pixmap, ts)
+        self._render_image(image, ts, new_frame=True)
+
+    def _check_thread_error(self):
+        """Show why the preview source stopped, and show the preview as disabled."""
+        if self._thread is None:
+            return
+        error = self._thread.take_error()
+        if error is None:
+            return
+        self._user_enabled = False
+        self._stop_reason = f"Stopped: {error}"
+        self._apply_state()
 
     def _apply_state(self):
         """Push the user+totality state into the thread and refresh the button."""
@@ -3163,15 +3299,15 @@ class LiveViewWindow(QWidget):
 
     def _update_status_label(self):
         if not self._user_enabled:
-            self._status_label.setText("○  Disabled")
+            self._status_label.setText(f"○  {self._stop_reason or 'Disabled'}")
             self._status_label.setStyleSheet("color: gray;")
         elif self._totality_paused:
             self._status_label.setText(
-                "\u23f8  Paused during totality — script has full USB control"
+                "⏸  Paused during totality — script has full USB control"
             )
             self._status_label.setStyleSheet("color: #856404; background: #FFF3CD; padding: 3px; border-radius: 3px;")
         else:
-            self._status_label.setText("\u25cf  Active")
+            self._status_label.setText("●  Active")
             self._status_label.setStyleSheet("color: green;")
 
     # ------------------------------------------------------------------
@@ -3185,12 +3321,28 @@ class LiveViewWindow(QWidget):
         self._totality_paused = paused
         self._apply_state()
 
+    def set_camera_job_due(self, due: bool):
+        """Stop the preview of an SDK camera when a scheduled camera job is due.
+
+        The preview stays stopped until it is enabled again.  The controller
+        calls this on each clock tick, so a preview that is enabled again while
+        the job is still due stops again.  A gphoto2 camera takes a shot also
+        in live view, so its preview is not stopped.
+        """
+        if not due or not self._sdk_preview or not self._user_enabled:
+            return
+        LOGGER.info("Live view of %s stopped: a scheduled camera job is due", self._camera.name)
+        self._user_enabled = False
+        self._stop_reason = "Stopped for a scheduled camera job.  Enable it again when the job is done."
+        self._apply_state()
+
     # ------------------------------------------------------------------
     # Slots / event handlers
     # ------------------------------------------------------------------
 
     def _on_toggle(self):
         self._user_enabled = not self._user_enabled
+        self._stop_reason = None
         self._apply_state()
 
     def _on_size_changed(self, size: str):
@@ -3199,6 +3351,16 @@ class LiveViewWindow(QWidget):
             return
         if not set_live_view_size(self._camera, size):
             QMessageBox.warning(self, "Preview size", f"The camera did not accept preview size {size}.")
+
+    def _on_tools_changed(self, *_args):
+        """Read the tool controls, and show the last frame with them."""
+        self._peaking_colour_combo.setEnabled(self._peaking_box.isChecked())
+        self._peaking_sensitivity_combo.setEnabled(self._peaking_box.isChecked())
+        self._loupe.setVisible(self._loupe_box.isChecked())
+        self._histogram.setVisible(self._histogram_box.isChecked())
+        if not self._histogram_box.isChecked():
+            self._histogram.clear()
+        self._rerender()
 
     def _on_zoom_changed(self, index: int):
         """Slot for zoom combo box changes."""
@@ -3211,31 +3373,70 @@ class LiveViewWindow(QWidget):
                 self._zoom_factor = float(text.rstrip('x'))
             except Exception:
                 self._zoom_factor = 1.0
+        # A score of another zoom cannot be compared with this one
+        self._focus_graph.reset()
         # Re-render the last frame with the new zoom (if any)
-        if getattr(self, "_last_pixmap", None) is not None:
-            self._render_pixmap(self._last_pixmap, getattr(self, "_last_ts", datetime.datetime.now()))
+        self._rerender()
 
     def _on_pan_changed(self, _value: int):
-        """Called when either pan slider moves; re-render using last pixmap."""
-        if getattr(self, "_last_pixmap", None) is not None:
-            self._render_pixmap(self._last_pixmap, getattr(self, "_last_ts", datetime.datetime.now()))
+        """Called when either pan slider moves; re-render using last frame."""
+        self._focus_graph.reset()
+        self._rerender()
 
-    def _render_pixmap(self, pixmap: QPixmap, ts: datetime.datetime):
-        """Render the given QPixmap into the image label respecting zoom and pan.
+    def _on_image_clicked(self, nx: float, ny: float):
+        """Set the zoom centre to the clicked point of the frame."""
+        if self._last_image is None or self._shown_rect is None:
+            return
+        self._zoom_centre = live_view_tools.click_to_source(
+            nx, ny, self._shown_rect, self._last_image.width(), self._last_image.height())
+        self._focus_graph.reset()
+        self._loupe.reset()
+        if self._zoom_factor > 1.0:
+            self._centre_sliders()
+        self._rerender()
 
-        Stores the last pixmap/timestamp so slider updates can trigger re-renders.
+    def _centre_sliders(self):
+        """Move the pan sliders so that the zoom centre is in the middle of the view."""
+        if self._last_image is None:
+            return
+        ow, oh = self._last_image.width(), self._last_image.height()
+        crop_w = max(1, int(ow / self._zoom_factor))
+        crop_h = max(1, int(oh / self._zoom_factor))
+        rect = live_view_tools.crop_rect(ow, oh, self._zoom_centre, crop_w, crop_h)
+        self._h_slider.blockSignals(True)
+        self._v_slider.blockSignals(True)
+        self._h_slider.setRange(0, max(0, ow - crop_w))
+        self._v_slider.setRange(0, max(0, oh - crop_h))
+        self._h_slider.setValue(rect.x())
+        self._v_slider.setValue(rect.y())
+        self._h_slider.blockSignals(False)
+        self._v_slider.blockSignals(False)
+
+    def _rerender(self):
+        if getattr(self, "_last_image", None) is not None:
+            self._render_image(self._last_image, getattr(self, "_last_ts", None) or datetime.datetime.now())
+
+    def _render_image(self, image: QImage, ts: datetime.datetime, new_frame: bool = False):
+        """Render the given frame into the image label respecting zoom, pan and the tools.
+
+        Stores the last frame/timestamp so slider and tool changes can trigger re-renders.
+        The focus score, histogram and loupe are updated only for a new frame.
         """
-        self._last_pixmap = pixmap
+        self._last_image = image
         self._last_ts = ts
 
         zoom = getattr(self, "_zoom_factor", 1.0)
-        ow, oh = pixmap.width(), pixmap.height()
+        ow, oh = image.width(), image.height()
 
         if zoom and zoom > 1.0 and ow > 0 and oh > 0:
             crop_w = max(1, int(ow / zoom))
             crop_h = max(1, int(oh / zoom))
             max_x = max(0, ow - crop_w)
             max_y = max(0, oh - crop_h)
+
+            # If sliders were previously hidden, start at the zoom centre
+            if not self._h_slider.isVisible():
+                self._centre_sliders()
 
             # Update slider ranges and make visible
             self._h_slider.blockSignals(True)
@@ -3244,13 +3445,6 @@ class LiveViewWindow(QWidget):
             self._h_slider.setPageStep(max(1, crop_w))
             self._v_slider.setRange(0, max_y)
             self._v_slider.setPageStep(max(1, crop_h))
-
-            # If sliders were previously hidden, default to centred view
-            if not self._h_slider.isVisible():
-                self._h_slider.setValue(max_x // 2)
-            if not self._v_slider.isVisible():
-                self._v_slider.setValue(max_y // 2)
-
             self._h_slider.setVisible(True)
             self._v_slider.setVisible(True)
             self._h_slider.blockSignals(False)
@@ -3258,44 +3452,49 @@ class LiveViewWindow(QWidget):
 
             x0 = min(self._h_slider.value(), max_x) if max_x > 0 else 0
             y0 = min(self._v_slider.value(), max_y) if max_y > 0 else 0
-
-            try:
-                crop = pixmap.copy(x0, y0, crop_w, crop_h)
-            except Exception:
-                crop = pixmap
-
-            disp = crop.scaled(
-                self._image_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            shown_rect = QRect(x0, y0, crop_w, crop_h)
+            shown = image.copy(shown_rect)
         else:
             # Hide pan controls when not zoomed
             self._h_slider.setVisible(False)
             self._v_slider.setVisible(False)
-            disp = pixmap.scaled(
-                self._image_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            shown_rect = QRect(0, 0, ow, oh)
+            shown = image
+        self._shown_rect = shown_rect
 
-        # Draw blue crosshair at the centre of the displayed pixmap
-        w, h = disp.width(), disp.height()
-        painter = QPainter(disp)
-        pen = QPen(QColor(0, 120, 255))
-        pen.setWidth(1)
-        painter.setPen(pen)
-        painter.drawLine(0, h // 2, w, h // 2)  # horizontal
-        painter.drawLine(w // 2, 0, w // 2, h)  # vertical
-        painter.end()
+        if new_frame and self._histogram_box.isChecked():
+            # The full frame: the exposure is of the scene, not of the zoomed part
+            self._histogram.set_image(image)
+        if new_frame and self._loupe_box.isChecked():
+            # The frame as the camera sent it, before the peaking colour
+            self._loupe.set_image(image, self._zoom_centre)
+
+        # One Laplacian for the focus score and the peaking
+        lap = live_view_tools.laplacian(shown)
+        if lap is not None:
+            if new_frame:
+                self._focus_graph.set_score(live_view_tools.focus_score(lap))
+            if self._peaking_box.isChecked():
+                colour = live_view_tools.PEAKING_COLOURS[self._peaking_colour_combo.currentData()]
+                threshold = live_view_tools.PEAKING_SENSITIVITY[self._peaking_sensitivity_combo.currentData()]
+                shown = live_view_tools.paint_peaking(shown, lap, colour, threshold)
+
+        disp = QPixmap.fromImage(shown).scaled(
+            self._image_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        if self._crosshair_box.isChecked():
+            live_view_tools.draw_crosshair(disp)
 
         self._image_label.setPixmap(disp)
         self._timestamp_label.setText("Last frame: " + ts.strftime("%Y-%m-%d  %H:%M:%S")
-                                      + f"  ({pixmap.width()}\u00d7{pixmap.height()})")
+                                      + f"  ({image.width()}×{image.height()})")
 
     def closeEvent(self, event):
         self._poll_timer.stop()
         if self._thread is not None:
+            # The thread stops the preview source of an SDK camera itself
             self._thread.stop()
             self._thread = None
         # Give the camera its own preview size back, unless that would cost a
