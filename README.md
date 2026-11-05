@@ -1,27 +1,26 @@
 # Solar Eclipse Workbench
 
-**Important notice**:  When generating a script where the sun is below 5 degrees, the calculated shutter speeds are too long!  Please use version 2.0.0rc5 or newer for the correct values!
-
-Installing version 2.0.0rc5 can be done very similar to the installation instructions, but replace the install command with 
-
-```bash
-pip install --pre solareclipseworkbench
-```
-
-to update, use
-
-```bash
-pip install --upgrade --pre solareclipseworkbench
-```
-
-
 ![Solar Eclipse Workbench logo](src/solareclipseworkbench/img/logo-small.jpg)
+
+**Important notice**:  Versions older than 2.0.0 calculate shutter speeds that are too long when the sun is below 5 degrees.  If you use an older version, [upgrade](#upgrading-solar-eclipse-workbench) and generate your scripts again.
+
+## What it does
+
+Solar Eclipse Workbench (SEW) takes the pictures of a solar eclipse for you, so you can watch the eclipse instead of the cameras.  It runs on Linux, macOS and Windows (in WSL) and controls Canon, Nikon and Sony cameras over USB with gphoto2.
+
+- **Contact times for your location.**  For the eclipse date and your observing location (typed in, picked on a map, or read from a USB GPS receiver or your phone), SEW calculates the times of first contact (C1), second contact (C2), maximum eclipse, third contact (C3) and fourth contact (C4), with the altitude and azimuth of the Sun.  C2 and C3 are corrected for the profile of the lunar limb, and the Baily's beads windows around them are shown.
+- **A script with what to do when.**  A photography script is a text file with one line per action, timed relative to the contact times, for example *take a bracket of 7 exposures 5 seconds after C2*.  Actions are taking a picture, a burst, a bracket or an HDR sequence, playing a voice prompt, or running a shell command.  The [Configuration Wizard](#running-the-configuration-wizard) writes a script for you from your cameras, lenses and the eclipse circumstances, with exposures that follow the Sun's altitude and the phase of the eclipse.  Scripts from Solar Eclipse Maestro can be used as well.
+- **Running the script.**  SEW schedules every command at its exact time and fires the cameras.  Several cameras can be used at once.  The computer clock can be corrected with GPS time.  A simulation mode runs the script ahead of the eclipse, with real or virtual cameras, so you can rehearse it.
+- **Checking before and after.**  The `Timeline` window shows per camera whether commands follow each other too closely to be taken in time, the `Run report` reads the log of a run back and tells what became of every command, and `Compare sites` puts candidate observing sites side by side (duration of totality, altitude of the Sun, cloud forecast).
+
+More background, eclipse reports and the story behind SEW are on the [Deep Sky Wim blog](https://deepskywim.blogspot.com/search/label/Solar%20Eclipse%20Workbench).
 
 ## Table of contents
 
 [//]: # (- [Solar Eclipse Workbench]&#40;#solar-eclipse-workbench&#41;)
 [//]: # (  - [Table of contents]&#40;#table-of-contents&#41;)
 - [Solar Eclipse Workbench](#solar-eclipse-workbench)
+  - [What it does](#what-it-does)
   - [Table of contents](#table-of-contents)
   - [Installation instructions](#installation-instructions)
     - [Installation with the installer script on macOS and Linux](#installation-with-the-installer-script-on-macos-and-linux)

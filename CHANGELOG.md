@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- README: a `What it does` section at the top explains what Solar Eclipse Workbench does and links to the posts about it on the Deep Sky Wim blog.  The notice about pre-release 2.0.0rc5 and `pip install --pre` is replaced by a short note that versions older than 2.0.0 calculate shutter speeds that are too long below 5 degrees solar altitude (Issue #194)
 - Log timestamps are ISO 8601 (`2026-08-12T17:46:38.123Z`): the log file now writes the `T` between date and time, and the console shows the same UTC time with milliseconds instead of local time.  The run report still reads the logs of 2.0.0 (Issue #191)
 
 ### Fixed
