@@ -49,6 +49,7 @@ from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get
     set_exposure_compensation, compensated_shutter_speed, EXPOSURE_COMPENSATION_STEP_EV, \
     MAX_EXPOSURE_COMPENSATION_EV
 from solareclipseworkbench import hardware_problems
+from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
@@ -3850,6 +3851,9 @@ class QJobsTableView(QTableView):
 
 
 def main():
+    # Before anything else: when the Fujifilm SDK libraries are not on the
+    # library path yet, the process restarts here, before a log file is made.
+    maybe_reexec_for_fuji_sdk()
     setup_logging("sew")
     LOGGER.info("Starting up Solar Eclipse Workbench")
 

@@ -5,6 +5,7 @@ from astropy.time import Time
 
 from solareclipseworkbench import camera
 from solareclipseworkbench import gui
+from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.location_ui import ConfigManager
 from solareclipseworkbench.logging_setup import setup_logging
 from solareclipseworkbench.reference_moments import calculate_reference_moments
@@ -15,6 +16,9 @@ def main(args):
     if args.gui:
         gui.main()
     else:
+        # Before anything else: when the Fujifilm SDK libraries are not on the
+        # library path yet, the process restarts here, before a log file is made.
+        maybe_reexec_for_fuji_sdk()
         setup_logging("sew")
         # Check for all needed parameters
         # Use "is not False" rather than truthiness: an altitude (or longitude/

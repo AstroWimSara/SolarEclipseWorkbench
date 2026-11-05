@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QPushButton, QMessageBox, QProgressDialog, QDialog, QPlainTextEdit, QProgressBar, QWidget, QScrollArea
 )
 
+from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.location_ui import ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget
 from solareclipseworkbench.qt_utils import apply_system_color_scheme, _is_dark_mode_preferred, _build_dark_palette, dark_lineedit_style, apply_dark_to_lineedit
 
@@ -3211,6 +3212,9 @@ class SEWConfigWizard(QWizard):
 
 def main():
     """Main entry point for the wizard application."""
+    # Before anything else: when the Fujifilm SDK libraries are not on the
+    # library path yet, the process restarts here, before a log file is made.
+    maybe_reexec_for_fuji_sdk()
     setup_logging("sew_wizard")
     app = QApplication(sys.argv)
     app.setApplicationName("Solar Eclipse Workbench Configuration Wizard")
