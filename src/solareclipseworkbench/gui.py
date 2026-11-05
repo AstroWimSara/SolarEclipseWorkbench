@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import pytz
 from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
-                         QSettings, QSignalBlocker, pyqtSignal)
+                         QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
@@ -58,7 +58,7 @@ from solareclipseworkbench.limb_correction import (is_enabled as limb_correction
                                                    ensure_limb_profile)
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.phone_dashboard import (DashboardServer, ACTION_ABORT, ACTION_EV_DOWN, ACTION_EV_RESET,
-                                                   ACTION_EV_UP)
+                                                   ACTION_EV_UP, ACTION_LIVE_POINT)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
@@ -1346,7 +1346,7 @@ class SolarEclipseController(Observer):
         # are queued and carried out here, on the UI thread
         self._phone_dashboard: Union[DashboardServer, None] = None
         self._phone_dashboard_popup: Union['PhoneDashboardPopup', None] = None
-        self._phone_actions: "queue.Queue[str]" = queue.Queue()
+        self._phone_actions: "queue.Queue[tuple[str, dict]]" = queue.Queue()
         self._phone_action_timer = QTimer()
         self._phone_action_timer.setInterval(200)
         self._phone_action_timer.timeout.connect(self._handle_phone_actions)
@@ -2407,7 +2407,7 @@ class SolarEclipseController(Observer):
         """Start the phone dashboard (when it does not run yet) and show its QR code."""
 
         if self._phone_dashboard is None:
-            server = DashboardServer(on_action=lambda action, data: self._phone_actions.put(action))
+            server = DashboardServer(on_action=lambda action, data: self._phone_actions.put((action, data)))
             try:
                 server.start()
             except OSError as exc:
@@ -2429,6 +2429,8 @@ class SolarEclipseController(Observer):
         """Stop the phone dashboard and close its window."""
 
         self._phone_action_timer.stop()
+        if self._live_view_window is not None:
+            self._live_view_window.share_with_phone = False
         if self._phone_dashboard is not None:
             self._phone_dashboard.stop()
             self._phone_dashboard = None
@@ -2445,7 +2447,7 @@ class SolarEclipseController(Observer):
         handled = False
         while True:
             try:
-                action = self._phone_actions.get_nowait()
+                action, data = self._phone_actions.get_nowait()
             except queue.Empty:
                 break
             try:
@@ -2459,6 +2461,10 @@ class SolarEclipseController(Observer):
                     self._apply_exposure_compensation(get_exposure_compensation() - EXPOSURE_COMPENSATION_STEP_EV)
                 elif action == ACTION_EV_RESET:
                     self._apply_exposure_compensation(0)
+                elif action == ACTION_LIVE_POINT:
+                    window = self._live_view_window
+                    if window is not None and window.isVisible():
+                        window.set_zoom_centre_from_phone(float(data["x"]), float(data["y"]))
                 handled = True
             except Exception:
                 LOGGER.exception("Phone dashboard action %s failed", action)
@@ -2495,6 +2501,18 @@ class SolarEclipseController(Observer):
                             "seconds": (info.time_utc - reference_now).total_seconds(),
                             "local": format_time(info.time_local, time_format)})
 
+        live = None
+        window = self._live_view_window
+        if window is not None and window.isVisible():
+            window.share_with_phone = True
+            jpeg, frame_id, age = window.phone_frame()
+            tools, loupe_png = window.phone_tools()
+            self._phone_dashboard.set_frame(jpeg, frame_id, loupe_png)
+            live = {"camera": window._camera.name, "status": window.phone_status(),
+                    "frame": frame_id if jpeg else 0, "age": age, **tools}
+        else:
+            self._phone_dashboard.set_frame(None, 0)
+
         running = bool(self.scheduler is not None and self.scheduler.running)
         jobs, remaining = ([], 0)
         if running and self.jobs_model is not None:
@@ -2511,6 +2529,7 @@ class SolarEclipseController(Observer):
             "ev": get_exposure_compensation(),
             "ev_max": MAX_EXPOSURE_COMPENSATION_EV,
             "cameras": self.model.camera_overview.status_rows(),
+            "live": live,
         }
 
     def _shutdown_scheduler(self):
@@ -3528,6 +3547,17 @@ class LiveViewWindow(QWidget):
         self._user_enabled: bool = True
         self._totality_paused: bool = False
 
+        # The phone dashboard shows the frames of this window (it never reads the camera itself).
+        # Set by the controller while the dashboard runs; the frames are only encoded then.
+        self.share_with_phone: bool = False
+        self._phone_jpeg: Optional[bytes] = None
+        self._phone_frame_time: Optional[float] = None
+        self._phone_frame_id: int = 0
+        # The histogram and the loupe for the phone, of the same frame
+        self._phone_loupe_png: Optional[bytes] = None
+        self._phone_tools: dict = {}
+        self._phone_loupe_peak: float = 0.0
+
         self.setWindowTitle(f"Live View — {camera.name}")
 
         # Image display.  A click sets the zoom centre.
@@ -3909,9 +3939,93 @@ class LiveViewWindow(QWidget):
         if self._crosshair_box.isChecked():
             live_view_tools.draw_crosshair(disp)
 
+        if new_frame and self.share_with_phone:
+            self._encode_phone_frame(shown)
+            self._phone_histogram_and_loupe(image)
+
         self._image_label.setPixmap(disp)
         self._timestamp_label.setText("Last frame: " + ts.strftime("%Y-%m-%d  %H:%M:%S")
                                       + f"  ({image.width()}\u00d7{image.height()})")
+
+    # ------------------------------------------------------------------
+    # Phone dashboard
+    # ------------------------------------------------------------------
+
+    PHONE_FRAME_WIDTH = 1024
+
+    def _encode_phone_frame(self, shown: QImage):
+        """Keep the frame as shown (zoomed part, focus peaking, crosshair) as a JPEG for the phone."""
+        try:
+            pixmap = QPixmap.fromImage(shown)
+            if pixmap.width() > self.PHONE_FRAME_WIDTH:
+                pixmap = pixmap.scaledToWidth(self.PHONE_FRAME_WIDTH, Qt.TransformationMode.SmoothTransformation)
+            if self._crosshair_box.isChecked():
+                live_view_tools.draw_crosshair(pixmap)
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            if not pixmap.save(buffer, "JPEG", 75):
+                return
+            self._phone_jpeg = bytes(buffer.data())
+            self._phone_frame_time = time.monotonic()
+            self._phone_frame_id += 1
+        except Exception:
+            LOGGER.debug("Could not encode the live view frame for the phone", exc_info=True)
+
+    def _phone_histogram_and_loupe(self, image: QImage):
+        """Keep the histogram (of the full frame) and the loupe (at the zoom centre) for the phone.
+
+        They are worked out for the phone whether or not they are on in this window, so the
+        phone can show them without anyone at the laptop.
+        """
+        tools = {}
+        try:
+            grey = live_view_tools.grey_pixels(image)
+            if grey is not None:
+                bins, clipped, black = live_view_tools.luminance_histogram(grey)
+                tools["histogram"] = {"bins": live_view_tools.histogram_summary(bins),
+                                      "clipped": round(clipped, 3), "black": round(black, 2),
+                                      "clipped_from": live_view_tools.CLIPPED_FROM}
+
+            patch, score = live_view_tools.loupe_patch(image, self._zoom_centre,
+                                                        live_view_tools.LoupeWidget.PATCH_PX)
+            png = None
+            if patch is not None:
+                buffer = QBuffer()
+                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+                # PNG: JPEG would soften the edges the loupe is there to judge
+                if patch.save(buffer, "PNG"):
+                    png = bytes(buffer.data())
+                if score is not None:
+                    self._phone_loupe_peak = max(self._phone_loupe_peak, score)
+                share = score / self._phone_loupe_peak if score and self._phone_loupe_peak > 0 else 0.0
+                tools["loupe"] = {"score": None if score is None else round(score, 1), "share": round(share, 3),
+                                  "x": round(self._zoom_centre.x(), 4), "y": round(self._zoom_centre.y(), 4)}
+            self._phone_loupe_png = png
+        except Exception:
+            LOGGER.debug("Could not make the histogram and loupe for the phone", exc_info=True)
+        self._phone_tools = tools
+
+    def phone_tools(self) -> tuple[dict, Optional[bytes]]:
+        """Return the histogram and loupe of the last frame for the phone, and the loupe image (PNG)."""
+        return self._phone_tools, self._phone_loupe_png
+
+    def set_zoom_centre_from_phone(self, nx: float, ny: float):
+        """A tap on the preview on the phone: like a click on the preview in this window."""
+        self._phone_loupe_peak = 0.0
+        self._on_image_clicked(nx, ny)
+
+    def phone_frame(self) -> tuple[Optional[bytes], int, Optional[float]]:
+        """Return the last frame for the phone (JPEG), its number, and its age [s] (None without a frame)."""
+        age = None if self._phone_frame_time is None else time.monotonic() - self._phone_frame_time
+        return self._phone_jpeg, self._phone_frame_id, age
+
+    def phone_status(self) -> str:
+        """Return "active", "paused" (around totality) or "disabled" (by the user)."""
+        if not self._user_enabled:
+            return "disabled"
+        if self._totality_paused:
+            return "paused"
+        return "active"
 
     def closeEvent(self, event):
         self._poll_timer.stop()

@@ -1,8 +1,10 @@
 """Phone dashboard: a small local web page to follow and steer a run from a phone.
 
-The page shows the countdown to the contacts, the next scheduled commands and the
-status of the cameras, and has the +/-1 EV, reset and abort controls of the main
-window.  It is meant for when the laptop is under a sunshade or away from the
+The page shows the countdown to the contacts, the next scheduled commands, the
+status of the cameras and the live view with its histogram and loupe, and has the +/-1 EV, reset and abort
+controls of the main window.  The live view frames are those of the Live View
+window on the laptop (``set_frame``): the dashboard never reads the camera, so it
+adds no USB traffic and follows the pause around totality.  It is meant for when the laptop is under a sunshade or away from the
 telescope.
 
 The server runs on a background thread and never touches Qt.  The main window
@@ -49,7 +51,9 @@ ACTION_EV_UP = "ev_up"
 ACTION_EV_DOWN = "ev_down"
 ACTION_EV_RESET = "ev_reset"
 ACTION_ABORT = "abort"
-ACTIONS = (ACTION_EV_UP, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_ABORT)
+# A tap on the live view: "x" and "y" from 0 to 1 on the preview; moves the loupe (the zoom centre)
+ACTION_LIVE_POINT = "live_point"
+ACTIONS = (ACTION_EV_UP, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_ABORT, ACTION_LIVE_POINT)
 
 # Largest request body accepted for an action
 _MAX_BODY = 1024
@@ -66,6 +70,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --dim:#8b949e;
           --accent:#f0b429; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; padding:12px 16px 24px; background:var(--bg); color:var(--fg);
          font-family:system-ui,-apple-system,sans-serif; font-size:16px; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim);
@@ -92,6 +97,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   #ev { text-align:center; font-size:22px; font-weight:700; margin:4px 0 10px; }
   #ev.on { color:#f0883e; }
   #abort { background:#5a1d1d; border-color:var(--bad); color:#fff; margin-top:14px; width:100%; }
+  #liveBox { position:relative; text-align:center; }
+  #live { width:100%; height:auto; display:block; border-radius:6px; background:#000; }
+  #live.old { opacity:.4; }
+  #liveNote { font-size:14px; color:var(--dim); padding:4px 0; }
+  #liveHead { display:flex; justify-content:space-between; align-items:baseline; }
+  #liveHead .toggles { display:flex; gap:10px; }
+  #tools { display:flex; gap:10px; align-items:flex-start; margin-top:8px; }
+  #histBox { flex:1; min-width:0; }
+  #hist { width:100%; height:80px; display:block; background:#14141a; border-radius:6px; }
+  #histText { display:flex; justify-content:space-between; font-size:13px; color:var(--dim); margin-top:2px; }
+  #histText .bad { color:var(--bad); font-weight:700; }
+  #loupeBox { width:140px; flex:none; text-align:center; }
+  #loupe { width:140px; height:140px; image-rendering:pixelated; display:block; background:#000; border-radius:6px; }
+  #loupeText { font-size:13px; margin-top:2px; }
+  #liveHead label { font-size:13px; color:var(--dim); text-transform:none; letter-spacing:0; font-weight:400; }
   #msg { min-height:1.3em; text-align:center; font-size:14px; margin-top:8px; color:var(--warn); }
 </style>
 </head>
@@ -122,12 +142,109 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="msg"></div>
 </div>
 
+<h2 id="liveHead"><span>Live view</span><span class="toggles">
+  <label><input type="checkbox" id="liveOn" onchange="liveToggled()"> show</label>
+  <label><input type="checkbox" id="histOn" onchange="liveToggled()"> histogram</label>
+  <label><input type="checkbox" id="loupeOn" onchange="liveToggled()"> loupe</label></span></h2>
+<div class="panel" id="liveBox">
+  <img id="live" alt="" hidden onclick="livePoint(event)">
+  <div id="liveNote">&nbsp;</div>
+  <div id="tools" hidden>
+    <div id="histBox"><canvas id="hist"></canvas><div id="histText"></div></div>
+    <div id="loupeBox"><img id="loupe" alt=""><div id="loupeText"></div></div>
+  </div>
+</div>
+
 <h2>Cameras</h2>
 <div class="panel"><table id="cameras"></table></div>
 
 <script>
 const KEY = new URLSearchParams(location.search).get('k') || '';
-let state = null, receivedAt = 0, lastOk = 0;
+let state = null, receivedAt = 0, lastOk = 0, liveShown = -1, loupeShown = -1, histShown = -1;
+const liveOn = document.getElementById('liveOn'), histOn = document.getElementById('histOn'),
+      loupeOn = document.getElementById('loupeOn');
+const TOGGLES = [[liveOn, 'sewLive'], [histOn, 'sewHist'], [loupeOn, 'sewLoupe']];
+for (const [box, name] of TOGGLES) {
+  try { box.checked = localStorage.getItem(name) !== 'off'; } catch (err) { box.checked = true; }
+}
+function liveToggled() {
+  for (const [box, name] of TOGGLES) {
+    try { localStorage.setItem(name, box.checked ? 'on' : 'off'); } catch (err) {}
+  }
+  liveShown = loupeShown = histShown = -1; renderLive();
+}
+
+function livePoint(ev) {
+  const img = ev.currentTarget, r = img.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const x = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  const y = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+  act('live_point', {x, y}, 'Loupe moved.');
+}
+
+function drawHistogram(h) {
+  const c = document.getElementById('hist'), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, ht = c.clientHeight;
+  if (!w) return;
+  c.width = w * dpr; c.height = ht * dpr;
+  const g = c.getContext('2d'); g.scale(dpr, dpr);
+  g.fillStyle = '#14141a'; g.fillRect(0, 0, w, ht);
+  const n = h.bins.length, bw = w / n;
+  // The clipped range in red, so the disc touching it shows
+  const clipX = h.clipped_from / 256 * w;
+  for (let i = 0; i < n; i++) {
+    const x = i * bw;
+    g.fillStyle = x >= clipX ? '#f85149' : '#d2d2dc';
+    const bar = h.bins[i] * (ht - 4);
+    g.fillRect(x, ht - bar, Math.max(1, bw - 0.5), bar);
+  }
+  const t = document.getElementById('histText');
+  t.innerHTML = '<span class="' + (h.clipped > 0.05 ? 'bad' : '') + '">clipped ' + h.clipped.toFixed(2) +
+    '%</span><span>black ' + h.black.toFixed(1) + '%</span>';
+}
+
+function renderLive() {
+  const img = document.getElementById('live'), note = document.getElementById('liveNote');
+  const live = state && state.live;
+  const tools = document.getElementById('tools');
+  if (!live) {
+    img.hidden = true; tools.hidden = true; liveShown = loupeShown = histShown = -1;
+    note.textContent = 'Open Live View on the laptop to see it here.'; return;
+  }
+  renderTools(live);
+  if (!liveOn.checked) { img.hidden = true; img.removeAttribute('src'); note.textContent = live.camera; return; }
+  if (live.frame && live.frame !== liveShown) {
+    liveShown = live.frame;
+    img.src = 'live.jpg?k=' + encodeURIComponent(KEY) + '&f=' + live.frame;
+  }
+  img.hidden = !live.frame;
+  const age = live.age == null ? null : live.age + elapsed();
+  const old = age == null || age > 5 || live.status !== 'active';
+  img.className = old ? 'old' : '';
+  let text = live.camera;
+  if (live.status === 'paused') text += ' \u00b7 paused around totality (the script has the USB)';
+  else if (live.status === 'disabled') text += ' \u00b7 disabled on the laptop';
+  else if (!live.frame) text += ' \u00b7 waiting for the first frame';
+  if (age != null && age > 5) text += ' \u00b7 last frame ' + fmt(age) + ' ago';
+  if (loupeOn.checked && live.loupe && live.status === 'active') text += ' \u00b7 tap to move the loupe';
+  note.textContent = text;
+}
+
+function renderTools(live) {
+  const tools = document.getElementById('tools');
+  const showHist = histOn.checked && !!live.histogram, showLoupe = loupeOn.checked && !!live.loupe;
+  tools.hidden = !(showHist || showLoupe);
+  document.getElementById('histBox').hidden = !showHist;
+  document.getElementById('loupeBox').hidden = !showLoupe;
+  if (showHist && live.frame !== histShown) { histShown = live.frame; drawHistogram(live.histogram); }
+  if (showLoupe && live.frame !== loupeShown) {
+    loupeShown = live.frame;
+    document.getElementById('loupe').src = 'loupe.png?k=' + encodeURIComponent(KEY) + '&f=' + live.frame;
+    const l = live.loupe, t = document.getElementById('loupeText');
+    t.textContent = l.score == null ? '' : l.score.toFixed(1) + ' \u00b7 ' + Math.round(l.share * 100) + '% of best';
+    t.style.color = l.share > 0.95 ? '#3fb950' : '#f0b429';
+  }
+}
 
 function fmt(s) {
   const neg = s < 0; s = Math.abs(Math.floor(s));
@@ -191,6 +308,8 @@ function render() {
     '<tr><td>' + esc(c.name) + '</td><td class="t">\U0001F50B ' + esc(c.battery) + '</td><td class="t">' +
     esc(c.free) + '</td></tr>'
   ).join('') : '<tr><td class="small">No cameras connected</td></tr>';
+
+  renderLive();
 }
 
 async function poll() {
@@ -202,12 +321,13 @@ async function poll() {
   render();
 }
 
-async function act(action) {
+async function act(action, extra, sent) {
   const msg = document.getElementById('msg');
   try {
     const r = await fetch('action?k=' + encodeURIComponent(KEY), {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})});
-    msg.textContent = r.ok ? 'Sent.' : 'Refused (' + r.status + ').';
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Object.assign({action}, extra || {}))});
+    msg.textContent = r.ok ? (sent || 'Sent.') : 'Refused (' + r.status + ').';
   } catch (err) { msg.textContent = 'Not sent: no connection.'; }
   setTimeout(() => { msg.textContent = ''; }, 2500);
   setTimeout(poll, 400);
@@ -243,6 +363,9 @@ class DashboardServer:
         self.key = key or secrets.token_urlsafe(9)
         self._on_action = on_action
         self._state_json = b"{}"
+        self._frame: Optional[bytes] = None
+        self._frame_id = 0
+        self._loupe: Optional[bytes] = None
         self._lock = threading.Lock()
         self._server: Optional[http.server.ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -258,6 +381,24 @@ class DashboardServer:
         data = json.dumps(state, default=str).encode()
         with self._lock:
             self._state_json = data
+
+    def set_frame(self, jpeg: Optional[bytes], frame_id: int = 0, loupe_png: Optional[bytes] = None) -> None:
+        """Replace the live view frame (JPEG) and its loupe (PNG), or remove them with None.
+
+        Safe to call from any thread.
+        """
+        with self._lock:
+            self._frame = jpeg
+            self._frame_id = frame_id if jpeg else 0
+            self._loupe = loupe_png if jpeg else None
+
+    def loupe(self) -> Optional[bytes]:
+        with self._lock:
+            return self._loupe
+
+    def frame(self) -> Optional[bytes]:
+        with self._lock:
+            return self._frame
 
     def state_json(self) -> bytes:
         with self._lock:
@@ -313,7 +454,18 @@ class DashboardServer:
         action = data.get("action")
         if action not in ACTIONS:
             return 400
-        LOGGER.info("Phone dashboard: %s", action)
+        if action == ACTION_LIVE_POINT:
+            try:
+                x, y = float(data["x"]), float(data["y"])
+            except (KeyError, TypeError, ValueError):
+                return 400
+            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                return 400
+            data = {"action": action, "x": x, "y": y}
+        if action == ACTION_LIVE_POINT:
+            LOGGER.debug("Phone dashboard: loupe moved to %.3f, %.3f", data["x"], data["y"])
+        else:
+            LOGGER.info("Phone dashboard: %s", action)
         if self._on_action is not None:
             try:
                 self._on_action(action, data)
@@ -348,12 +500,24 @@ def _make_handler(server: DashboardServer):
 
         def do_GET(self):
             parsed = urlparse(self.path)
-            if parsed.path not in ("/", "/state"):
+            if parsed.path not in ("/", "/state", "/live.jpg", "/loupe.png"):
                 self._send(404, b"Not found", "text/plain")
                 return
             if not self._authorised(parsed):
                 return
-            if parsed.path == "/state":
+            if parsed.path == "/live.jpg":
+                frame = server.frame()
+                if frame is None:
+                    self._send(404, b"No live view frame", "text/plain")
+                else:
+                    self._send(200, frame, "image/jpeg")
+            elif parsed.path == "/loupe.png":
+                loupe = server.loupe()
+                if loupe is None:
+                    self._send(404, b"No loupe", "text/plain")
+                else:
+                    self._send(200, loupe, "image/png")
+            elif parsed.path == "/state":
                 self._send(200, server.state_json(), "application/json")
             else:
                 self._send(200, page, "text/html; charset=utf-8")
