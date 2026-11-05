@@ -38,6 +38,24 @@ Repository = "https://github.com/AstroWimSara/SolarEclipseWorkbench"
 [project.scripts]
 sew = "solareclipseworkbench.gui:main"
 sew_wizard = "solareclipseworkbench.wizard:main"
+sew_hardware = "solareclipseworkbench.hardware_console:main"
+
+# Relay backends for the USB relay shutter trigger.  The built-in backends
+# register themselves on import; this group lets a board type ship in its own
+# package.  A backend supplies only "close a contact" and "open a contact": the
+# shutter timing and the release of the contacts on exit stay in RelayTrigger.
+[project.entry-points."solareclipseworkbench.relay_backends"]
+lcus = "solareclipseworkbench.relay_trigger:LcusSerialBackend"
+dsd = "solareclipseworkbench.relay_trigger:DsdSerialBackend"
+numato = "solareclipseworkbench.relay_trigger:NumatoSerialBackend"
+hid = "solareclipseworkbench.relay_trigger:HidRelayBackend"
+simulated = "solareclipseworkbench.relay_trigger:SimulatedBackend"
+
+[project.optional-dependencies]
+# HID relay boards (dcttech "USBRelay" boards, 16c0:05df).  'hidapi' ships the
+# shared library in its wheel.  The similarly named 'hid' package gives the same
+# import, but needs the library installed on the system.
+hid = ["hidapi==0.15.0"]
 
 [dependency-groups]
 dev = ["pytest>=9"]

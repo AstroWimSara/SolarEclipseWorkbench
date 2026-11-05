@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Fujifilm X cameras, through the Fujifilm Shooting SDK instead of gphoto2 (which cannot control them tethered): `take_picture`, `take_bracket`, `take_hdr`, `take_burst` and `prepare_camera`.  The body settings that cost frames (auto ISO, autofocus, JPEG, drive mode, ...) are reported when the camera is detected, and gphoto2 leaves Fuji bodies alone when the SDK is installed.  The SDK itself must be installed separately; see [Fujifilm X cameras](docs/FUJI.md) - by @mrosseel
+- USB relay shutter trigger: a USB relay board fires the camera through its wired remote-release jack, so a burst runs at the full rate of the camera's drive mode with no USB in the path.  LCUS, DSD TECH SH-UR, Numato and dcttech HID boards are supported (HID needs the new `hid` extra), and other packages can add a board type.  A `Relay` toolbar button connects, tests and releases the relay; the script commands `relay_shoot`, `relay_burst`, `relay_bulb`, `relay_arm` and `relay_release` fire it, and overlapping relay commands are reported when the script is loaded.  `sew` opens a relay with `--relay`, and `sew_hardware` is a bench console to wire and test a trigger.  See [USB relay shutter trigger](docs/RELAY.md) - by @mrosseel
 
 ## [2.0.0] - 2026-11-03
 

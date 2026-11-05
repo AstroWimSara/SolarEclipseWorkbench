@@ -1,4 +1,5 @@
 import argparse
+import logging
 from time import sleep
 
 from astropy.time import Time
@@ -6,10 +7,32 @@ from astropy.time import Time
 from solareclipseworkbench import camera
 from solareclipseworkbench import gui
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
+from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.location_ui import ConfigManager
 from solareclipseworkbench.logging_setup import setup_logging
 from solareclipseworkbench.reference_moments import calculate_reference_moments
+from solareclipseworkbench.relay_trigger import RelayError, open_trigger
 from solareclipseworkbench.utils import observe_solar_eclipse
+
+
+def open_relay(args) -> None:
+    """Open and register the relay asked for with --relay, for the relay_* script commands.
+
+    The GUI connects the relay from its toolbar.  On the command line nothing
+    is opened unless --relay is given: 'auto' tries every USB serial port,
+    and those can be a GPS receiver or another device.
+    """
+    if not args.relay:
+        return
+    port = None if args.relay == "auto" else args.relay
+    try:
+        trigger = open_trigger(args.relay_backend, port,
+                               s2_channel=args.relay_s2, s1_channel=args.relay_s1)
+    except RelayError as exc:
+        logging.error("No relay could be opened, the relay commands in the script will fail: %s", exc)
+        print(f"WARNING: no relay could be opened: {exc}")
+        return
+    register_hardware('relay', trigger)
 
 
 def main(args):
@@ -36,6 +59,8 @@ def main(args):
                 is_simulator=args.virtual_camera,
                 alias_map=ConfigManager().get_camera_aliases() or None,
             )
+
+            open_relay(args)
 
             # Only do a simulation if args.c1 is set
             if args.ref_moment:
@@ -102,6 +127,32 @@ if __name__ == "__main__":
         help="Use virtual camera instead of physical cameras",
         action='store_true',
         default=False,
+    )
+
+    parser.add_argument(
+        "--relay",
+        help="open a USB relay shutter trigger for the relay_* commands: a serial port, or 'auto'",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--relay-backend",
+        help="relay board type: auto (default), lcus, dsd, numato, hid or simulated",
+        default="auto",
+    )
+
+    parser.add_argument(
+        "--relay-s2",
+        help="relay channel wired to S2, the full press (default 1)",
+        default=1,
+        type=int,
+    )
+
+    parser.add_argument(
+        "--relay-s1",
+        help="relay channel wired to S1, the half press (default: S1 shares the S2 contact)",
+        default=None,
+        type=int,
     )
 
     parser.add_argument(

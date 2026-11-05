@@ -12,11 +12,13 @@ from solareclipseworkbench import hardware_problems
 from solareclipseworkbench.camera import CameraSettings, _MAX_LOCK_WAIT_S, parse_prepare_mode
 from solareclipseworkbench.command_timing import (
     vendor_from_name, picture_duration_s, burst_duration_s, hdr_duration_s, bracket_duration_s,
-    drive_mode, mode_switch_s, TimingProfile, DEFAULT_PROFILE, parse_timing_directives,
+    drive_mode, mode_switch_s, TimingProfile, DEFAULT_PROFILE, parse_timing_directives, relay_duration_s,
 )
 from solareclipseworkbench.notifications import check_notification
 from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
 from solareclipseworkbench.gui import SolarEclipseController
+from solareclipseworkbench.hardware_registry import HARDWARE, HARDWARE_COMMANDS
+from solareclipseworkbench.relay_trigger import relay_shoot, relay_burst, relay_bulb, relay_arm, relay_release
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
 COMMANDS = {
@@ -27,8 +29,18 @@ COMMANDS = {
     'take_hdr': take_hdr,
     'prepare_camera': prepare_camera,
     'sync_cameras': sync_cameras,
-    'command': execute_command
+    'command': execute_command,
+    'relay_shoot': relay_shoot,
+    'relay_burst': relay_burst,
+    'relay_bulb': relay_bulb,
+    'relay_arm': relay_arm,
+    'relay_release': relay_release,
 }
+
+#: Name under which relay commands appear in the load-time timing warnings.
+#: The relay serialises its own commands (see relay_trigger._serialised_on_trigger),
+#: so they are replayed as one more "camera".
+RELAY_BUSY_NAME = "the relay"
 
 
 @dataclass(frozen=True)
@@ -176,8 +188,8 @@ def report_camera_conflicts(windows: List[CameraBusyWindow]) -> List[CameraConfl
             hardware_problems.report(
                 "Script",
                 f'"{conflict.window.description}" on {conflict.window.camera} will probably be skipped: '
-                f'the camera is still busy with "{blocker.description}".  Commands that wait more than '
-                f'{_MAX_LOCK_WAIT_S:.1f} s for the camera are dropped; schedule them further apart.',
+                f'{conflict.window.camera} is still busy with "{blocker.description}".  Commands that wait '
+                f'more than {_MAX_LOCK_WAIT_S:.1f} s for the camera are dropped; schedule them further apart.',
                 detail=detail,
                 severity="warning",
             )
@@ -434,6 +446,50 @@ def _hdr_is_valid(args: list, cmd_str: str) -> bool:
     return False
 
 
+class DeviceAtRuntime:
+    """Stands in for a relay (or other registered device) until the job fires.
+
+    The registry is consulted on every attribute access, so a device connected
+    any time before the job runs is the one used, and a reconnected device
+    replaces the old one.  A device still missing when the job needs it raises,
+    and the scheduler logs that job as failed.  Deciding at load time instead
+    would silently disarm every relay command of a script loaded a few seconds
+    before the relay was connected.
+    """
+
+    def __init__(self, kind: str, command: str):
+        self._kind, self._command = kind, command
+
+    def __getattr__(self, name):
+        device = HARDWARE.get(self._kind)
+        if device is None:
+            raise RuntimeError(f'no {self._kind} is connected, so "{self._command}" cannot run')
+        return getattr(device, name)
+
+
+def _relay_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
+    """Check the arguments of a relay command now, so a typo shows up when the script is loaded."""
+    values = [arg.strip() for arg in args if arg.strip()]
+    if func_name in ("relay_shoot", "relay_arm", "relay_release"):
+        return True
+    problem = None
+    try:
+        if not values:
+            raise IndexError
+        if float(values[0]) <= 0:
+            raise ValueError
+        if func_name == "relay_burst" and len(values) > 1 and float(values[1]) <= 0:
+            problem = "the interval of relay_burst must be a positive number of seconds"
+    except IndexError:
+        problem = f"{func_name} needs a duration in seconds"
+    except ValueError:
+        problem = f"the duration of {func_name} must be a positive number of seconds"
+    if problem is None:
+        return True
+    hardware_problems.report("Script", f"{problem}.  This relay command will not run.", detail=cmd_str.strip())
+    return False
+
+
 #: Commands that leave the camera alone, so a job running one of them is not
 #: holding the shutter when the next contact needs it.
 CAMERA_FREE_COMMANDS = frozenset({'voice_prompt'})
@@ -585,7 +641,18 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     script_args = list(args)
     camera_obj = None
 
-    if func_name == "voice_prompt":
+    if func_name in HARDWARE_COMMANDS:
+        # A relay command takes its device as the first argument, the way a
+        # camera command takes a camera, but the device is looked up when the
+        # job fires (see DeviceAtRuntime).
+        if not _relay_args_are_valid(func_name, args, cmd_str):
+            return
+        kind = HARDWARE_COMMANDS[func_name]
+        if HARDWARE.get(kind) is None:
+            logging.warning('schedule_command: no %s is connected yet; "%s" runs if one is '
+                            'connected before it fires.', kind, func_name)
+        args = [DeviceAtRuntime(kind, func_name)] + [arg.strip() for arg in args if arg.strip()]
+    elif func_name == "voice_prompt":
         # Resolve the prompt now rather than when the job fires: a typo would
         # otherwise raise mid-eclipse and the prompt would simply not be heard.
         problem = check_notification(args[0] if args else "")
@@ -718,6 +785,11 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
             unknown_moments[name] = unknown_moments.get(name, 0) + 1
         return None
 
+    if func_name in HARDWARE_COMMANDS:
+        busy_s = relay_duration_s(func_name, [arg.strip() for arg in script_args if arg.strip()])
+        if busy_s is None:
+            return None
+        return CameraBusyWindow(RELAY_BUSY_NAME, execution_time, busy_s, description)
     if camera_obj is None:
         return None
     profile = (timing_profiles or {}).get(script_args[0].strip(), DEFAULT_PROFILE)

@@ -54,6 +54,7 @@ pip install --upgrade --pre solareclipseworkbench
     - [macOS](#macos)
     - [How to use](#how-to-use)
     - [GPS time correction](#gps-time-correction)
+  - [USB relay shutter trigger](#usb-relay-shutter-trigger)
   - [Using two cameras of the same model, or one camera with multiple setups](#using-two-cameras-of-the-same-model-or-one-camera-with-multiple-setups)
     - [Step-by-step setup](#step-by-step-setup)
   - [Script file format](#script-file-format)
@@ -671,6 +672,24 @@ network.  For example, if your computer is 3 seconds slow, all actions will be t
 
 If no USB GPS fix was obtained, the computer clock is used as-is (offset = 0).
 
+## USB relay shutter trigger
+
+A USB relay board can fire a camera through its wired remote-release jack, as a cable release
+does.  There is no USB in the path to the shutter, so a held contact lets the camera shoot at the
+full rate of its own drive mode.  This is useful for the bursts around C2 and C3, on bodies that
+shoot slowly over USB or cannot shoot a burst over USB at all.
+
+- Supported boards: LCUS (CH340), DSD TECH SH-UR, Numato and dcttech HID boards.  HID boards need
+  the `hid` extra: `pip install "solareclipseworkbench[hid]"`.
+- Connect the relay with the **Relay** button in the toolbar.  **Test fire** takes one frame.
+- In a script, use `relay_shoot`, `relay_burst`, `relay_bulb`, `relay_arm` and `relay_release`
+  (see [Commands](#commands)).
+- `sew_hardware` is a bench console to wire and test a trigger without the GUI.
+
+[USB relay shutter trigger](docs/RELAY.md) explains how to identify the wires of a release cable,
+how to wire the board, and what was measured on a Fujifilm X-T4: latency, pulse length, burst rate
+and how the drive mode changes what a held contact does.
+
 ## Using two cameras of the same model, or one camera with multiple setups
 
 SEW's default camera identification uses the gphoto2 model name (e.g. `Canon EOS 80D`) as
@@ -801,6 +820,16 @@ This command will take a picture 1 minutes and 2 seconds before first contact (C
 ```prepare_camera, C2, -, 0:00:30.0, Sony ILCE-7RM3A, 1/30, 8, 400, "Bracketing C 3.0 Steps 5 Pictures", "Prepare for the C2 brackets"```
 
   Arguments: camera name, shutter speed, aperture, ISO, drive mode.
+
+- **relay_shoot**, **relay_burst**, **relay_bulb**, **relay_arm**, **relay_release** - Fire the camera through a USB relay on its remote-release jack (see [USB relay shutter trigger](#usb-relay-shutter-trigger)).  `relay_shoot` takes one frame.  `relay_burst` holds the shutter for a number of seconds; with an interval as second argument and S1 on its own channel, it pulses the shutter at that interval.  `relay_bulb` holds a bulb exposure (the camera must be set to B).  `relay_arm` keeps the half press closed, which shortens the release lag, until `relay_release` opens every contact.  The relay is looked up when the command fires, so it can be connected after the script is loaded.
+
+```relay_arm, C2, -, 00:00:08.0, "Wake the camera"```
+
+```relay_burst, C2, -, 00:00:05.0, 4.5, "Diamond ring and Baily's beads"```
+
+```relay_burst, C3, -, 00:00:01.0, 2, 0.25, "Eight frames, 0.25 s apart"```
+
+```relay_release, C2, +, 00:00:01.0, "Release the half press"```
 
 - **voice_prompt** - Play a sound file.
 
