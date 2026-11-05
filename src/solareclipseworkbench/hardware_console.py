@@ -28,6 +28,7 @@ A mount is tested through its INDI server (``indiserver`` with the mount's drive
     mount guide N 1000              a one-second guide pulse
     mount calibrate                 how guide pulses move the sun in the live view
     mount centre                    guide the sun to the middle of the frame, once
+    mount follow                    keep it there, until Ctrl-C
 """
 
 import argparse
@@ -83,6 +84,8 @@ Telescope mount (through an INDI server)
                                 with a simulated mount).  About 1.5 minutes; Ctrl-C stops it
   mount centre                  find the sun and guide it to the middle of the frame, once
                                 (needs 'mount calibrate' first)
+  mount follow [seconds]        keep the sun in the middle: a look every 'seconds' (default
+                                30), a correction when it is more than 2 px off, until Ctrl-C
   mount disconnect              close the connection; the mount keeps tracking
 """
 
@@ -438,6 +441,29 @@ class Console:
             self.out(f"Error: {exc}")
             return
         self.out(f"Now at {x:.1f}, {y:.1f}: {x - target[0]:+.1f}, {y - target[1]:+.1f} px from the middle.")
+
+    def _mount_follow(self, args) -> None:
+        from solareclipseworkbench.centring import Centrer
+        if self.calibration is None:
+            self.out("Not calibrated.  Run 'mount calibrate' first.")
+            return
+        interval = float(args[0]) if args else 30.0
+        start = time.monotonic()
+
+        def report(status):
+            self.out(f"  {time.monotonic() - start:6.1f} s  {status.state:<18} {status.message}")
+
+        loop = Centrer(self.mount, self._frame_source([]), self.calibration, interval_s=interval, on_status=report)
+        self.out(f"Following the sun, a look every {interval:.0f} s.  Ctrl-C stops.")
+        loop.start()
+        try:
+            while loop.running:
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            loop.stop()
+        self.out(f"Stopped after {loop.status.corrections} correction(s).")
 
     def _mount_disconnect(self, args) -> None:
         self.mount.close()

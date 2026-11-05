@@ -94,9 +94,21 @@ valid for one frame size (and camera).  About 90 s at a guide rate of 0.5× side
 with a sun of 60 px.  `sun_simulator.SimulatedSunCamera` draws the sun where the
 (simulated) mount points, turned and mirrored as asked, for the tests.
 
-Next: the control loop (between scheduled shots, keeping a running radius), and the
-GUI (calibrate from the `Mount` window with the live view open, keep the
-calibration in the settings).
+Done: the centring loop (`centring.Centrer`).  A look every 30 s (2 s after a
+correction); offsets up to 2 px are left alone; 70 % of the offset is corrected, at
+most 3 s of guiding per axis; the pulses wait for `utils.quiet_for()` (no camera or
+relay command running or due within the pulse + settling + 2 s; scheduling now keeps
+each job's start and busy time in `utils.JOB_BUSY`).  Paused around totality (the
+caller passes the C2 − 15 s … C3 + 15 s window).  Keeps a running radius from fixes on
+a long arc.  Stops itself when three corrections in a row move the sun less than 30 %
+of what the calibration says they should, or when the frame size changes.  Bench
+console: `mount follow`.
+
+Next: the GUI — calibrate and follow from the `Mount` window with the live view
+open (frames from the `Live View` window, no extra USB traffic), keep the
+calibration in the settings, a target marker in the live view, the status on the
+phone; and in simulation mode a simulated camera showing the sun where the
+simulated mount points.
 
 - Sun detection: threshold, edge pixels, circle fit with a radius constraint,
   rejecting the concave lunar edge (a crescent's centroid would drift).

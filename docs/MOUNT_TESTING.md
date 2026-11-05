@@ -114,6 +114,8 @@ sew> mount connect
 sew> mount track
 sew> mount calibrate        a simulated camera, turned 25°, with the sun a few pixels off-centre
 sew> mount centre           guides the sun to the middle: "Now at … +0.0, +0.0 px from the middle"
+sew> mount guide E 15000    push it about 7 px off
+sew> mount follow 5         a look every 5 s: "correcting … px off: guiding …" until "centred"; Ctrl-C stops
 ```
 
 **Real mount and camera** — needs the sun (or see C.0), so outdoors, filter on:
@@ -127,6 +129,9 @@ sew> mount centre           guides the sun to the middle: "Now at … +0.0, +0.0
 | C.4 Centre | Nudge the sun 5-10 px off the middle, then `mount centre` | "Now at … px from the middle" within about 1 px.  Run it again: "Already in the middle" |
 | C.5 Turn the camera | Turn the camera 90° on the telescope, `mount calibrate` again | The direction changes by about 90° |
 | C.6 Backlash | Read the progress lines of N/S | "came back …% of the way": below 70 % is reported as backlash.  Note the value |
+| C.F1 Follow | `mount follow 10`; leave it for 10 minutes | "centred" most of the time, a correction now and then (polar alignment, periodic error).  Note how often it corrects and by how much |
+| C.F2 Push off | During C.F1, nudge the sun 10-20 px off with the nudge buttons (in another program, or before starting) | It comes back, about 1.4 px per correction at 0.5× sidereal (corrections of at most 3 s), and stays within 2 px |
+| C.F3 Wrong calibration | Calibrate, turn the camera 90°, `mount follow 10` | After three corrections: "… did not move the sun the way they should: calibrate again", and it stops |
 | C.7 Problems | Cover the lens: `mount calibrate`.  Park the mount: `mount calibrate` | "the sun is not found …" / "the sun did not move …" (the second after up to 1.5 min of trying) |
 
 ## Stage 3 — Outdoors, on the sun
