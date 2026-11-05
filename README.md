@@ -1,33 +1,35 @@
 # Solar Eclipse Workbench
 
-**Important notice**:  When generating a script where the sun is below 5 degrees, the calculated shutter speeds are too long!  Please use version 2.0.0rc5 or newer for the correct values!
-
-Installing version 2.0.0rc5 can be done very similar to the installation instructions, but replace the install command with 
-
-```bash
-pip install --pre solareclipseworkbench
-```
-
-to update, use
-
-```bash
-pip install --upgrade --pre solareclipseworkbench
-```
-
-
 ![Solar Eclipse Workbench logo](src/solareclipseworkbench/img/logo-small.jpg)
+
+**Important notice**:  Versions older than 2.0.0 calculate shutter speeds that are too long when the sun is below 5 degrees.  If you use an older version, [upgrade](#upgrading-solar-eclipse-workbench) and generate your scripts again.
+
+## What it does
+
+Solar Eclipse Workbench (SEW) takes the pictures of a solar eclipse for you, so you can watch the eclipse instead of the cameras.  It runs on Linux, macOS and Windows (in WSL) and controls Canon, Nikon and Sony cameras over USB with gphoto2.
+
+- **Contact times for your location.**  For the eclipse date and your observing location (typed in, picked on a map, or read from a USB GPS receiver or your phone), SEW calculates the times of first contact (C1), second contact (C2), maximum eclipse, third contact (C3) and fourth contact (C4), with the altitude and azimuth of the Sun.  C2 and C3 are corrected for the profile of the lunar limb, and the Baily's beads windows around them are shown.
+- **A script with what to do when.**  A photography script is a text file with one line per action, timed relative to the contact times, for example *take a bracket of 7 exposures 5 seconds after C2*.  Actions are taking a picture, a burst, a bracket or an HDR sequence, playing a voice prompt, or running a shell command.  The [Configuration Wizard](#running-the-configuration-wizard) writes a script for you from your cameras, lenses and the eclipse circumstances, with exposures that follow the Sun's altitude and the phase of the eclipse.  Scripts from Solar Eclipse Maestro can be used as well.
+- **Running the script.**  SEW schedules every command at its exact time and fires the cameras.  Several cameras can be used at once.  The computer clock can be corrected with GPS time.  A simulation mode runs the script ahead of the eclipse, with real or virtual cameras, so you can rehearse it.
+- **Checking before and after.**  The `Timeline` window shows per camera whether commands follow each other too closely to be taken in time, the `Run report` reads the log of a run back and tells what became of every command, and `Compare sites` puts candidate observing sites side by side (duration of totality, altitude of the Sun, cloud forecast).
+
+More background, eclipse reports and the story behind SEW are on the [Deep Sky Wim blog](https://deepskywim.blogspot.com/search/label/Solar%20Eclipse%20Workbench).
 
 ## Table of contents
 
 [//]: # (- [Solar Eclipse Workbench]&#40;#solar-eclipse-workbench&#41;)
 [//]: # (  - [Table of contents]&#40;#table-of-contents&#41;)
 - [Solar Eclipse Workbench](#solar-eclipse-workbench)
+  - [What it does](#what-it-does)
   - [Table of contents](#table-of-contents)
   - [Installation instructions](#installation-instructions)
+    - [Installation with the installer script on macOS and Linux](#installation-with-the-installer-script-on-macos-and-linux)
     - [Installation on macOS](#installation-on-macos)
     - [Installation on Ubuntu 26.04](#installation-on-ubuntu-2604)
     - [Installation on Ubuntu 24.04](#installation-on-ubuntu-2404)
     - [Installation on Windows 11](#installation-on-windows-11)
+      - [Installation with the installer script](#installation-with-the-installer-script)
+      - [Manual installation](#manual-installation)
     - [Make cameras accessible in wsl](#make-cameras-accessible-in-wsl)
       - [Replace the Windows USB driver with WinUSB (required for gphoto2)](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2)
     - [Sony PC Remote settings discussion](#sony-pc-remote-settings-discussion)
@@ -46,6 +48,9 @@ pip install --upgrade --pre solareclipseworkbench
       - [Datetime format](#datetime-format)
       - [Saving settings](#saving-settings)
       - [Live view](#live-view)
+      - [Script timeline](#script-timeline)
+      - [Run report](#run-report)
+      - [Compare sites](#compare-sites)
   - [Running the Configuration Wizard](#running-the-configuration-wizard)
   - [USB GPS device](#usb-gps-device)
     - [Supported hardware](#supported-hardware)
@@ -80,6 +85,27 @@ pip install --upgrade --pre solareclipseworkbench
     - [GUI icons](#gui-icons)
 
 ## Installation instructions
+
+The quickest way is the installer script: [`install.sh`](#installation-with-the-installer-script-on-macos-and-linux) on macOS and Linux, [`install-sew.cmd`](#installation-with-the-installer-script) on Windows.  The sections after that describe the same steps by hand.
+
+### Installation with the installer script on macOS and Linux
+
+Open a terminal and run, as your normal user (not with `sudo`):
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/AstroWimSara/SolarEclipseWorkbench/main/scripts/install.sh | bash
+```
+
+or download [`install.sh`](https://raw.githubusercontent.com/AstroWimSara/SolarEclipseWorkbench/main/scripts/install.sh) and run `bash install.sh`.  The script:
+
+- installs [uv](https://docs.astral.sh/uv/) and, with it, Solar Eclipse Workbench in its own environment with its own Python.  The packages from PyPI include libgphoto2, GDAL and Qt, so on most computers no Homebrew, GDAL or Python installation is needed.
+- on Linux (Debian, Ubuntu, Raspberry Pi OS), installs the few system packages that are still needed (gstreamer for the voice prompts, the Qt display libraries, and gphoto2 for the camera permissions) and asks for your password for that.  It adds you to the `plugdev` and `dialout` groups (cameras and USB GPS without `sudo`), and masks the `gvfs-gphoto2-volume-monitor` service so the desktop does not claim the cameras.  On another distribution, it says which packages to install yourself.
+- on macOS older than 14 (Apple Silicon) or 15 (Intel), for which there is no prebuilt gphoto2 package, installs gphoto2 with [Homebrew](https://brew.sh/) so it can be built.  This needs Homebrew and the Xcode command line tools.
+- adds `Solar Eclipse Workbench`, `Eclipse Wizard` (the wizard) and `Eclipse Simulation` (the application in [simulation mode](#simulation-mode), to rehearse a script) to the applications menu (Linux) or to `~/Applications` (macOS, also in Launchpad).  From a terminal, start them with `sew`, `sew_wizard` and `sew --sim`.
+
+Log out and back in once if the script added you to a group.  Run the script again to upgrade.  Options: `--yes` (do not ask before starting), `--no-shortcuts`, `--dry-run` (only show what it would do) and `--uninstall` (removes the application and its shortcuts, and keeps your settings and logs).
+
+It needs 64-bit Linux with glibc 2.34 or newer on x86-64 (Ubuntu 22.04, Debian 12 and newer) or 2.39 or newer on ARM64 (Ubuntu 24.04, Debian 13, Raspberry Pi OS Trixie and newer), because Qt is not published for older systems.  On those, use the manual installation below.
 
 ### Installation on macOS
 
@@ -227,7 +253,34 @@ pip install solareclipseworkbench
 
 ### Installation on Windows 11
 
-- GPhoto2 is only available for Linux and macOS.  To run Solar Eclipse Workbench, wsl should be used.
+GPhoto2, which controls the cameras, is only available for Linux and macOS.  On Windows, Solar Eclipse Workbench therefore runs in WSL (Windows Subsystem for Linux), and its windows open on the Windows desktop like any other application.  Windows 10 version 21H2 or later also works.
+
+#### Installation with the installer script
+
+The installer script does all the steps of the [manual installation](#manual-installation) and [makes the cameras accessible in WSL](#make-cameras-accessible-in-wsl):
+
+- Download [`install-sew.cmd`](https://raw.githubusercontent.com/AstroWimSara/SolarEclipseWorkbench/main/scripts/windows/install-sew.cmd) (right-click the link, `Save link as...`), for example to your `Downloads` folder.
+- Double-click `install-sew.cmd`, as your normal user (not `Run as administrator`).  It downloads the actual installer, [`install-sew.ps1`](scripts/windows/install-sew.ps1), and runs it.  Your browser may warn that this kind of file can harm your computer (choose `Keep`), and Windows may show `Windows protected your PC` (click `More info`, then `Run anyway`).
+- If you prefer PowerShell, download `install-sew.ps1` instead and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File $HOME\Downloads\install-sew.ps1
+```
+
+- The script:
+  - installs WSL and Ubuntu 24.04.  If Windows has to restart, the script continues by itself after you log in again.  Ubuntu asks for a new Linux user name and password once; at the Linux prompt that follows, type `exit` to continue.
+  - installs [usbipd-win](https://github.com/dorssel/usbipd-win), which passes USB devices from Windows to WSL,
+  - installs gphoto2, gstreamer (for the voice prompts) and Solar Eclipse Workbench in Ubuntu, using [uv](https://docs.astral.sh/uv/),
+  - adds `Solar Eclipse Workbench`, `Solar Eclipse Workbench Wizard`, `Solar Eclipse Workbench (simulation)`, `Share cameras with Solar Eclipse Workbench` and `Update Solar Eclipse Workbench` to the Start menu, and Solar Eclipse Workbench to the desktop,
+  - asks you to connect your cameras and USB GPS receiver, lists the USB devices, and shares the ones you choose with WSL.
+- Windows asks for permission (UAC) for the steps that need administrator rights.  If an error mentions virtualization, enable it in the BIOS or UEFI settings (Intel VT-x, AMD-V or SVM) and run the script again.
+- A camera or GPS receiver only has to be shared once.  For a new one, use `Share cameras with Solar Eclipse Workbench` from the Start menu.  Once a device is shared, Solar Eclipse Workbench attaches it to WSL by itself every time it looks for cameras (`Camera(s)`, the wizard's `Test Camera...`) or starts the USB GPS, so you no longer type `usbipd attach` after connecting a camera.
+- If a camera then gives `Could not claim the USB device` (error -53), replace its Windows driver once, as described in [Replace the Windows USB driver with WinUSB](#replace-the-windows-usb-driver-with-winusb-required-for-gphoto2).
+- To upgrade, use `Update Solar Eclipse Workbench` from the Start menu, or run the script again.
+- The application keeps a minimised console window open next to it, with the log.
+
+#### Manual installation
+
 - Open a terminal or powershell in Windows
 - Install wsl by executing the command
 
@@ -292,7 +345,7 @@ pip install solareclipseworkbench
 
 ### Make cameras accessible in wsl
 
-The USB devices are not automatically accessible in wsl.  To make the cameras accessible, the following steps should be taken:
+The USB devices are not automatically accessible in wsl.  The [installer script](#installation-with-the-installer-script) does the steps below for you.  To make the cameras accessible manually, the following steps should be taken:
 - Download the usbipd-win package from [GitHub](https://github.com/dorssel/usbipd-win/releases)
 - Install the package
 - Start a PowerShell terminal as administrator
@@ -309,7 +362,7 @@ usbipd list
 usbipd bind --busid <camera_id>
 ```
 
-- Attach the camera to wsl by executing the following command in a PowerShell terminal.  Make sure that a wsl terminal is also open. **This should be done every time the camera is connected to the computer!!**
+- Attach the camera to wsl by executing the following command in a PowerShell terminal.  Make sure that a wsl terminal is also open.  Solar Eclipse Workbench does this by itself for every shared device when it looks for cameras or starts the USB GPS (with usbipd-win 4 or newer), so you only need it to test the camera outside the application, e.g. with `lsusb` or `gphoto2 --auto-detect`.
 
 ```bash
 usbipd attach --wsl --busid <camera_id>
@@ -370,7 +423,13 @@ Camera clock - SEW cannot set the clock of a Sony camera over USB: pressing `Cam
 
 ## Upgrading Solar Eclipse Workbench
 
-To upgrade Solar Eclipse Workbench to the latest version, activate your Python environment and run:
+If you installed with an installer script, run it again: `install.sh` on macOS and Linux, `Update Solar Eclipse Workbench` from the Start menu on Windows.  Or, in a terminal (in WSL on Windows):
+
+```bash
+uv tool upgrade solareclipseworkbench
+```
+
+If you installed by hand in a Python environment, activate it and run:
 
 ```bash
 cd solareclipseworkbench
@@ -423,6 +482,11 @@ The following command line parameters can be used to start up gui.py.
 | -vc              | --virtual-camera      | Use a virtual camera. Only for simulation mode!                               |
 | -lc              | --low-cpu             | Disable auto update for eclipse visualization (essential for single core CPU) |
 | -scm             | --sony-cont-mode      | Specify continuous mode search keyword name for Sony cameras                  |
+|                  | --check SCRIPT        | Print the timeline of a script per camera and exit (see [Script timeline](#script-timeline)) |
+|                  | --plot PNG            | With `--check`: also draw the timeline around totality to an image file      |
+|                  | --report [LOG]        | Print the run report of a log file and exit (see [Run report](#run-report))  |
+|                  | --compare [LOCATION ...] | Print candidate sites side by side for `--date` and exit (see [Compare sites](#compare-sites)) |
+|                  | --forecast            | With `--compare`: also fetch the cloud cover at maximum eclipse from Open-Meteo |
 
 ### UI functionality
 
@@ -440,7 +504,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
 
 - When pressing the "Location" icon, a pop-up window (see screenshot below) will appear, in which you are asked to fill out the longitude, latitude, and altitude of your observing location.  Both longitude and latitude are expressed in degrees, the altitude in meters.
 - If these data were already inserted before somehow (manually, via command line arguments, or by loading a settings file), these values will appear there (you can modify them as you see fit).
-- When pressing the "Plot" button, the specified location (longitude, latitude) will be marked with a red dot on the world map.  Note that this plot is not updated automatically when you change the values.
+- The location is marked with a red dot on the map, which follows the coordinates as you type.  When an eclipse date is set, the map also shows the path of totality (or annularity for an annular eclipse): the band between the northern and southern limits is shaded and the centre line is dashed, and the map zooms to the path and your location (the toolbar above the map zooms and pans; `Home` returns to that view).  The line below the map says how far you are from the centre line and on which side, how far inside (or outside) the path you are, and how long totality lasts at your location compared with the centre line, e.g. `16.0 km north of the centre line, 134.2 km inside the north limit. Totality here: 1m47s (centre line: 1m48s).`  The eclipse can be changed in the drop-down above the map (the same list as in the `Date` window, plus the eclipse that is set if it is already past), to see whether your location is in the path of another eclipse; pressing `OK` then also sets that eclipse as the eclipse date.  For a partial eclipse there is no path to draw.  The coastlines are coarse (1:110 million), so small islands may be missing; use the distances in the text rather than the drawing near a limit (Issue #68).
 - When pressing the "OK" button, the data are accepted and will be filled out in the top section of the UI.
 - **GPS from phone**: Click the **📱 Get GPS from Phone** button to capture your exact coordinates from your smartphone's GPS — no app required. A local HTTPS server starts on your laptop; open the displayed URL in your phone's browser and tap **Get My Location**. Works over WiFi or with your phone acting as a hotspot (useful at remote eclipse sites with no WiFi). See [docs/GPS_PHONE.md](docs/GPS_PHONE.md) for step-by-step instructions.
 - **GPS from USB device**: Click the **🛰 Get GPS from USB Device** button to read coordinates and precise UTC time directly from a USB GPS receiver (such as the VK-162 G-Mouse) connected to your laptop. No gpsd installation is required. See [USB GPS device](#usb-gps-device) below for setup details.
@@ -490,6 +554,14 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - The wizard (`sew_wizard`) centres the beads bursts at C2 and C3 on these windows.  It writes them relative to `C2` and `C3` rather than against the `BEADS_*` moments, so a generated script keeps all its lines on a computer without the limb profile.
 - The **"Baily's beads"** toolbar button (a diamond ring icon) opens a window that shows the beads for the current location and eclipse.  `Profile` plots the true lunar limb (purple) against the Sun's limb (orange) around the contact point, with the sunlight that still gets through filled in yellow; `Preview` draws the whole Moon over the Sun, with the limb relief exaggerated (10x to 100x) so the beads are visible.  With `Free`, the slider moves through the 8 seconds before and after C2 or C3 (the C2 and C3 shown in the reference moments); with `Live`, the window follows the clock (including the simulation offset) and counts down to the beads.  It switches to `Live` when a script is loaded.  The line above the drawing summarises the corrections, the length of both bead windows and the change in the duration of totality, and warns when a correction is larger than 15 s.  The window was written by @mrosseel.
 - The two small lunar orientation kernels it needs (`moon_080317.tf` and `moon_pa_de421_1900-2050.bpc`) are downloaded from NAIF automatically, the same way the ephemeris is.
+
+##### Solar radius
+
+- The `Solar radius` row below the table sets the radius of the Sun used for all contact times.  Solar Eclipse Workbench computes its own Besselian elements, so this radius sets the size of the Moon's shadow and with it the duration of totality.  It is the largest systematic in the contact times, larger than the lunar limb correction: a larger Sun shortens totality.  For the 2026 eclipse in Spain (41.7639°, −2.9294°, 1180 m), 959.63" gives 0.9 s more totality than 959.95", with C2 0.4 s earlier and C3 0.5 s later; the middle of totality moves by less than 0.1 s.  Close to the edge of the path the difference grows much larger (Issue #197).
+- **959.95" (default), Quaglia et al. 2021.**  Quaglia, Irwin, Emmanouilidis and Pessi ([arXiv:2107.09416](https://arxiv.org/abs/2107.09416)) measured 959.95" ± 0.05" from flash-spectrum video at the southern limit of the 2017 eclipse.  We use it because it is measured from eclipse contacts: the radius at which the photosphere is completely hidden, which is exactly what a contact time is.  Other techniques measure a different edge of the Sun.  Other eclipse measurements agree: IOTA's Baily's bead timings give 959.99" ± 0.06" and Jubier suggests 959.98".  The standard value below lies well outside this group of modern measurements.
+- **959.63", Auwers 1891.**  The conventional value of eclipse prediction, used by Espenak's canon, Solar Eclipse Maestro (by default) and Eclipse Chaser Log.  It is a convention rather than a current measurement.  Choose it to compare the contact times directly with published predictions: any remaining difference then has another cause.
+- **Custom value**: any radius between 955" and 965" can be typed in.
+- The radius is the apparent radius at a distance of 1 au.  The choice is saved in `~/.SolarEclipseWorkbench.ini` and also used by the wizard, `sew --check` and `sew --compare`, and the log file records which radius a run used.  Like the limb correction, it is locked while a script has pending jobs.
 
 #### Camera overview
 
@@ -561,6 +633,31 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - If no camera is connected when the Live View button is clicked, a warning dialog is shown.
 - **Preview size** (optional): the preview uses the live-view size set on the camera.  Canon EOS and recent Nikon bodies let it be changed (Canon `Large`/`Medium`/`Small`, Nikon `QVGA`/`VGA`/`XGA`), and the `Preview size` list in the window then selects a larger one for more detail, e.g. to check focus with the zoom.  The camera's own setting is restored when the window closes.  The size of the last frame is shown next to its time.  Sony bodies have a fixed preview size, and the list is greyed out.  A larger frame takes longer to transfer, and a scheduled shot that fires during a transfer waits for it, so during the partial phases such a shot can be a little later (typically some tens of milliseconds); the shots around totality are not affected, as live view is paused from 15 s before C2 until 15 s after C3.
 
+#### Script timeline
+
+- The **"Timeline"** icon draws a script per camera against the reference moments of the location and date that are set: every camera command is a bar from its start to the end of the time it is estimated to keep the camera busy, with C1–C4, MAX and the Baily's beads windows drawn across.  Commands that start late (because the camera is still busy) are orange, with a line back to their planned start; commands that will probably be dropped are a red cross.  Hovering over a bar shows the command, its time relative to the nearest contact, and what it is waiting for.
+- The window opens on the script loaded last, or asks for one; `Script...` draws another one, before anything is loaded or a camera is connected.  `Totality` shows from 90 s before C2 to 90 s after C3, `Whole script` everything; the toolbar under the buttons zooms and pans.  `Refresh` reads the script again after editing it, and `Save as text...` writes the timeline of every camera to a text file.
+- It uses the same estimates as the check that runs when a script is loaded (see [Commands that are too close together](#commands-that-are-too-close-together)), so a command drawn as dropped is one that check warns about, and a script fitted to a tested camera is drawn with the camera's measured timing.  Times are the real UTC times, without a simulation offset.
+- From the command line: `sew --check myscript.txt -d 2027-08-02 -lon 32.65 -lat 25.69 -alt 80` prints the same per camera, with the commands that start late or are dropped first, and exits with code 1 when a command will be dropped or a line names a reference moment that does not exist.  Add `--plot timeline.png` to also draw it.
+
+#### Run report
+
+- The **"Run report"** icon reads a log file back and shows what became of every command of a run (a run starts each time a script is loaded): `shot`, `late` (the shutter was released more than 1 s after the planned time), `dropped: camera busy`, `missed by the scheduler`, `failed`, `no shutter release`, `not reached` (the log ends before it) or, for voice prompts and shell commands, `done`.
+- The summary above the table gives, per camera, the number of commands per outcome, the median and largest delay of the shutter release per command type, the commands within 60 s of C2 and C3, and the commands that kept the camera busy longer than estimated, which is where the next command on that camera may have had to wait.  The warnings and errors logged during the run follow.
+- The newest log in which a script was loaded opens first; the other logs are in the list, and `Open...` reads one from elsewhere.  `Refresh` reads the log again during a run, and `Save as text...` writes the full report.
+- From the command line: `sew --report` prints the report of the last run in the newest log, `sew --report <log file>` of a given log.
+- Use it after rehearsing a script in simulation mode with the cameras you will use (see [Timing shots around C2 and C3](#timing-shots-around-c2-and-c3)).  With the virtual camera every shot is reported as `shot` straight away; the real delays and busy times only show with a real camera.
+- Logs written by version 2.0.0 or older have no planned commands: the report then only lists what those logs have.
+
+#### Compare sites
+
+- The **"Compare sites"** icon puts a shortlist of candidate sites side by side for the eclipse date that is set: the eclipse type and magnitude, the duration of totality (corrected for the lunar limb when the limb profile is installed, with the difference to the longest one on the list), the local time of C2, the altitude and azimuth of the Sun at maximum eclipse, and the Baily's beads windows around C2 and C3.  The longest totality is in bold, and a Sun lower than 10° is marked: check the horizon in that direction.
+- Add sites with `Add current location` (the location of the main window), a saved location (from the `Location` window or the wizard) with `Add`, or `New row` to type in a name and coordinates.  Names and coordinates can be edited in the table.  The list is kept with the saved locations (in `~/.sew_wizard_config.json`), so it is still there the night before the eclipse.  `Compare` computes every site, which takes about half a second per site.
+- `Cloud forecast` fetches the cloud cover at maximum eclipse (total, and low, mid and high clouds) from [Open-Meteo](https://open-meteo.com), interpolated between the hourly values; hovering over it shows the hourly cover from C1 to C4.  Forecasts reach about 15 days ahead, so until then the column says from which date one is available.  For an eclipse in the past it shows what the sky really was (the ERA5 reanalysis), e.g. to check a site afterwards.  This needs a network connection; the rest of the window does not.
+- `Compare beads` shows the Baily's beads of the sites with totality next to each other, drawn like in the [`Baily's beads`](#lunar-limb-correction-and-bailys-beads) window (as a profile or as a picture, with the same exaggeration).  One slider moves every site to the same number of seconds from its own C2 or C3, so the views show how many beads each site gets and for how long at the same stage of the contact; under each view are its time in UTC and its bead window.  Near the limits of the path a bead window can last over ten seconds, and the slider then reaches further than ±8 s.  This needs the lunar limb profile.
+- `Use this site` (or a double click on a result) makes the selected site the observing location and recomputes the reference moments, and `Save as text...` writes the comparison, longest totality first.
+- From the command line: `sew --compare -d 2027-08-02` prints the shortlist of the window, `sew --compare "La Horra" "Tarifa" -d 2027-08-02 --forecast` the named saved locations with their cloud cover; `--longitude`, `--latitude` and `--altitude` add one more site.
+
 > **Note**: Live view via gphoto2 is tested on the Nikon Z8.  Support on other bodies depends on whether their gphoto2 driver implements `capture_preview`.  Canon EOS bodies and most modern Nikon and Sony Alpha bodies support it; some entry-level or older bodies do not.
 
 ## Running the Configuration Wizard
@@ -622,14 +719,14 @@ sudo usermod -aG dialout $USER
 Log out and back in (or reboot) for the change to take effect.  You only need to do this
 once.
 
-**WSL users**: the USB device must also be attached to WSL using `usbipd`.  Open a
-**PowerShell** terminal as administrator:
+**WSL users**: the USB device must also be shared with WSL using `usbipd`.  The [installer script](#installation-with-the-installer-script) adds you to the `dialout` group and shares the receiver if you choose it in the list; for a receiver you add later, use `Share cameras with Solar Eclipse Workbench` from the Start menu.  To share it manually, open a **PowerShell** terminal as administrator:
 
 ```powershell
-usbipd list                  # find your GPS device, note its BUSID (e.g. 3:4)
-usbipd bind --busid 3:4      # one-time: mark the device as shareable
-usbipd attach --busid 3:4 --wsl   # attach before each session
+usbipd list                  # find your GPS device, note its BUSID (e.g. 3-4)
+usbipd bind --busid 3-4      # one-time: mark the device as shareable
 ```
+
+Solar Eclipse Workbench attaches a shared receiver to WSL by itself when the USB GPS is started.  Outside the application, attach it with `usbipd attach --busid 3-4 --wsl`.
 
 ### macOS
 
@@ -877,7 +974,7 @@ endfor
 
 - Astropy/IERS is used to compute Delta T (TT − UT1) for eclipse reference times.  This is the most up to date information available, but it requires an internet connection to download the latest IERS tables.  If no internet is available, a CSV-based fallback is used.
   - For the 2026 eclipse, the fallback value for Delta T is 69.1085.
-- The used solar radius is equal to 959.95 ±0.05 arcseconds. This value is slightly larger than the canonical solar radius (i.e. 959.63 arcseconds).  This is the latest value from the Besselian Elements team (L. Quaglia et al.).
+- The solar radius is 959.95" ± 0.05" by default (Quaglia et al. 2021), measured from eclipse contacts.  This is slightly larger than the conventional 959.63" (Auwers 1891) of published predictions, which can be selected instead, as can a value of your own.  See [Solar radius](#solar-radius) for why this value is the default.
 
 ## Shortcomings
 
@@ -895,7 +992,7 @@ Scripts from Solar Eclipse Maestro are converted automatically to scripts that c
 
 If something goes wrong, an error message will be shown in the terminal and logged in the log file.
 
-Every start of `sew` (and of `sew_wizard`) writes a new log file in `~/.SolarEclipseWorkbench/logs/`, named after the moment it started, e.g. `sew-20260812-171503Z.log`.  Log files are never overwritten or deleted by the application, so the log of an eclipse is still available afterwards, however often the application was restarted.  The log contains every command that was scheduled and executed (or skipped), the contact times, the GPS clock offset and the connected cameras.  Timestamps are in UTC with millisecond resolution, like the contact times, so they can be compared directly with the times of the pictures.  Every camera command also logs when it really released the shutter, and how long after its scheduled time that was, e.g. `take_bracket released the shutter at 18:29:30.912 UTC: 1.228 s after its scheduled time`: settings are sent to the camera first, which takes a few tenths of a second when nothing changes, but several seconds on a Sony that has to change drive mode.
+Every start of `sew` (and of `sew_wizard`) writes a new log file in `~/.SolarEclipseWorkbench/logs/`, named after the moment it started, e.g. `sew-20260812-171503Z.log`.  Log files are never overwritten or deleted by the application, so the log of an eclipse is still available afterwards, however often the application was restarted.  The log contains every command that was scheduled and executed (or skipped), the contact times, the GPS clock offset and the connected cameras.  Timestamps are ISO 8601 in UTC with millisecond resolution (e.g. `2026-08-12T17:46:38.123Z`), in the log file and on the console, like the contact times, so they can be compared directly with the times of the pictures.  Every camera command also logs when it really released the shutter, and how long after its scheduled time that was, e.g. `take_bracket released the shutter at 18:29:30.912 UTC: 1.228 s after its scheduled time`: settings are sent to the camera first, which takes a few tenths of a second when nothing changes, but several seconds on a Sony that has to change drive mode.
 
 ## Commands that are too close together
 
@@ -910,7 +1007,7 @@ The seconds around second and third contact (Baily's beads, the diamond ring, th
 - **C2 and C3 do not look the same.**  The mountains and valleys at the edge of the Moon decide where and for how long the Baily's beads show, and that is different at C2 and C3.  Use the limb-corrected contact times and the `BEADS_C2` / `BEADS_C3` windows (see [Lunar limb correction and Baily's beads](#lunar-limb-correction-and-bailys-beads)), the `Baily's beads` window, or the simulations on the Eclipse Chaser Log map, rather than mirroring your C2 lines at C3.
 - **Prepare the camera before a sequence.**  On a Sony, the first command after a change between single pictures, a burst and a bracketing mode takes about 4 seconds longer.  Put a `prepare_camera` a few seconds before the first shot of the C2 and C3 sequences (the wizard does this for you).
 - **First and fourth contact are not visible when they happen.**  The Moon's bite shows once it is a couple of pixels deep: with a 75 mm lens that took about 45 seconds after C1 in 2026, with a telescope a few seconds.  The wizard spaces its C1 and C4 shots accordingly from the focal length and the pixel size of your camera (`Test Camera...` fills in the pixel size for common Canon, Nikon and Sony bodies).
-- **Rehearse, and read the log.**  Run your script in simulation mode with the cameras you will use.  The log has, for every command, `… released the shutter at … UTC: … s after its scheduled time`, so you can see how late each sequence really starts and adjust the offsets.
+- **Rehearse, and read the log.**  Run your script in simulation mode with the cameras you will use.  The log has, for every command, `… released the shutter at … UTC: … s after its scheduled time`, so you can see how late each sequence really starts and adjust the offsets.  The [Run report](#run-report) lines this up per command, and the [Script timeline](#script-timeline) shows which commands are too close together before you run.
 
 ## Handling camera(s) disconnect(s)
 

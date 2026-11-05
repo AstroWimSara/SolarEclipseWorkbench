@@ -25,7 +25,9 @@ from PyQt6.QtWidgets import (
     QFileDialog, QPushButton, QMessageBox, QProgressDialog, QDialog, QPlainTextEdit, QProgressBar, QWidget, QScrollArea
 )
 
-from solareclipseworkbench.location_ui import ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget
+from solareclipseworkbench import solar_radius
+from solareclipseworkbench.location_ui import (ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget,
+                                               SiteMapWidget)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme, _is_dark_mode_preferred, _build_dark_palette, dark_lineedit_style, apply_dark_to_lineedit
 
 # Import eclipse-specific modules
@@ -279,6 +281,11 @@ class EclipseConfigPage(QWizardPage):
 
         self.location_widget = LocationWidget(self.config_manager)
         location_layout.addWidget(self.location_widget)
+
+        # Street map of the site: check where the coordinates really are, and double-click to correct them.
+        self.site_map = SiteMapWidget(self.location_widget)
+        self.site_map.setMinimumHeight(340)
+        location_layout.addWidget(self.site_map)
 
         location_group.setLayout(location_layout)
         layout.addWidget(location_group)
@@ -853,8 +860,8 @@ class EquipmentPage(QWizardPage):
         from solareclipseworkbench.camera_check import WARNING, check_camera
 
         try:
-            from solareclipseworkbench.camera import get_cameras, get_camera_by_port
-            detected = get_cameras()
+            from solareclipseworkbench.camera import detect_cameras, get_camera_by_port
+            detected = detect_cameras()
         except Exception as exc:
             QMessageBox.critical(self, "Detection Failed", f"Could not detect cameras via gphoto2:\n{exc}")
             return
@@ -969,8 +976,8 @@ class EquipmentPage(QWizardPage):
         QApplication.processEvents()
 
         try:
-            from solareclipseworkbench.camera import get_cameras, get_camera_by_port, get_serial_number
-            detected = get_cameras()
+            from solareclipseworkbench.camera import detect_cameras, get_camera_by_port, get_serial_number
+            detected = detect_cameras()
         except Exception as exc:
             self.detect_camera_btn.setEnabled(True)
             self.detect_camera_btn.setText("Detect Connected Camera")
@@ -3212,6 +3219,9 @@ class SEWConfigWizard(QWizard):
 def main():
     """Main entry point for the wizard application."""
     setup_logging("sew_wizard")
+    # The same solar radius as chosen in sew, for the same contact times
+    solar_radius.load_saved()
+    logging.info("Solar radius: %s", solar_radius.describe())
     app = QApplication(sys.argv)
     app.setApplicationName("Solar Eclipse Workbench Configuration Wizard")
     apply_system_color_scheme(app)

@@ -1,11 +1,12 @@
 """Tests for the per-run log files."""
 
 import logging
+import re
 import threading
 
 import pytest
 
-from solareclipseworkbench import camera, logging_setup
+from solareclipseworkbench import camera, logging_setup, run_report
 
 
 @pytest.fixture
@@ -31,6 +32,20 @@ def test_log_goes_to_a_new_file_in_the_log_directory(tmp_path, fresh_logging):
     text = path.read_text(encoding="utf-8")
     assert "trigger_capture fired" in text        # DEBUG reaches the file
     assert "Z DEBUG" in text                       # UTC timestamps
+
+
+def test_timestamps_are_iso_8601_utc_and_read_back_by_the_run_report(tmp_path, fresh_logging, capsys):
+    path = logging_setup.setup_logging("sew", log_dir=tmp_path)
+    logging.getLogger("solareclipseworkbench.camera").info("trigger_capture fired")
+
+    file_line = next(line for line in path.read_text(encoding="utf-8").splitlines()
+                     if line.endswith("trigger_capture fired"))
+    assert re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z INFO ", file_line)
+    assert run_report._LINE.match(file_line)
+
+    console_line = next(line for line in capsys.readouterr().out.splitlines()
+                        if line.endswith("trigger_capture fired"))
+    assert re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z INFO ", console_line)
 
 
 def test_existing_log_is_never_overwritten(tmp_path, fresh_logging, monkeypatch):

@@ -16,7 +16,7 @@ import os
 from gphoto2 import Camera
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional
-from solareclipseworkbench import configuration
+from solareclipseworkbench import configuration, hardware_problems, wsl_usb
 from solareclipseworkbench.logging_setup import camera_log
 from solareclipseworkbench.bracketing import (
     HDR_ONE_WAY, HDR_ROUND_TRIP, bracket_deviation, bracket_exposures, format_ev, hdr_native_bracket, hdr_offsets,
@@ -319,7 +319,9 @@ class VirtualCamera(BaseCamera):
         if not self._connected:
             raise CameraError("VirtualCamera is not connected")
 
-        return
+        # Logged like the release of a real camera, so a simulation has a run report
+        with _shutter_release(self):
+            pass
 
     # GPhoto-style stubs so the VirtualCamera can be used in places where
     # code expects gphoto Camera-like methods.
@@ -948,13 +950,15 @@ def _serialised_on_camera(func):
                 args = (settings,) + args[1:]
         started = datetime.now(timezone.utc)
         acquired = camera._usb_lock.acquire(timeout=_MAX_LOCK_WAIT_S)
+        scheduled = f' (scheduled {_utc_hms(scheduled_at)} UTC)' if scheduled_at is not None else ''
         if not acquired:
             camera_log(camera).warning(
-                '%s dropped — camera was still busy after %.1fs '
+                '%s%s dropped — camera was still busy after %.1fs '
                 '(shot is too late; timing accuracy preserved)',
-                func.__name__, _MAX_LOCK_WAIT_S,
+                func.__name__, scheduled, _MAX_LOCK_WAIT_S,
             )
             return
+        got_camera = datetime.now(timezone.utc)
         _command_timing.state = {'command': func.__name__, 'scheduled_at': scheduled_at,
                                  'started': started, 'released': False}
         try:
@@ -963,7 +967,18 @@ def _serialised_on_camera(func):
             _command_timing.state = None
             camera._last_usb_activity = time.monotonic()
             camera._usb_lock.release()
+            if scheduled_at is not None:
+                # For the run report: how long the command really kept the camera busy
+                camera_log(camera).debug('%s%s finished: the camera was busy %.3f s', func.__name__, scheduled,
+                                         (datetime.now(timezone.utc) - got_camera).total_seconds())
     return wrapper
+
+
+def _utc_hms(moment: datetime) -> str:
+    """Time of day in UTC with milliseconds, e.g. 18:29:30.912."""
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc)
+    return moment.strftime('%H:%M:%S.%f')[:-3]
 
 
 def _wait_for_capture_complete(target, context, timeout_ms: int = 3000, max_events: int = 30) -> None:
@@ -2849,6 +2864,29 @@ def get_cameras() -> list:
     return detected
 
 
+def detect_cameras() -> list:
+    """Like :func:`get_cameras`, but first attaches shared USB devices to WSL.
+
+    Use this where the user asks for camera detection (``Camera(s)``, the wizard's
+    camera test), not on the paths a running script takes: attaching runs a
+    Windows process and waits for the device to settle.  Outside WSL it is
+    identical to :func:`get_cameras`.
+    """
+    try:
+        wsl_usb.attach_shared_devices()
+    except Exception:  # detection must carry on with what is already attached
+        logging.debug('Attaching USB devices to WSL failed', exc_info=True)
+    detected = get_cameras()
+    if not detected:
+        try:
+            hint = wsl_usb.missing_device_hint()
+        except Exception:
+            hint = None
+        if hint:
+            hardware_problems.report('WSL USB', 'No camera found', detail=hint, severity='warning')
+    return detected
+
+
 def __get_address(camera_name: str) -> str:
     """ Gets the address of the camera if the name is given
 
@@ -3540,7 +3578,7 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
         vc.connect()
         return {vc.name: vc}
 
-    detected = get_cameras()  # [(model_name, port), ...]
+    detected = detect_cameras()  # [(model_name, port), ...]
     try:
         logging.info('Found cameras: %s', detected)
     except Exception:
