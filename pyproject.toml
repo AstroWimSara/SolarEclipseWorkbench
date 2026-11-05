@@ -52,6 +52,12 @@ numato = "solareclipseworkbench.relay_trigger:NumatoSerialBackend"
 hid = "solareclipseworkbench.relay_trigger:HidRelayBackend"
 simulated = "solareclipseworkbench.relay_trigger:SimulatedBackend"
 
+# Mount drivers.  The built-in drivers are found by a scan of the mounts package;
+# this group lets a driver ship in its own package.
+[project.entry-points."solareclipseworkbench.mount_drivers"]
+onstepx = "solareclipseworkbench.mounts.onstepx:OnStepXMount"
+simulator = "solareclipseworkbench.mounts.simulator:SimulatorMount"
+
 [project.optional-dependencies]
 # HID relay boards (dcttech "USBRelay" boards, 16c0:05df).  'hidapi' ships the
 # shared library in its wheel.  The similarly named 'hid' package gives the same
