@@ -76,10 +76,14 @@ class SimulatedIndiServer:
         - refuse: Property names whose changes are answered with Alert
         - silent: Property names whose changes get no answer at all
         - device: Name of the mount
+        - guide_rate: Speed of the guide pulses, as a multiple of the sidereal rate
+                      (tests use a fast one, so a calibration takes seconds, not minutes)
     """
 
-    def __init__(self, port: int = 0, solar: bool = True, refuse=(), silent=(), device: str = DEVICE):
+    def __init__(self, port: int = 0, solar: bool = True, refuse=(), silent=(), device: str = DEVICE,
+                 guide_rate: float = GUIDE_RATE):
         self.device = device
+        self.guide_rate = guide_rate
         self.refuse, self.silent = set(refuse), set(silent)
         #: Every change received, as (property name, {element: value})
         self.received: list = []
@@ -183,7 +187,7 @@ class SimulatedIndiServer:
 
     def _pulse(self, name: str, changes: dict) -> None:
         """Apply a guide pulse at once; called with the lock held."""
-        step_deg = GUIDE_RATE * 15.0 / 3600.0 / 1000.0     # per millisecond
+        step_deg = self.guide_rate * 15.0 / 3600.0 / 1000.0     # per millisecond
         for element, ms in changes.items():
             sign = {"TIMED_GUIDE_N": 1, "TIMED_GUIDE_S": -1, "TIMED_GUIDE_E": 1, "TIMED_GUIDE_W": -1}[element]
             if name.endswith("_NS"):

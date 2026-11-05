@@ -104,6 +104,14 @@ MIN_EDGE_LIMIT = 3.0
 #: A bright region smaller than this (pixels of the reduced frame) is looked for again in the full frame
 SMALL_REGION = 400
 
+#: The brightest pixel must stand this many times the noise of the sky above the sky (plus
+#: MIN_PEAK_ABOVE_SKY): a frame of only noise has no sun, and splitting it would be slow
+PEAK_SIGMAS = 6.0
+MIN_PEAK_ABOVE_SKY = 10.0
+
+#: Most edge pixels the candidate circles are scored on (a random sample of them)
+MAX_SCORED_EDGE = 3000
+
 #: Random triples tried
 RANSAC_ITERATIONS = 400
 
@@ -442,6 +450,11 @@ def find_sun(grey: np.ndarray, radius_hint: Optional[float] = None, seed: int = 
     grey = sun_channel(grey)
     if grey.ndim != 2 or min(grey.shape) < 16:
         return _no_sun("not an image")
+    sample = grey[::4, ::4].astype(np.float32)
+    sky = float(np.median(sample))
+    noise = 1.4826 * float(np.median(np.abs(sample - sky)))
+    if float(grey.max()) - sky < PEAK_SIGMAS * noise + MIN_PEAK_ABOVE_SKY:
+        return _no_sun("nothing stands out above the noise of the sky")
     image, factor = _reduce(grey)
     threshold = otsu_threshold(image)
     if threshold is None:
@@ -485,7 +498,10 @@ def find_sun(grey: np.ndarray, radius_hint: Optional[float] = None, seed: int = 
         return _no_sun("no circle of a possible size")
     # Count the edge pixels on the limb of each candidate circle
     falls = _fall_directions(image, points)
-    scores = _on_limb(points[None, :, :], falls[None, :, :], ux[candidates, None], uy[candidates, None],
+    scored = np.arange(len(points))
+    if len(points) > MAX_SCORED_EDGE:
+        scored = np.random.default_rng(seed).choice(len(points), MAX_SCORED_EDGE, replace=False)
+    scores = _on_limb(points[None, scored, :], falls[None, scored, :], ux[candidates, None], uy[candidates, None],
                       radius[candidates, None], INLIER_TOLERANCE).sum(axis=1)
     for index in np.argsort(-scores):
         if scores[index] <= best_score or scores[index] < 12:

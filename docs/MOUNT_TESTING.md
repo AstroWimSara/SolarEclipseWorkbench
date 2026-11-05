@@ -101,6 +101,34 @@ driver of the mount, e.g. `indiserver -vvv indi_eqmod_telescope`.
 | 2.R1 | Server on e.g. a Raspberry Pi; in `sew` server `<host>` or `<host>:7624` | Same as 2.1–2.9 |
 | 2.R2 | Pull the network cable / Wi-Fi off while connected | Connection lost shown; mount keeps tracking |
 
+## Calibration (step 3) — before the GUI has it
+
+The calibration measures how guide pulses move the sun in the live view.  Until the
+`Mount` window has a button for it, test it in the bench console `sew_hardware`.
+
+**Simulated, anywhere** (about 1.5 minutes):
+
+```
+sew_hardware --simulate
+sew> mount connect
+sew> mount track
+sew> mount calibrate        a simulated camera, turned 25°, with the sun a few pixels off-centre
+sew> mount centre           guides the sun to the middle: "Now at … +0.0, +0.0 px from the middle"
+```
+
+**Real mount and camera** — needs the sun (or see C.0), so outdoors, filter on:
+
+| Check | How | Expected |
+|-------|-----|----------|
+| C.0 Indoors instead | Point at a round, evenly lit target far away (a frosted lamp globe, a white disk on a dark wall at 50+ m) so it is a disk of 50-100 px in live view | The calibration also works on that; the guide pulses move it |
+| C.1 Setup | INDI server with the mount's driver; camera on USB, in a mode with live view; the sun roughly centred with the nudge buttons | — |
+| C.2 Calibrate | `sew_hardware`, `mount connect localhost`, `mount track`, `mount calibrate` (or `mount calibrate EOS` to pick the camera) | Progress lines; done after ~1.5 min with the direction, mirrored or not, and the px per second of guiding.  Note them |
+| C.3 Plausible | Compare with the setup | Mirrored only with a diagonal or mirror in the path.  The px/s about guide rate × 15″/s ÷ image scale (″/px) |
+| C.4 Centre | Nudge the sun 5-10 px off the middle, then `mount centre` | "Now at … px from the middle" within about 1 px.  Run it again: "Already in the middle" |
+| C.5 Turn the camera | Turn the camera 90° on the telescope, `mount calibrate` again | The direction changes by about 90° |
+| C.6 Backlash | Read the progress lines of N/S | "came back …% of the way": below 70 % is reported as backlash.  Note the value |
+| C.7 Problems | Cover the lens: `mount calibrate`.  Park the mount: `mount calibrate` | "the sun is not found …" / "the sun did not move …" (the second after up to 1.5 min of trying) |
+
 ## Stage 3 — Outdoors, on the sun
 
 **Solar filter on the telescope and the finder before pointing anywhere near the sun.**

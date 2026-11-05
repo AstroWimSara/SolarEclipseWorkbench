@@ -84,8 +84,19 @@ them with their expected answers in tests/data/sun_frames):
   C2 - 15 s to C3 + 15 s anyway); no wrong fix seen.  Frame-to-frame scatter on a
   tracked mount: median 0.16 px, 90 % under 0.3 px (partial phases before C2).
 
-Next: calibration (guide pulses → pixel shift), the control loop (between scheduled
-shots, keeping a running radius), and the GUI.
+Done: calibration (`centring.Calibrator`, `centring.Calibration`).  Guides E then W,
+N then S, each until the sun moved ~8 px (pulses of at most 3 s, the length adapted
+to the speed seen), and measures the sun in two frames after each move.  Gives a
+2×2 matrix (dx, dy) per (N ms, E ms), so rotation and mirroring of the frame are
+handled; `pulses_for(dx, dy)` inverts it.  Refuses when the sun is not found, does
+not move, or the axes are less than 60° apart; reports Dec backlash.  Saved as JSON,
+valid for one frame size (and camera).  About 90 s at a guide rate of 0.5× sidereal
+with a sun of 60 px.  `sun_simulator.SimulatedSunCamera` draws the sun where the
+(simulated) mount points, turned and mirrored as asked, for the tests.
+
+Next: the control loop (between scheduled shots, keeping a running radius), and the
+GUI (calibrate from the `Mount` window with the live view open, keep the
+calibration in the settings).
 
 - Sun detection: threshold, edge pixels, circle fit with a radius constraint,
   rejecting the concave lunar edge (a crescent's centroid would drift).

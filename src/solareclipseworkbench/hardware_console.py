@@ -26,6 +26,8 @@ A mount is tested through its INDI server (``indiserver`` with the mount's drive
     mount site 40.4 -3.7 650        send a location and the time
     mount track                     track at the solar rate
     mount guide N 1000              a one-second guide pulse
+    mount calibrate                 how guide pulses move the sun in the live view
+    mount centre                    guide the sun to the middle of the frame, once
 """
 
 import argparse
@@ -76,6 +78,11 @@ Telescope mount (through an INDI server)
   mount park / unpark           park (moves the mount!) or unpark
   mount abort                   stop every motion
   mount guide <N|S|E|W> <ms>    one guide pulse
+  mount calibrate [camera]      measure how guide pulses move the sun in the live view of a
+                                camera (the first one when not named; the simulated camera
+                                with a simulated mount).  About 1.5 minutes; Ctrl-C stops it
+  mount centre                  find the sun and guide it to the middle of the frame, once
+                                (needs 'mount calibrate' first)
   mount disconnect              close the connection; the mount keeps tracking
 """
 
@@ -85,6 +92,9 @@ class Console:
         self.simulate = simulate
         self.trigger: Optional[relay_mod.RelayTrigger] = None
         self.mount: Optional[Mount] = None
+        self.calibration = None
+        self._frames = None             # what the calibration and the centring look at
+        self._live_thread = None        # the live view of a real camera feeding it
 
     # ------------------------------------------------------------------ helpers
 
@@ -298,6 +308,7 @@ class Console:
         if self.mount is not None:
             self.mount.close()
             self.mount = None
+        self._frames = None             # a simulated camera belongs to its simulated mount
         address = args[0] if args else (SIMULATED_HOST if self.simulate else "localhost")
         device = args[1] if len(args) > 1 else None
         port = args[2] if len(args) > 2 else None
@@ -347,6 +358,86 @@ class Console:
             return
         self.mount.guide(args[0], float(args[1]))
         self.out(f"Guide pulse {args[0].upper()} {float(args[1]):.0f} ms sent.")
+
+    def _frame_source(self, args):
+        """The live-view frames to calibrate on: a simulated camera for a simulated mount, else a real camera."""
+        if self._frames is not None:
+            return self._frames
+        if self.mount._simulator is not None:
+            from solareclipseworkbench.sun_simulator import SimulatedSunCamera
+            self.out("Simulated mount: using a simulated camera (turned 25°, the sun a few pixels off-centre).")
+            self._frames = SimulatedSunCamera(self.mount, rotation_deg=25, offset=(6, -4))
+            return self._frames
+        from solareclipseworkbench.camera import get_camera_dict
+        from solareclipseworkbench.live_frames import camera_frames
+        cameras = get_camera_dict()
+        if not cameras:
+            raise MountError("no camera found: connect the camera with the sun in its live view")
+        wanted = " ".join(args).lower()
+        names = [name for name in cameras if wanted in name.lower()] if wanted else list(cameras)
+        if not names:
+            raise MountError(f"no camera called {' '.join(args)!r}; cameras: {', '.join(cameras)}")
+        self.out(f"Live view of {names[0]}.")
+        self._frames, self._live_thread = camera_frames(cameras[names[0]])
+        self._camera_name = names[0]
+        return self._frames
+
+    def _mount_calibrate(self, args) -> None:
+        from solareclipseworkbench.centring import CalibrationError, Calibrator
+        frames = self._frame_source(args)
+        start = time.monotonic()
+        calibrator = Calibrator(self.mount, frames, camera=getattr(self, "_camera_name", ""),
+                                progress=lambda line: self.out(f"  {time.monotonic() - start:5.1f} s  {line}"))
+        try:
+            self.calibration = calibrator.run()
+        except CalibrationError as exc:
+            self.out(f"Calibration failed: {exc}")
+            return
+        except KeyboardInterrupt:
+            calibrator.stop()
+            self.out("Calibration stopped.")
+            return
+        self.out("Calibrated: " + self.calibration.describe())
+        self.out("Try 'mount centre' to guide the sun to the middle of the frame.")
+
+    def _mount_centre(self, args) -> None:
+        from solareclipseworkbench.centring import CalibrationError, measure
+        if self.calibration is None:
+            self.out("Not calibrated.  Run 'mount calibrate' first.")
+            return
+        frames = self._frame_source(args)
+        try:
+            x, y, fix = measure(frames, time.monotonic(), radius_hint=self.calibration.radius)
+        except CalibrationError as exc:
+            self.out(f"Error: {exc}")
+            return
+        width, height = self.calibration.frame_size
+        target = ((width - 1) / 2, (height - 1) / 2)
+        self.out(f"The sun is at {x:.1f}, {y:.1f}: {x - target[0]:+.1f}, {y - target[1]:+.1f} px from the middle.")
+        pulses = {d: ms for d, ms in self.calibration.pulses_for(target[0] - x, target[1] - y).items() if ms >= 100}
+        if not pulses:
+            self.out("Already in the middle (less than 0.1 s of guiding off).")
+            return
+        if max(pulses.values()) > 20_000:
+            self.out(f"That needs {max(pulses.values()) / 1000:.0f} s of guiding: guide pulses are for small "
+                     f"corrections.  Move the sun closer to the middle with the nudge buttons (or 'mount guide') "
+                     f"first.")
+            return
+        for direction, ms in pulses.items():
+            self.out(f"  guiding {direction} for {ms / 1000:.1f} s")
+            remaining = ms
+            while remaining > 0.5:          # pulses of at most 3 s, one after the other
+                pulse = min(remaining, 3000.0)
+                self.mount.guide(direction, pulse)
+                time.sleep(pulse / 1000 + 0.1)
+                remaining -= pulse
+        time.sleep(1.5)
+        try:
+            x, y, fix = measure(frames, time.monotonic(), radius_hint=self.calibration.radius)
+        except CalibrationError as exc:
+            self.out(f"Error: {exc}")
+            return
+        self.out(f"Now at {x:.1f}, {y:.1f}: {x - target[0]:+.1f}, {y - target[1]:+.1f} px from the middle.")
 
     def _mount_disconnect(self, args) -> None:
         self.mount.close()
@@ -408,6 +499,9 @@ class Console:
             self.shutdown()
 
     def shutdown(self) -> None:
+        if self._live_thread is not None:
+            self._live_thread.stop()
+            self._live_thread = None
         if self.mount is not None:
             self.mount.close()
             self.mount = None
