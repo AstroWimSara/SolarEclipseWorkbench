@@ -139,6 +139,51 @@ iOptron says the HAZ mounts work with a third-party INDI driver on Linux and mac
 | H.8 Field rotation | **Keep the sun centred** for at least an hour (C.F1); then **Calibrate** again | **Compare the direction with H.7.**  If it turned by several degrees, the guide pulses move in RA/Dec while the sky turns in the frame: tell me, and the calibration will be turned with the sky (from the location, the time and the sun's position).  If it did not turn, alt-az corrections need nothing more |
 | H.9 After 1-2 hours | Leave the centring on | "centred" most of the time; or after a while "… did not move the sun the way they should: calibrate again" (field rotation, see H.8) |
 
+## Your mount: SkyWatcher AZ-GTi
+
+The AZ-GTi is also an **alt-azimuth** mount (unless its firmware is switched to EQ mode), so the
+questions of the HAZ31 apply too.  What is known before testing, from INDI 1.9.9 on this computer:
+
+- **Driver**: `indi_skywatcherAltAzMount`.  In the **Mount model** list: *SkyWatcher AZ-GTi Alt-Az
+  WiFi* and *SkyWatcher AZ-GTi Alt-Az Wired* (the same driver).  INDI calls the mount
+  `Skywatcher Alt-Az`.  It has a solar tracking rate and takes guide pulses.
+- **Wi-Fi**: the driver talks to the mount over **UDP at 192.168.4.1, port 11880**: the address of
+  the mount's own Wi-Fi network (`SynScan_xxxx`).  Join that network with the computer (it then has
+  no internet), or put the mount on your own Wi-Fi with the SynScan app (station mode) and use the
+  address your router gives it.  sew leaves the driver's UDP setting alone.
+- **Close the SynScan app** (phone, tablet) before connecting: two programs controlling one mount
+  get in each other's way.
+- **No alignment**: the alignment made in the SynScan app is not used by the INDI driver, and sew
+  never aligns or slews the mount.  The driver works out where it points from where it started
+  (the AZ-GTi's home position: level, pointing north at the horizon).  For tracking in alt-az,
+  that matters: an alt-az mount tracks by turning both axes at rates that depend on where it points.
+- **The driver tracks, not the mount**: the driver keeps adjusting the rates of both axes.  When
+  the INDI server stops (a **Disconnect** in sew stops the server that sew started), the mount
+  keeps its last rates, which are only right for a while.
+- **EQ mode** (on a wedge, firmware set to EQ): use the **EQMod** driver (`indi_eqmod_telescope`),
+  which is not in Ubuntu's `indi-bin`: install `indi-eqmod` from the INDI PPA.  Test alt-az first.
+
+Start in the home position: level, the telescope horizontal and pointing north, as for the
+SynScan app.  Indoors, without the sun, for A.1–A.7 and A.11; outdoors, **with the solar filter on
+before the telescope gets near the sun**, for the rest.
+
+| Check | How | Expected / to note |
+|-------|-----|--------------------|
+| A.1 Connect over Wi-Fi | Computer on the `SynScan_xxxx` network.  `Mount` window: tick **Start the INDI server**, **Mount model** *SkyWatcher AZ-GTi Alt-Az WiFi*, **Mount port** `192.168.4.1:11880` → **Connect** | `Skywatcher Alt-Az … not tracking`.  If not: the last lines of the server output (with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) |
+| A.2 Position | Read the position in the `Mount` window right after connecting, in the home position | **Note RA/Dec.**  Pointing north at the horizon, the declination should be about 90° minus your latitude (about 39° at a latitude of 51°) |
+| A.3 Location and time | `indi_getprop "Skywatcher Alt-Az.GEOGRAPHIC_COORD.*"` and `"Skywatcher Alt-Az.TIME_UTC.*"` | Your location and the time now |
+| A.4 Solar rate | **Track sun** | `tracking (solar)`, and both motors turn slowly.  Note it if it says sidereal |
+| A.5 Directions | **Stop tracking**.  At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec (both axes at once)?**  Note it, and whether "N" goes up or down |
+| A.6 Speeds | Hold **▲ N** for 2 s at each speed | Note the speeds the driver offers, and whether each is faster |
+| A.7 Guide pulses | `sew_hardware`, `mount connect localhost`, `mount track`, `mount guide N 2000`, `mount guide E 2000` | Do they move the mount?  Which axis?  (Without guide pulses there is no centring.) |
+| A.8 Tracking alone | Outdoors: point at the sun with the nudge buttons (filter!), **Track sun**, centring off.  Watch the live view for 10 minutes | **Note how far the sun drifts, and which way.**  A few pixels a minute is the mount; the sun leaving the frame within minutes means the driver does not know where it points (A.2): tell me |
+| A.9 Calibrate | On the sun, roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate.  If it says "the mount points at the celestial pole" while it is on the sun: the driver's position is wrong (A.2): tell me |
+| A.10 Field rotation | **Keep the sun centred** for at least an hour; then **Calibrate** again | As H.8: **compare the direction with A.9** |
+| A.11 Park | Indoors: **Park**, then **Track sun** | Note where it parks (the home position?), and that it unparks and tracks again |
+| A.12 Wi-Fi lost | While tracking on the sun: switch off the computer's Wi-Fi for 2 minutes, then on again | sew stays connected to the INDI server (it runs on this computer); it is the driver that loses the mount.  **Note what the `Mount` window and the log say** (an `INDI …` error, a status that no longer changes), whether the driver connects again by itself when the Wi-Fi is back, **whether the mount kept tracking**, and how far the sun drifted |
+| A.13 Disconnect | While tracking on the sun: **Disconnect** (it stops the INDI server sew started), wait 10 minutes | **Note how far the sun drifted** compared with A.8.  If it drifts away quickly, sew should not stop the server of this driver while the mount tracks: tell me |
+| A.W Wired (optional) | USB cable in the mount's hand-controller port (`ls /dev/ttyUSB*`), **Mount model** *SkyWatcher AZ-GTi Alt-Az Wired*, **Mount port** `/dev/ttyUSB0` → **Connect** | Connects.  If not: the driver starts at 9600 baud; try 115200 with `indi_setprop "Skywatcher Alt-Az.DEVICE_BAUD_RATE.115200=On"` before connecting, and note which works |
+
 
 ## Calibration (step 3) — before the GUI has it
 

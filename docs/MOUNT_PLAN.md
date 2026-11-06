@@ -87,8 +87,14 @@ when it lasts at least 1 s (an axis under 0.25 s is left to the guide pulses); s
 corrections are guide pulses, which the driver times.  The fake test mount can now move in
 steps (tick_s) to cover this.
 
+Stage 1 of MOUNT_TESTING.md (a real INDI server with INDI's telescope simulator) passed on
+2026-11-06, with INDI 1.9.9; check 1.13 was skipped (every driver is installed).
+
 Open for the HAZ31 (alt-az): which driver, whether guide pulses work in alt-az mode, and
 whether they move in RA/Dec (then the calibration must turn with the field rotation).
+The same for the SkyWatcher AZ-GTi (alt-az, `indi_skywatcherAltAzMount` over UDP Wi-Fi), and
+also: whether the driver tracks well without an alignment, and whether stopping the INDI server
+(the driver adjusts the tracking rates, not the mount) makes the mount drift.
 
 ## Step 3 — Automatic centring from the DSLR live view  *(done, to be tested on a real mount)*
 
