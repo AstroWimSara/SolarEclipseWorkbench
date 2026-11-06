@@ -64,6 +64,23 @@ def parse_address(address: str) -> tuple:
     return address, DEFAULT_PORT
 
 
+def network_address(connection: str) -> Optional[tuple]:
+    """(host, port) when a connection is a network address ("192.168.4.1:8899", "tcp://mount.local:8899"),
+    None when it is a serial port ("/dev/ttyUSB0", "COM3")."""
+    text = (connection or "").strip()
+    if text.lower().startswith(("tcp://", "udp://")):
+        text = text.split("://", 1)[1]
+    elif "/" in text or "\\" in text or text.upper().startswith("COM"):
+        return None
+    if text.count(":") != 1:
+        return None
+    host, port = text.split(":")
+    try:
+        return host.strip(), int(port)
+    except ValueError:
+        return None
+
+
 def find_mounts(client: IndiClient) -> list:
     """The devices on the server that are telescope mounts."""
     mounts = []
@@ -105,8 +122,10 @@ class Mount:
         Args:
             - address: ``host[:port]`` of the INDI server, or ``simulated``
             - device: Name of the mount on the server; may be left out when there is only one
-            - device_port: Serial port of the mount on the server's machine (e.g.
-                           /dev/ttyUSB0), when the driver does not have it saved yet
+            - device_port: How the driver reaches the mount: a serial port on the
+                           server's machine (e.g. /dev/ttyUSB0), or host:port of a
+                           mount on the network (Wi-Fi).  When not given, the
+                           driver's own port search is switched on, if it has one.
             - timeout: Seconds to wait for the driver to connect to the mount
         """
         simulator = None
@@ -156,13 +175,39 @@ class Mount:
         with self._lock:
             if self.driver_connected:
                 return
-            if device_port and self.client.property(self.device, "DEVICE_PORT") is not None:
-                self._change("DEVICE_PORT", {"PORT": device_port})
+            self._set_connection(device_port)
             self._change("CONNECTION", {"CONNECT": True}, timeout=timeout)
             # The driver defines the telescope properties once it is connected
             if not self.client.wait_for(
                     lambda: self._has("EQUATORIAL_EOD_COORD"), 5.0):
                 raise MountError(f"{self.device} connected, but does not report its position")
+
+    def _set_connection(self, connection: Optional[str]) -> None:
+        """Tell the driver how to reach the mount (the standard INDI connection properties)."""
+        if not connection:
+            if self._has("DEVICE_AUTO_SEARCH"):
+                try:
+                    self._change("DEVICE_AUTO_SEARCH", {"INDI_ENABLED": True})
+                except MountError as exc:
+                    logger.info("%s: the port search could not be switched on: %s", self.device, exc)
+            return
+        network = network_address(connection)
+        mode = self.client.property(self.device, "CONNECTION_MODE")
+        if network is not None:
+            host, port = network
+            if mode is not None and "CONNECTION_TCP" in mode.values:
+                self._change("CONNECTION_MODE", {"CONNECTION_TCP": True})
+                # The driver defines the network properties once it is in that mode
+                self.client.wait_for(lambda: self._has("DEVICE_ADDRESS"), 3.0)
+            if not self._has("DEVICE_ADDRESS"):
+                raise MountError(f"{self.device} cannot connect over the network; give its serial port instead")
+            self._change("DEVICE_ADDRESS", {"ADDRESS": host, "PORT": str(port)})
+        else:
+            if mode is not None and "CONNECTION_SERIAL" in mode.values:
+                self._change("CONNECTION_MODE", {"CONNECTION_SERIAL": True})
+                self.client.wait_for(lambda: self._has("DEVICE_PORT"), 3.0)
+            if self._has("DEVICE_PORT"):
+                self._change("DEVICE_PORT", {"PORT": connection})
 
     @property
     def driver_connected(self) -> bool:
@@ -268,7 +313,8 @@ class Mount:
                     self.client.property(self.device, "TELESCOPE_TRACK_MODE").values:
                 self._change("TELESCOPE_TRACK_MODE", {"TRACK_SIDEREAL": True})
             if self._has("TELESCOPE_TRACK_STATE"):
-                self._change("TELESCOPE_TRACK_STATE", {"TRACK_ON": True})
+                # INDI drivers keep this Busy for as long as the mount tracks: the first answer is the answer
+                self._change("TELESCOPE_TRACK_STATE", {"TRACK_ON": True}, wait_done=False)
         logger.info("%s tracks at the %s rate", self.device, rate)
         return rate
 
@@ -276,7 +322,7 @@ class Mount:
         with self._lock:
             if not self._has("TELESCOPE_TRACK_STATE"):
                 raise MountError(f"{self.device} cannot switch tracking off")
-            self._change("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True})
+            self._change("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}, wait_done=False)
         logger.info("%s stopped tracking", self.device)
 
     def park(self) -> None:
@@ -312,12 +358,13 @@ class Mount:
         """Start moving towards N, S, E or W, until nudge_stop."""
         _, _, prop, element = self._direction(direction)
         with self._lock:
-            self._change(prop, {element: True})
+            # Busy for as long as the mount moves: the first answer is the answer
+            self._change(prop, {element: True}, wait_done=False)
 
     def nudge_stop(self, direction: str) -> None:
         _, _, prop, element = self._direction(direction)
         with self._lock:
-            self._change(prop, {element: False})
+            self._change(prop, {element: False}, wait_done=False)
 
     def slew_rates(self) -> list:
         """The rates the mount can be nudged at, slowest first: [(name, label), ...].

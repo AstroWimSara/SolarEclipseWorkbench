@@ -100,6 +100,11 @@ class SimulatedIndiServer:
                                         "DRIVER_INTERFACE": str(TELESCOPE_INTERFACE)},
                   perm="ro", needs_connection=False),
             _Prop("DEVICE_PORT", TEXT, {"PORT": "/dev/ttyUSB0"}, needs_connection=False),
+            _Prop("DEVICE_AUTO_SEARCH", SWITCH, {"INDI_ENABLED": False, "INDI_DISABLED": True}, rule="OneOfMany",
+                  needs_connection=False),
+            _Prop("CONNECTION_MODE", SWITCH, {"CONNECTION_SERIAL": True, "CONNECTION_TCP": False},
+                  rule="OneOfMany", needs_connection=False),
+            _Prop("DEVICE_ADDRESS", TEXT, {"ADDRESS": "", "PORT": ""}, needs_connection=False),
             _Prop("GEOGRAPHIC_COORD", NUMBER, {"LAT": 0.0, "LONG": 0.0, "ELEV": 0.0}),
             _Prop("TIME_UTC", TEXT, {"UTC": "", "OFFSET": "0"}),
             _Prop("EQUATORIAL_EOD_COORD", NUMBER, dict(zip(("RA", "DEC"), sun_position())), perm="ro"),
@@ -316,9 +321,15 @@ class SimulatedIndiServer:
                     self.props[motion].values.update({k: False for k in self.props[motion].values})
             if name.startswith("TELESCOPE_TIMED_GUIDE"):
                 self._pulse(name, changes)
-            # A guide pulse or a park starts something long: answer Busy first
+            # A guide pulse or a park starts something long: answer Busy first.  Tracking and moving
+            # stay Busy for as long as they last, as real INDI drivers keep them
             long_change = name.startswith("TELESCOPE_TIMED_GUIDE") or name == "TELESCOPE_PARK"
-            prop.state = BUSY if long_change else OK
+            if name == "TELESCOPE_TRACK_STATE":
+                prop.state = BUSY if prop.values["TRACK_ON"] else IDLE
+            elif name.startswith("TELESCOPE_MOTION"):
+                prop.state = BUSY if any(prop.values.values()) else IDLE
+            else:
+                prop.state = BUSY if long_change else OK
             xml = self._vector(prop, "set")
             if long_change:
                 prop.state = OK

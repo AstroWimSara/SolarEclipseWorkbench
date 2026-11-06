@@ -86,6 +86,12 @@ Telescope mount (through an INDI server)
                                 (needs 'mount calibrate' first)
   mount follow [seconds]        keep the sun in the middle: a look every 'seconds' (default
                                 30), a correction when it is more than 2 px off, until Ctrl-C
+  mount sun [goto]              where the sun is now (RA/Dec of date); with 'goto', point a
+                                simulator there (INDI's telescope simulator starts at the pole).
+                                Never a real mount: point that at the sun by hand
+  mount start <driver> [port]   start indiserver with this driver (e.g. indi_simulator_telescope)
+                                and connect; port: serial port or host:port of the mount
+  mount drivers [text]          the mount drivers INDI has installed, filtered by text
   mount disconnect              close the connection; the mount keeps tracking
 """
 
@@ -302,7 +308,7 @@ class Console:
         if handler is None:
             self.out(f"Unknown mount subcommand: {sub}")
             return
-        if sub != "connect" and self.mount is None:
+        if sub not in ("connect", "start", "drivers") and self.mount is None:
             self.out("No mount connected.  Run 'mount connect' first.")
             return
         handler(rest)
@@ -465,6 +471,70 @@ class Console:
             loop.stop()
         self.out(f"Stopped after {loop.status.corrections} correction(s).")
 
+    def _mount_sun(self, args) -> None:
+        from astropy.coordinates import TETE, get_sun
+        from astropy.time import Time
+        now = Time.now()
+        sun = get_sun(now).transform_to(TETE(obstime=now))
+        ra_h, dec_deg = float(sun.ra.hour), float(sun.dec.deg)
+        self.out(f"The sun is at RA {sun.ra.to_string(unit='hour', sep=':', precision=0)}, "
+                 f"Dec {sun.dec.to_string(sep=':', precision=0, alwayssign=True)} (of date).")
+        if not args or args[0].lower() != "goto":
+            return
+        device = self.mount.device
+        if "simulator" not in device.lower():
+            self.out(f"{device} is not a simulator: point a real mount at the sun by hand, with the filter on.")
+            return
+        client = self.mount.client
+        if client.property(device, "ON_COORD_SET") is not None:
+            client.change(device, "ON_COORD_SET", {"TRACK": True})
+        client.change(device, "EQUATORIAL_EOD_COORD", {"RA": ra_h, "DEC": dec_deg}, wait_done=False, timeout=10)
+        self.out(f"{device} is slewing to the sun...")
+        # The position is Busy for as long as the slew lasts
+        done = client.wait_for(lambda: client.property(device, "EQUATORIAL_EOD_COORD").state != "Busy", 120)
+        if not done:
+            self.out("The slew did not end within 2 minutes.")
+            return
+        rate = self.mount.track_solar()
+        self.out(f"Pointed at the sun, tracking at the {rate} rate.")
+        self._mount_status([])
+
+    def _mount_drivers(self, args) -> None:
+        from solareclipseworkbench.indi_server import mount_drivers
+        text = " ".join(args).lower()
+        drivers = [d for d in mount_drivers() if text in d.label.lower() or text in d.executable.lower()]
+        if not drivers:
+            self.out("No mount drivers found" + (f" for {text!r}" if text else ": is INDI installed?"))
+        for driver in drivers:
+            self.out(f"  {driver.label:<40} {driver.executable}{'' if driver.installed() else '  (not installed)'}")
+
+    def _mount_start(self, args) -> None:
+        from solareclipseworkbench.indi_server import IndiServer, IndiServerError
+        if not args:
+            self.out("Usage: mount start <driver> [serial port or host:port]")
+            return
+        if self.mount is not None:
+            self.mount.close()
+            self.mount = None
+        if getattr(self, "_server", None) is not None:
+            self._server.stop()
+        self._server = IndiServer(args[0])
+        try:
+            self._server.start()
+        except IndiServerError as exc:
+            self.out(f"Error: {exc}")
+            self._server = None
+            return
+        if self._server.borrowed:
+            self.out(f"Using {self._server.describe()}.")
+        else:
+            self.out(f"Started {self._server.describe()}; output in {self._server.log_path}")
+        self._frames = None
+        self.mount = Mount.open("localhost", None, args[1] if len(args) > 1 else None,
+                                timeout=15.0 if len(args) > 1 else 40.0)
+        self.out(f"Connected: {self.mount.describe()}")
+        self._mount_status([])
+
     def _mount_disconnect(self, args) -> None:
         self.mount.close()
         self.mount = None
@@ -525,6 +595,12 @@ class Console:
             self.shutdown()
 
     def shutdown(self) -> None:
+        if getattr(self, "_server", None) is not None:
+            if self.mount is not None:
+                self.mount.close()
+                self.mount = None
+            self._server.stop()
+            self._server = None
         if self._live_thread is not None:
             self._live_thread.stop()
             self._live_thread = None

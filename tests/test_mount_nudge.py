@@ -294,6 +294,9 @@ def test_the_simulated_mount_is_one_tick_away(app, monkeypatch):
         def stop_centring(self):
             pass
 
+        def stop_indi_server(self):
+            pass
+
         def update(self, changed_object):
             pass
 

@@ -35,31 +35,48 @@ These are the points where a real driver may behave differently.  Watch them in 
 
 ## Stage 1 — Real INDI server, simulated telescope driver (no mount)
 
-This checks the client against the real `indiserver` instead of `sew`'s own simulator.
+This checks the client against the real `indiserver` and INDI's own telescope simulator, instead
+of `sew`'s simulator.  Most of it has been run during development (INDI 1.9.9, Ubuntu):
+connecting, the slew rates, location and time, solar tracking, nudges, guide pulses, park,
+abort, calibration and centring.  It found two differences from `sew`'s own simulator, both
+fixed: a real driver keeps tracking and moving "Busy" (`sew` waited for it to end), and a second
+`indiserver` needs its own local socket.
 
-Setup: `sudo apt install indi-bin`, then `indiserver -vvv indi_simulator_telescope`.
+Setup: `sudo apt install indi-bin`.
+
+**Things to know about INDI's telescope simulator:**
+
+- It starts pointed at the celestial pole (or at 0h, 0°).  There, guiding east-west moves the sun
+  almost nothing (the movement shrinks with the cosine of the declination): the calibration takes
+  minutes and the centring needs long corrections.  Point it at the sun first: in `sew_hardware`,
+  `mount sun goto` (it refuses a real mount).
+- "North" moves it south (guide pulses and nudges alike), as a German mount on the other side of
+  the pier does.  The calibration finds that out ("mirrored"); the nudge buttons just move that
+  way.
 
 | Check | How | Expected |
 |-------|-----|----------|
-| 1.1 Find | `sew` → **Mount** → server `localhost` → **Find mounts** | `Telescope Simulator` in the list |
-| 1.2 Connect | **Connect** | Status `Telescope Simulator on localhost:7624: not tracking`; "Sent to the mount: location …; time …" |
-| 1.3 Location and time arrived | `indi_getprop "Telescope Simulator.GEOGRAPHIC_COORD.*" "Telescope Simulator.TIME_UTC.*"` | The location of the `Location` window (`LONG` 0–360, east positive) and the current UTC time |
-| 1.4 Track | **Track sun** | Status `tracking (solar)`; `indi_getprop` shows `TELESCOPE_TRACK_MODE.TRACK_SOLAR=On` and `TELESCOPE_TRACK_STATE.TRACK_ON=On` |
+| 1.1 Start the server | `sew --sim` → **Mount** → untick **Simulated mount**, tick **Start the INDI server**, model **Telescope Simulator** → **Connect** | Connects within a second or two; "(INDI server started with indi_simulator_telescope)"; `pgrep -a indiserver` shows it |
+| 1.2 Location and time arrived | `indi_getprop "Telescope Simulator.GEOGRAPHIC_COORD.*" "Telescope Simulator.TIME_UTC.*"` | The location of the `Location` window (`LONG` 0–360, east positive) and the current UTC time |
+| 1.3 Point at the sun | In another terminal: `sew_hardware`, `mount connect localhost`, `mount sun goto`, `quit` | "Pointed at the sun, tracking at the solar rate"; the position in the `Mount` window changes |
+| 1.4 Track | **Track sun** | Status `tracking (solar)` |
 | 1.5 Stop | **Stop tracking** | Status `not tracking` |
 | 1.6 Park | **Park** → confirm | Status `parked` after the slew of the simulator |
-| 1.7 Track from parked | **Track sun** | Unparks, then `tracking (solar)` |
+| 1.7 Track from parked | **Track sun** | Unparks, then `tracking (solar)` (point at the sun again with 1.3) |
 | 1.8 Abort | **Park**, then **Abort** during the slew | The slew stops; no error |
-| 1.9 Disconnect | **Disconnect** | `indi_getprop` still shows `CONNECTION.CONNECT=On` and `TRACK_ON=On` |
-| 1.10 Reconnect | **Connect** again | Connects straight away (the driver is already connected) |
-| 1.11 Server gone | Stop `indiserver` while connected | Status says the connection is lost; buttons disabled; no crash |
+| 1.9 Disconnect | **Disconnect** | The server is stopped (`pgrep -a indiserver` shows nothing) |
+| 1.10 A server that runs already | `indiserver indi_simulator_telescope` in a terminal, then **Connect** with **Start the INDI server** ticked | "(the INDI server that already ran is used)"; **Disconnect** leaves it running |
+| 1.11 Server gone | Stop `indiserver` (Ctrl-C in its terminal) while connected | Status says the connection is lost; buttons disabled; no crash |
 | 1.12 Location change | Connected, change the location in the `Location` window | The new location in `GEOGRAPHIC_COORD` |
-| 1.N1 Rates | Connected, look at the speed list next to the nudge buttons (`Mount` window) | The slew rates of the driver with their names, slowest first |
-| 1.N2 Nudge | Hold **▲ N** for 3 s at each speed | The position (Dec) changes while held and stops when released; faster at a faster speed |
-| 1.N3 Lost release | Hold **E ▶**, and move the mouse off the button and release it outside the window; or close the window while holding | The mount stops within a second |
-| 1.N4 Stop | Start a **Park** (in the `Mount` window), then click **Stop** next to the nudge buttons | The park stops; tracking is left as it was |
-| 1.N5 Phone | Phone dashboard: hold the buttons of the `Mount` panel | As 1.N2; switch the phone's Wi-Fi off while holding: the mount stops within about a second |
-| 1.S1 Calibrate on the INDI simulator | `sew --sim`, connect to `localhost` (the INDI simulator, not the built-in one), open `Live View` on the virtual camera | The virtual camera shows the sun where `indi_simulator_telescope` points; **Track sun**, then **Calibrate** works (slower: its guide rate is 0.5×), and **Keep the sun centred** brings a nudged-off sun back |
-| 1.13 Bench console | `sew_hardware --debug`, then `mount connect localhost`, `mount track`, `mount guide N 1000`, `mount status` | Same results; the XML is logged |
+| 1.13 Driver not installed | Choose a model marked "(driver not installed)" → **Connect** | A message that the driver is not installed, and in which package it may be |
+| 1.N1 Rates | Connected, look at the speed list next to the nudge buttons | Guide, Centering, Find, Max |
+| 1.N2 Nudge | Hold **▲ N** for 3 s at each speed | The position changes while held (south, see above) and stops when released; faster at a faster speed |
+| 1.N3 Lost release | Hold **E ▶**, move the mouse off the button and release it outside the window; or close the window while holding | The mount stops within a second |
+| 1.N4 Stop | Start a **Park**, then click **Stop** next to the nudge buttons | The park stops |
+| 1.N5 Phone | Phone dashboard, `Mount` panel: hold the buttons | As 1.N2; switch the phone's Wi-Fi off while holding: the mount stops within about a second |
+| 1.S1 Calibrate and centre | After 1.3, open `Live View` on the virtual camera (it shows the sun where the mount points), **Calibrate**, then **Keep the sun centred**; nudge the sun away | Calibration in about 1.5 minutes ("… mirrored …; at the 2x rate …"); the sun is centred in one or two corrections and brought back after a nudge |
+| 1.S2 Script | A script with `mount_track` and `mount_park` a minute apart, run as a simulation | Both run at their time; `Mount: track the sun` in the job list |
+| 1.C Bench console | `sew_hardware --debug`, `mount start indi_simulator_telescope`, `mount sun goto`, `mount guide N 1000`, `mount status` | Same results; every XML element is logged |
 
 ## Stage 2 — The real mount, indoors
 
@@ -101,6 +118,27 @@ driver of the mount, e.g. `indiserver -vvv indi_eqmod_telescope`.
 |-------|-----|----------|
 | 2.R1 | Server on e.g. a Raspberry Pi; in `sew` server `<host>` or `<host>:7624` | Same as 2.1–2.9 |
 | 2.R2 | Pull the network cable / Wi-Fi off while connected | Connection lost shown; mount keeps tracking |
+
+## Your mount: iOptron HAZ31
+
+The HAZ31 is an **alt-azimuth** mount, which raises questions an equatorial mount does not.
+iOptron says the HAZ mounts work with a third-party INDI driver on Linux and macOS.  INDI 1.9.9
+(Ubuntu's `indi-bin`) has no HAZ entry in its list: try **iOptron v3**
+(`indi_ioptronv3_telescope`) first; the newer INDI of the PPA (`ppa:mutlaqja/ppa`, package
+`indi-full`) may list the HAZ mounts by name (`sew_hardware`, `mount drivers ioptron`).
+
+| Check | How | Expected / to note |
+|-------|-----|--------------------|
+| H.1 Driver | `mount drivers ioptron`; then `mount start indi_ioptronv3_telescope /dev/ttyUSB0` (USB on the 8409 hand controller; `ls /dev/ttyUSB* /dev/ttyACM*`) | Connects.  If not: note the last lines of the server output (shown with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) |
+| H.2 Wi-Fi | The mount's Wi-Fi: **Mount port** `address:port` from the HAZ manual | Connects without a cable |
+| H.3 Location and time | As 1.2, and on the hand controller | Same location and time on the mount |
+| H.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning.  Note which |
+| H.5 Directions | At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec?**  Note it, and whether "N" goes up or down |
+| H.6 Guide pulses | `sew_hardware`: `mount guide N 2000`, `mount guide E 2000` | Do they move the mount at all in alt-az mode?  Which axis?  (Without guide pulses there is no centring.) |
+| H.7 Calibrate | On the sun (filter!), roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate |
+| H.8 Field rotation | **Keep the sun centred** for at least an hour (C.F1); then **Calibrate** again | **Compare the direction with H.7.**  If it turned by several degrees, the guide pulses move in RA/Dec while the sky turns in the frame: tell me, and the calibration will be turned with the sky (from the location, the time and the sun's position).  If it did not turn, alt-az corrections need nothing more |
+| H.9 After 1-2 hours | Leave the centring on | "centred" most of the time; or after a while "… did not move the sun the way they should: calibrate again" (field rotation, see H.8) |
+
 
 ## Calibration (step 3) — before the GUI has it
 

@@ -68,6 +68,30 @@ window, e.g. `astroberry.local` or `192.168.1.20:7624`.  The mount's cable then 
 computer, not into the laptop, so it needs no sharing with WSL at all.  A mount with Wi-Fi or
 Ethernet needs no cable either.
 
+## Let Solar Eclipse Workbench start the INDI server
+
+Instead of starting `indiserver` yourself, tick **Start the INDI server, for this mount** in the
+`Mount` window and choose the model of the mount in **Mount model** (type part of the name to
+find it).  The list is read from the driver lists of INDI on this computer; a model whose driver
+is not installed is marked so.  On **Connect**, `indiserver` is started with the driver of that
+model, on this computer (in WSL on Windows), and stopped again on **Disconnect** and when Solar
+Eclipse Workbench closes (also when it ends on an error).  The mount keeps tracking: its own
+controller does that.  An INDI server that already runs is used and left alone.
+
+The model has to be chosen because it cannot be found out: most mounts are connected through a
+USB-serial chip that other devices have as well, and a mount on Wi-Fi is not on USB at all.  It
+is remembered for the next start.
+
+**Mount port** tells the driver how to reach the mount:
+
+- empty: the driver searches the serial ports itself (this can take half a minute),
+- a serial port, e.g. `/dev/ttyUSB0`,
+- the address of a mount on Wi-Fi, `host:port`, e.g. `10.10.100.254:8899` (see the manual of the
+  mount for its address and port).
+
+The output of the server goes to `~/.SolarEclipseWorkbench/logs/indiserver-<time>Z.log`; when
+the mount does not connect, the last lines are shown with the error.
+
 ## Connect the mount
 
 1. Click **Mount** in the toolbar.  To try everything without a mount, tick **Simulated mount** and
@@ -194,7 +218,12 @@ python -m solareclipseworkbench.sew -d 2026-08-12 -lon -3.70 -lat 40.42 -alt 650
 
 ```
 sew_hardware
-sew> mount connect localhost          connect, and show what the mount reports
+sew> mount drivers ioptron            the mount drivers INDI has, with "ioptron" in the name
+sew> mount start indi_ioptronv3_telescope /dev/ttyUSB0
+                                      start indiserver with that driver, and connect
+sew> mount connect localhost          or: connect to a server that runs already
+sew> mount sun                        where the sun is now
+sew> mount sun goto                   point a simulator there (never a real mount)
 sew> mount site 40.42 -3.70 650       send a location and the time
 sew> mount track                      track at the solar rate
 sew> mount guide N 1000               a one-second guide pulse to the north

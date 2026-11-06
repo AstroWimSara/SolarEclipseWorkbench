@@ -63,6 +63,26 @@ starts at the sun and moves (sky drift, nudges, pulses, park).
 - The same on the phone dashboard (`ACTION_MOUNT_*`, validated and queued like
   the live-view actions).
 
+## Starting the INDI server  *(done)*
+
+`indi_server.py`: the mounts of INDI's driver lists (drivers.xml and the third-party
+lists next to it, in /usr/share/indi, /usr/local/share/indi, the KStars app on macOS,
+$INDIPREFIX); `IndiServer` starts `indiserver -v -p <port> -u /tmp/indiserver-sew-<port>
+<driver>` (output to a log), waits for the port, uses a server that already runs and
+leaves it alone, stops its own on disconnect and at exit.  The model is chosen in the
+`Mount` window (it cannot be detected: generic USB-serial chips, or Wi-Fi).  The mount
+port can be a serial port, `host:port` (Wi-Fi: CONNECTION_MODE TCP + DEVICE_ADDRESS), or
+empty (DEVICE_AUTO_SEARCH on).  Console: `mount drivers`, `mount start`, `mount sun [goto]`
+(goto only for simulators).
+
+Tested against INDI 1.9.9's `indi_simulator_telescope`: two differences from sew's
+simulator found and fixed (TELESCOPE_TRACK_STATE and TELESCOPE_MOTION_* stay Busy while
+tracking/moving; a second indiserver needs its own -u socket).  INDI's simulator starts at
+the pole (point it at the sun first) and moves south for "north".
+
+Open for the HAZ31 (alt-az): which driver, whether guide pulses work in alt-az mode, and
+whether they move in RA/Dec (then the calibration must turn with the field rotation).
+
 ## Step 3 — Automatic centring from the DSLR live view  *(done, to be tested on a real mount)*
 
 Done: `sun_finder.find_sun()` (numpy only, ~60 ms per 1000 px frame), checked on

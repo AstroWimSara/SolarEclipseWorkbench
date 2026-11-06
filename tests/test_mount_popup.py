@@ -21,6 +21,9 @@ class FakeController(Observer):
     def stop_centring(self):
         self.centrer = None
 
+    def stop_indi_server(self):
+        pass
+
     def update(self, changed_object):
         self.updates.append(changed_object)
 

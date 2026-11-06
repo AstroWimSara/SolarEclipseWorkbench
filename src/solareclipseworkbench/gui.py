@@ -54,6 +54,7 @@ from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST, find_mounts, parse_address
 from solareclipseworkbench.indi_client import IndiClient, IndiError
+from solareclipseworkbench.indi_server import IndiServer, IndiServerError, mount_drivers
 from solareclipseworkbench.mount_ui import MountNudgePanel, format_position
 from solareclipseworkbench.live_frames import LiveFrames
 from solareclipseworkbench import sun_simulator
@@ -1358,6 +1359,8 @@ class SolarEclipseController(Observer):
         self.mount_popup: Union['MountPopup', None] = None
         # The connected mount, also registered for the mount_* script commands
         self.mount: Union[Mount, None] = None
+        # The INDI server started for the mount (None when it was started by hand or runs elsewhere)
+        self.indi_server: Optional[IndiServer] = None
         # Keeping the sun centred: the frames of the Live View window, the calibration and the loop
         self.live_frames = LiveFrames()
         self.mount_calibration: Optional[Calibration] = self._load_mount_calibration()
@@ -1821,6 +1824,7 @@ class SolarEclipseController(Observer):
                 self.mount.close()
                 self.mount = None
                 register_hardware('mount', None)
+            self.stop_indi_server()
 
             if self._keep_alive_thread is not None:
                 self._keep_alive_thread.stop()
@@ -2232,6 +2236,12 @@ class SolarEclipseController(Observer):
         sun = None if status.state == "correcting" else status.sun
         return {"sun": sun, "radius": centrer.radius, "target": status.target, "state": status.state,
                 "message": status.message}
+
+    def stop_indi_server(self) -> None:
+        """Stop the INDI server started for the mount; the mount keeps tracking on its own controller."""
+        if self.indi_server is not None:
+            self.indi_server.stop()
+            self.indi_server = None
 
     def send_site_to_mount(self) -> list:
         """ Send the observing location and the (GPS-corrected) time to the connected mount.
@@ -3429,10 +3439,29 @@ class MountPopup(QWidget, Observable):
 
         connection_layout.addWidget(QLabel("Mount port"), 2, 0)
         self.device_port = QLineEdit(settings.value("mount/device_port", "", type=str))
-        self.device_port.setPlaceholderText("as saved in the driver")
-        self.device_port.setToolTip("Serial port of the mount on the machine of the INDI server, "
-                                    "e.g. /dev/ttyUSB0.  Leave empty to use the port saved in the driver.")
+        self.device_port.setPlaceholderText("searched by the driver")
+        self.device_port.setToolTip("How the driver reaches the mount: its serial port on the machine of the INDI "
+                                    "server (e.g. /dev/ttyUSB0), or host:port of a mount on Wi-Fi.  Leave empty "
+                                    "to let the driver search the ports, or use the port saved in the driver.")
         connection_layout.addWidget(self.device_port, 2, 1)
+
+        # Starting the INDI server here, with the driver of the mount model picked once
+        self.start_server_checkbox = QCheckBox("Start the INDI server, for this mount:")
+        self.start_server_checkbox.setToolTip("Start indiserver on this computer (in WSL on Windows) with the driver "
+                                              "of the mount model chosen here, when connecting.  An INDI server that "
+                                              "already runs is used instead.")
+        self.start_server_checkbox.setChecked(settings.value("mount/start_server", False, type=bool))
+        self.start_server_checkbox.toggled.connect(self.show_state)
+        connection_layout.addWidget(self.start_server_checkbox, 4, 1)
+        connection_layout.addWidget(QLabel("Mount model"), 5, 0)
+        self.model_combobox = QComboBox()
+        self.model_combobox.setEditable(True)
+        self.model_combobox.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.model_combobox.setToolTip("The mount, as INDI lists it: type to search.  Which mount is connected "
+                                       "cannot be found out (it is behind a USB-serial chip, or on Wi-Fi), so it "
+                                       "is chosen here once.")
+        self._fill_models(settings.value("mount/driver", "", type=str), settings.value("mount/model", "", type=str))
+        connection_layout.addWidget(self.model_combobox, 5, 1)
 
         connection_group_box.setLayout(connection_layout)
         layout.addWidget(connection_group_box)
@@ -3501,6 +3530,39 @@ class MountPopup(QWidget, Observable):
         self.status_timer.start(1000)
         self.show_state()
 
+    def _fill_models(self, driver: str, model: str):
+        """ List the mounts of the INDI driver lists; select the saved one. """
+
+        self._models = mount_drivers()
+        self.model_combobox.clear()
+        for mount_driver in self._models:
+            installed = mount_driver.installed()
+            self.model_combobox.addItem(mount_driver.label + ("" if installed else "  (driver not installed)"),
+                                        mount_driver.executable)
+        completer = self.model_combobox.completer()
+        if completer is not None:
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        for index, mount_driver in enumerate(self._models):
+            if mount_driver.executable == driver and (not model or mount_driver.label == model):
+                self.model_combobox.setCurrentIndex(index)
+                break
+        if not self._models:
+            self.start_server_checkbox.setChecked(False)
+            self.start_server_checkbox.setToolTip(
+                "INDI is not installed here: install it (on Ubuntu and in WSL: sudo apt install indi-bin), or "
+                "connect to an INDI server that runs elsewhere")
+
+    def selected_driver(self):
+        """ The MountDriver chosen in the model list, or None. """
+
+        index = self.model_combobox.currentIndex()
+        text = self.model_combobox.currentText().strip()
+        if 0 <= index < len(self._models) and self.model_combobox.itemText(index) == text:
+            return self._models[index]
+        matches = [m for m in self._models if m.label.lower() == text.lower()]
+        return matches[0] if matches else None
+
     def show_state(self):
         """ Show the connection state in the buttons and the status label. """
 
@@ -3508,9 +3570,13 @@ class MountPopup(QWidget, Observable):
         connected = mount is not None
         self.connect_button.setText("Disconnect" if connected else "Connect")
         simulated = self.simulated_checkbox.isChecked()
+        start_server = self.start_server_checkbox.isChecked()
         self.simulated_checkbox.setEnabled(not connected)
-        for widget in (self.address, self.device_combobox, self.device_port, self.find_button):
-            widget.setEnabled(not connected and not simulated)
+        self.device_port.setEnabled(not connected and not simulated)
+        for widget in (self.address, self.device_combobox, self.find_button):
+            widget.setEnabled(not connected and not simulated and not start_server)
+        self.start_server_checkbox.setEnabled(not connected and not simulated and bool(self._models))
+        self.model_combobox.setEnabled(not connected and not simulated and start_server and bool(self._models))
         for button in (self.track_button, self.stop_button, self.park_button, self.abort_button):
             button.setEnabled(connected and mount.connected)
         self.status_label.setText(mount.describe() if connected else "Not connected")
@@ -3675,21 +3741,46 @@ class MountPopup(QWidget, Observable):
             self.controller.mount.close()
             self.controller.mount = None
             register_hardware('mount', None)
+            self.controller.stop_indi_server()
             self.site_label.setText("")
             self.show_state()
             self.notify_observers(self)
             return
 
         simulated = self.simulated_checkbox.isChecked()
+        start_server = self.start_server_checkbox.isChecked() and not simulated
         address = self.address.text().strip() or "localhost"
         device = self.device_combobox.currentText().strip() or None
         device_port = self.device_port.text().strip() or None
+        mount_driver = self.selected_driver() if start_server else None
+        server_note = ""
+        if start_server:
+            if mount_driver is None:
+                QMessageBox.warning(self, "Mount", "Choose the model of the mount in the list.")
+                return
+            server = IndiServer(mount_driver.executable)
+            try:
+                self._busy(server.start)
+            except IndiServerError as exc:
+                QMessageBox.warning(self, "Mount", f"The INDI server could not be started: {exc}")
+                return
+            self.controller.indi_server = server
+            address, device = "localhost", None
+            server_note = (" (the INDI server that already ran is used)" if server.borrowed
+                           else f" (INDI server started with {mount_driver.executable})")
         try:
             if simulated:
                 mount = self._busy(lambda: Mount.open(SIMULATED_HOST))
             else:
-                mount = self._busy(lambda: Mount.open(address, device, device_port))
+                # Searching the ports for the mount takes longer than opening a known one
+                timeout = 15.0 if device_port else 40.0
+                mount = self._busy(lambda: Mount.open(address, device, device_port, timeout=timeout))
         except (MountError, IndiError) as exc:
+            if start_server:
+                tail = self.controller.indi_server.log_tail() if self.controller.indi_server else ""
+                self.controller.stop_indi_server()
+                if tail:
+                    exc = f"{exc}\n\nThe INDI server said: {tail}"
             QMessageBox.warning(self, "Mount", str(exc))
             return
 
@@ -3699,14 +3790,20 @@ class MountPopup(QWidget, Observable):
         settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
         settings.setValue("mount/simulated", simulated)
         if not simulated:
-            settings.setValue("mount/address", address)
-            settings.setValue("mount/device", mount.device)
+            settings.setValue("mount/start_server", start_server)
+            if mount_driver is not None:
+                settings.setValue("mount/driver", mount_driver.executable)
+                settings.setValue("mount/model", mount_driver.label)
+            else:
+                settings.setValue("mount/address", address)
+                settings.setValue("mount/device", mount.device)
             settings.setValue("mount/device_port", device_port or "")
 
         try:
             sent = self._busy(self.controller.send_site_to_mount)
-            self.site_label.setText("Sent to the mount: " + "; ".join(sent) if sent else
-                                    "No location is set yet: it is sent to the mount once one is chosen.")
+            self.site_label.setText(("Sent to the mount: " + "; ".join(sent) if sent else
+                                     "No location is set yet: it is sent to the mount once one is chosen.")
+                                    + server_note)
         except (MountError, IndiError) as exc:
             self.site_label.setText(f"The location and time could not be sent: {exc}")
 
