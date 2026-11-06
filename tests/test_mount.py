@@ -316,3 +316,22 @@ def test_the_bench_console_drives_a_simulated_mount(capsys):
         assert "Error: not a direction" in capsys.readouterr().out
     finally:
         console.shutdown()
+
+
+def test_the_example_script_for_the_mount_loads():
+    """example_scripts/testMount.txt, check 1.S2 of docs/MOUNT_TESTING.md."""
+    from pathlib import Path
+
+    import solareclipseworkbench
+
+    script = Path(solareclipseworkbench.__file__).parent / "example_scripts" / "testMount.txt"
+    c1 = datetime.datetime(2026, 8, 12, 17, 36, 47, tzinfo=timezone.utc)
+    timeline = build_timeline(str(script), {"C1": SimpleNamespace(time_utc=c1)})
+    commands = [c.func_name for c in timeline.commands]
+    assert commands.count("mount_track") == 2
+    assert commands.count("mount_park") == 1 and commands.count("mount_stop") == 1
+    assert commands.count("take_bracket") == 3
+    assert commands.count("take_picture") == 15                 # 6 single, 9 in the tight series
+    assert timeline.cameras == ["VirtualCamera"]
+    assert timeline.dropped == [] and timeline.late == []
+    assert timeline.unknown_moments == {}

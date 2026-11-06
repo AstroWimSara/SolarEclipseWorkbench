@@ -160,6 +160,23 @@ def test_no_sun_in_the_frame():
         Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0).run()
 
 
+def test_a_mount_at_the_pole_is_not_calibrated():
+    """INDI's telescope simulator starts at the pole: guiding east there does not move the sun."""
+    mount = FakeMount(dec_deg=90.0)
+    camera = SimulatedSunCamera(mount)
+    with pytest.raises(CalibrationError, match="celestial pole"):
+        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0).run()
+    assert mount.pulses == []
+
+
+def test_a_parked_mount_is_not_calibrated():
+    mount = FakeMount()
+    mount.parked = True
+    camera = SimulatedSunCamera(mount)
+    with pytest.raises(CalibrationError, match="parked"):
+        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0).run()
+
+
 def test_a_mount_that_does_not_move():
     mount = FakeMount(moves=False)
     camera = SimulatedSunCamera(mount)

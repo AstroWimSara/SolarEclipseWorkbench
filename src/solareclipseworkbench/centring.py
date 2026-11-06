@@ -100,6 +100,8 @@ class Calibration:
     fast_rate: Optional[str] = None
     fast_north: Optional[tuple] = None
     fast_east: Optional[tuple] = None
+    #: Mount it was made with (Mount.identity); another mount turns and moves the sun differently
+    mount: str = ""
 
     @property
     def matrix(self) -> np.ndarray:
@@ -164,10 +166,15 @@ class Calibration:
             moves["E" if east_ms > 0 else "W"] = float(abs(east_ms))
         return moves
 
-    def matches(self, frame_size: tuple, camera: str = "") -> bool:
-        """Whether this calibration is for frames of this size (and this camera, when both are known)."""
-        return tuple(frame_size) == tuple(self.frame_size) and (not camera or not self.camera
-                                                                  or camera == self.camera)
+    def matches(self, frame_size: tuple, camera: str = "", mount: Optional[str] = None) -> bool:
+        """Whether this calibration is for frames of this size (and this camera, when both are known).
+
+        When the mount is given, the calibration must have been made with that
+        mount: one made before the mount was recorded does not match either.
+        """
+        return (tuple(frame_size) == tuple(self.frame_size)
+                and (not camera or not self.camera or camera == self.camera)
+                and (mount is None or mount == self.mount))
 
     def describe(self) -> str:
         north_pps, east_pps = self.pixels_per_second()
@@ -395,6 +402,14 @@ class Calibrator:
 
     def run(self) -> Calibration:
         """Calibrate.  Raises CalibrationError with a message for the user when it cannot."""
+        position = _mount_value(self.mount, "position")
+        if position and position[1] is not None and abs(position[1]) >= POLE_DEC_DEG:
+            raise CalibrationError(
+                f"the mount points at the celestial pole (declination {position[1]:+.0f}°), its home position, not "
+                f"at the sun: guiding east and west would not move the sun.  Point the mount at the sun first "
+                f"(INDI's telescope simulator: sew_hardware, mount connect localhost, mount sun goto)")
+        if _mount_value(self.mount, "parked", False):
+            raise CalibrationError("the mount is parked: unpark it (Track) and point it at the sun first")
         self._say("looking for the sun")
         latest = self.frames.latest()
         start_x, start_y, fix = measure(self.frames, (latest[0] - 1e-6) if latest else 0.0,
@@ -418,7 +433,7 @@ class Calibrator:
         calibration = Calibration(north=tuple(map(float, north)), east=tuple(map(float, east)),
                                   frame_size=frame_size, radius=float(radius), camera=self.camera,
                                   warnings=warnings, fast_rate=fast_rate, fast_north=fast_north,
-                                  fast_east=fast_east)
+                                  fast_east=fast_east, mount=getattr(self.mount, "identity", ""))
         if calibration.skew_deg > MAX_SKEW_DEG:
             raise CalibrationError(
                 f"guiding north and guiding east moved the sun in nearly the same direction (the axes are "
@@ -474,10 +489,30 @@ MAX_FAILED_CORRECTIONS = 3
 #: calibration says the pulses move it (in that direction)
 MIN_CORRECTION_SHARE = 0.3
 
+#: A correction that moved the sun back by more than this share of the way it should have moved
+#: it (and by at least WRONG_WAY_PX) went the wrong way: the calibration is not for this mount or
+#: camera (any more), and the centring stops at once instead of pushing the sun further out
+WRONG_WAY_SHARE = -0.3
+WRONG_WAY_PX = 5.0
+
 #: Fixes kept for the running radius of the sun
 RADIUS_HISTORY = 10
 
 #: States of the centring
+#: A mount pointing closer to a celestial pole than this (in declination) does not point at the sun
+#: (it is in its home position): guiding east and west there only turns the view around the pole
+POLE_DEC_DEG = 85.0
+
+
+def _mount_value(mount, name: str, default=None):
+    """A property of the mount (parked, position()), or the default when the mount cannot tell."""
+    try:
+        value = getattr(mount, name, default)
+        return value() if callable(value) else value
+    except Exception:
+        return default
+
+
 OFF, LOOKING, CENTRED, CORRECTING, WAITING, PAUSED, NO_SUN, STOPPED = (
     "off", "looking", "centred", "correcting", "waiting for a gap", "paused", "no sun", "stopped")
 
@@ -601,8 +636,10 @@ class Centrer:
         return float(np.median(self._radii))
 
     def _set(self, state: str, message: str, **changes) -> None:
+        before = self.status
         self.status = CentringStatus(**{**asdict(self.status), "state": state, "message": message, **changes})
-        if state in (STOPPED, NO_SUN):
+        if state in (STOPPED, NO_SUN) and (before.state, before.message) != (state, message):
+            # Once: not again at every look while it lasts
             logger.warning("Centring: %s", message)
         else:
             logger.debug("Centring: %s", message)
@@ -617,6 +654,10 @@ class Centrer:
         if self.paused():
             self._before = self._expected = None
             self._set(PAUSED, "paused around totality: the mount just tracks")
+            return RECHECK_S
+        if _mount_value(self.mount, "parked", False):
+            self._before = self._expected = None
+            self._set(PAUSED, "the mount is parked: the centring waits until it tracks again")
             return RECHECK_S
 
         latest = self.frames.latest()
@@ -647,6 +688,12 @@ class Centrer:
         if self._expected is not None:
             moved = np.array((x, y)) - self._before
             share = float(np.dot(moved, self._expected) / np.dot(self._expected, self._expected))
+            if share < WRONG_WAY_SHARE and float(np.linalg.norm(self._expected)) * -share >= WRONG_WAY_PX:
+                logger.warning("Centring: the correction moved the sun the wrong way (%.0f%% of the way it should)",
+                               100 * share)
+                self._set(STOPPED, "the correction moved the sun the wrong way: the calibration is not for this "
+                                   "mount or camera (any more); calibrate again", **found)
+                return self.interval_s
             if share < MIN_CORRECTION_SHARE:
                 self._failed += 1
                 logger.info("Centring: the correction moved the sun %.0f%% of the way it should", 100 * share)

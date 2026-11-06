@@ -207,6 +207,34 @@ def test_the_pulses_wait_for_a_gap_between_shots(setup):
     assert len(mount.pulses) > before
 
 
+def test_a_parked_mount_is_not_centred(setup, caplog):
+    """mount_park in a script: the sun leaves the frame; wait, without warnings, until the mount tracks."""
+    mount, camera, calibration = setup
+    mount.parked = True
+    camera.offset = (3000, 0)                   # parked: pointing somewhere else
+    loop = centrer(mount, camera, calibration)
+    before = len(mount.pulses)
+    with caplog.at_level("WARNING"):
+        loop.step()
+        loop.step()
+    assert loop.status.state == PAUSED and "parked" in loop.status.message
+    assert len(mount.pulses) == before and not caplog.records
+    mount.parked = False
+    camera.offset = (0, 0)
+    loop.step()
+    assert loop.status.state == CORRECTING
+
+
+def test_no_sun_is_warned_about_once(setup, caplog):
+    mount, camera, calibration = setup
+    camera.offset = (3000, 0)
+    loop = centrer(mount, camera, calibration)
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            loop.step()
+    assert [r.getMessage() for r in caplog.records].count("Centring: the sun is not found in the live view") == 1
+
+
 def test_no_sun_no_pulses(setup):
     mount, camera, calibration = setup
     camera.offset = (3000, 0)
@@ -232,6 +260,33 @@ def test_a_wrong_calibration_is_given_up_on(setup):
             break
     assert loop.status.state == STOPPED
     assert "calibrate again" in loop.status.message
+
+
+def test_a_mirrored_calibration_stops_after_the_first_correction(setup):
+    """A calibration of another mount (north reversed): the first correction moves the sun away, so stop
+    at once rather than push it further out three times."""
+    mount, camera, calibration = setup
+    drift(mount, -240, 600)                     # north of the middle, where the mirror reverses the move
+    mirrored = Calibration(north=tuple(-v for v in calibration.north), east=calibration.east,
+                           frame_size=calibration.frame_size, radius=calibration.radius)
+    loop = centrer(mount, camera, mirrored)
+    loop.step()
+    assert loop.status.state == CORRECTING
+    loop.step()
+    assert loop.status.state == STOPPED
+    assert "wrong way" in loop.status.message and "calibrate again" in loop.status.message
+    assert loop.status.corrections == 1
+
+
+def test_a_calibration_knows_its_mount():
+    calibration = Calibration(north=(0.0, -0.01), east=(0.01, 0.0), frame_size=(960, 640), radius=60,
+                              camera="Canon EOS R", mount="iOptron HAE")
+    assert calibration.matches((960, 640), "Canon EOS R", "iOptron HAE")
+    assert calibration.matches((960, 640), "Canon EOS R")                 # mount not asked
+    assert not calibration.matches((960, 640), "Canon EOS R", "Telescope Simulator")
+    assert Calibration.from_json(calibration.to_json()).mount == "iOptron HAE"
+    old = Calibration.from_json(calibration.to_json().replace(', "mount": "iOptron HAE"', ""))
+    assert old.mount == "" and not old.matches((960, 640), "Canon EOS R", "iOptron HAE")
 
 
 def test_slow_capped_corrections_from_far_off_are_not_taken_for_failures(setup):

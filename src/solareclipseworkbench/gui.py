@@ -2199,6 +2199,10 @@ class SolarEclipseController(Observer):
             return (f"The calibration was made on frames of {calibration.frame_size[0]}×{calibration.frame_size[1]}"
                     f"{' of ' + calibration.camera if calibration.camera else ''}; the live view now shows "
                     f"{size[0]}×{size[1]} of {window._camera.name}.  Calibrate again.")
+        if not calibration.matches(size, window._camera.name, self.mount.identity):
+            made_with = f"with {calibration.mount}" if calibration.mount else "without recording the mount"
+            return (f"The calibration was made {made_with}; the mount now is {self.mount.identity}.  "
+                    f"Calibrate again.")
         return None
 
     def start_centring(self) -> Optional[str]:
@@ -3600,6 +3604,7 @@ class MountPopup(QWidget, Observable):
                 made = datetime.datetime.fromtimestamp(calibration.made).strftime("%Y-%m-%d %H:%M")
                 self.calibration_label.setText(f"Calibrated {made}"
                                                + (f" on {calibration.camera}" if calibration.camera else "")
+                                               + (f" with {calibration.mount}" if calibration.mount else "")
                                                + f": {calibration.describe()}")
         centrer = controller.centrer
         running = centrer is not None and centrer.running

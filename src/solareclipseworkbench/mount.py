@@ -112,6 +112,15 @@ class Mount:
         self._lock = threading.RLock()
         self._nudger: Optional["Nudger"] = None
 
+    @property
+    def identity(self) -> str:
+        """Which mount this is, for a calibration: the name INDI gives it, and whether it is sew's simulator.
+
+        sew's simulated mount and INDI's telescope simulator have the same name,
+        but turn the sun differently in the frame.
+        """
+        return f"{self.device} (simulated by sew)" if self._simulator is not None else self.device
+
     # ------------------------------------------------------------ connection
 
     @classmethod

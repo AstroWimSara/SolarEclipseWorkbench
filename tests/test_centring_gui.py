@@ -106,6 +106,7 @@ def test_calibrate_and_keep_the_sun_centred_from_the_mount_window(controller, mo
         calibration = controller.mount_calibration
         assert calibration is not None and calibration.frame_size == (960, 640)
         assert calibration.camera == "VirtualCamera"
+        assert calibration.mount == "Telescope Simulator (simulated by sew)"
         assert abs(calibration.angle_deg - 20) < 3                   # the simulated camera is turned 20°
         assert gui.SolarEclipseController._load_mount_calibration() == calibration     # kept in the settings
 
@@ -136,7 +137,7 @@ def test_no_correction_around_totality(controller, mount, monkeypatch):
     controller._show_live_view(VirtualCamera())
     assert _until(lambda: controller.live_view_frame_size() == (960, 640), 10)
     controller.mount_calibration = Calibration(north=(0.0, -0.05), east=(0.05, 0.0), frame_size=(960, 640),
-                                               radius=60, camera="VirtualCamera")
+                                               radius=60, camera="VirtualCamera", mount=mount.identity)
     monkeypatch.setattr(controller, "_live_view_paused_at", lambda now: True)
     assert controller.start_centring() is None
     assert _until(lambda: controller.centring_status().state == "paused", 10)
@@ -184,3 +185,16 @@ def test_the_images_follow_the_phase_by_c2_then_by_c3():
 
 def test_the_controller_gives_the_simulated_time_of_the_eclipse(controller):
     assert controller._eclipse_clock() is None                        # no contacts known
+
+
+def test_a_calibration_of_another_mount_is_not_used(controller, mount):
+    """INDI's telescope simulator has the same name as sew's, but mirrors the frame: its calibration
+    would push the sun further out (a calibration saved before the mount was recorded neither)."""
+    controller._show_live_view(VirtualCamera())
+    assert _until(lambda: controller.live_view_frame_size() == (960, 640), 10)
+    for other in ("Telescope Simulator", ""):
+        controller.mount_calibration = Calibration(north=(0.0, 0.05), east=(0.05, 0.0), frame_size=(960, 640),
+                                                   radius=60, camera="VirtualCamera", mount=other)
+        problem = controller.start_centring()
+        assert problem is not None and "Calibrate again" in problem and "simulated by sew" in problem
+        assert controller.centrer is None
