@@ -18,7 +18,8 @@ class FakeMount:
     ``axes`` sends a direction's pulses to another axis (a broken setup).
     """
 
-    def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True, fast=None):
+    def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True, fast=None,
+                 tick_s=0.0):
         self.ra_h, self.dec_deg = ra_h, dec_deg
         self.rate = rate
         self.scale = scale or {}
@@ -29,6 +30,8 @@ class FakeMount:
         self.fast = fast
         self.slew_rate = "1x"
         self.motions = []           # (direction, seconds) of the moves at a slew rate
+        #: Moves last whole steps of this length, as INDI's telescope simulator moves (0: exact)
+        self.tick_s = tick_s
         self._moving = {}           # direction → (time.monotonic() it started, rate)
 
     def slew_rates(self):
@@ -45,6 +48,8 @@ class FakeMount:
         if started is None:
             return
         seconds = time.monotonic() - started[0]
+        if self.tick_s:
+            seconds = math.floor(seconds / self.tick_s) * self.tick_s
         self.motions.append((direction, seconds))
         speed = {"1x": 15.0, "2x": self.fast, "3x": self.fast * 8}[started[1]]
         self._shift(direction, speed * seconds)

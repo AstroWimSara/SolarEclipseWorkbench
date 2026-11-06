@@ -459,6 +459,14 @@ COARSE_PX = 10.0
 #: Share of the offset a coarse move covers: not all, so it does not overshoot
 COARSE_GAIN = 0.85
 
+#: A move at the fast rate is only accurate when it is long compared with how fast the mount
+#: reacts (the serial link, the motors speeding up and slowing down; INDI's telescope simulator
+#: moves in steps of 250 ms).  Shorter corrections are guide pulses, which the driver times.
+MIN_COARSE_MS = 1000.0
+
+#: Within a fast move, an axis that would move less than this is left to the guide pulses
+MIN_COARSE_AXIS_MS = 250.0
+
 #: Corrections in a row that do not move the sun as they should before the centring gives up
 MAX_FAILED_CORRECTIONS = 3
 
@@ -655,7 +663,10 @@ class Centrer:
             return self.interval_s
 
         if distance > COARSE_PX and self.calibration.has_fast_rate and hasattr(self.mount, "nudge_start"):
-            return self._coarse_move(dx, dy, distance, found)
+            moves = {d: ms for d, ms in self.calibration.moves_for(-dx * COARSE_GAIN, -dy * COARSE_GAIN).items()
+                     if ms >= MIN_COARSE_AXIS_MS}
+            if moves and max(moves.values()) >= MIN_COARSE_MS:
+                return self._coarse_move(moves, dx, dy, distance, found)
 
         pulses = self.calibration.pulses_for(-dx * self.gain, -dy * self.gain)
         pulses = {d: min(ms, self.max_correction_ms) for d, ms in pulses.items() if ms >= 50}
@@ -699,12 +710,9 @@ class Centrer:
                 self._stop.wait(max(chunk.values()) / 1000.0)
             remaining = {d: ms - chunk[d] for d, ms in remaining.items() if ms - chunk[d] >= 50}
 
-    def _coarse_move(self, dx: float, dy: float, distance: float, found: dict) -> float:
-        """Move most of the way at the fast slew rate."""
+    def _coarse_move(self, moves: dict, dx: float, dy: float, distance: float, found: dict) -> float:
+        """Move most of the way at the fast slew rate: {direction: milliseconds}."""
         calibration = self.calibration
-        moves = calibration.moves_for(-dx * COARSE_GAIN, -dy * COARSE_GAIN)
-        if not moves:
-            return RECHECK_S
         busy_s = max(moves.values()) / 1000.0 + self.settle_s
         if not self.quiet(busy_s):
             self._set(WAITING, f"{distance:.1f} px off: waiting for a gap of {busy_s:.0f} s between the shots",
@@ -726,8 +734,9 @@ class Centrer:
                 started.append(direction)
             # Stop each axis after its own time, the shortest first
             for direction, ms in sorted(moves.items(), key=lambda item: item[1]):
+                # Always timed for real: unlike a guide pulse, nothing but this stops the move
                 wait = begin + ms / 1000.0 - time.monotonic()
-                if self.wait_for_pulses and wait > 0:
+                if wait > 0:
                     self._stop.wait(wait)
                 mount.nudge_stop(direction)
                 started.remove(direction)

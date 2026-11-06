@@ -80,6 +80,13 @@ simulator found and fixed (TELESCOPE_TRACK_STATE and TELESCOPE_MOTION_* stay Bus
 tracking/moving; a second indiserver needs its own -u socket).  INDI's simulator starts at
 the pole (point it at the sun first) and moves south for "north".
 
+Found in the user's first stage-1 test: with INDI's simulator, whose Centering rate moves
+the sun ~110 px/s in 250 ms steps, coarse moves of 0.1 s did nothing or a whole step, the
+sun bounced and the centring gave up ("calibrate again").  Fixed: a fast move is only made
+when it lasts at least 1 s (an axis under 0.25 s is left to the guide pulses); shorter
+corrections are guide pulses, which the driver times.  The fake test mount can now move in
+steps (tick_s) to cover this.
+
 Open for the HAZ31 (alt-az): which driver, whether guide pulses work in alt-az mode, and
 whether they move in RA/Dec (then the calibration must turn with the field rotation).
 

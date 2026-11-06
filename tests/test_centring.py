@@ -129,7 +129,7 @@ def test_far_off_the_sun_is_moved_at_the_fast_rate_first():
     camera = SimulatedSunCamera(mount, rotation_deg=-30)
     calibration = calibrate(mount, camera)
     assert calibration.has_fast_rate
-    drift(mount, 1200, -800)                    # about 90 px off
+    drift(mount, 2400, -1600)                   # about 180 px off: more than a second at the fast rate
     loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: the moves are timed
     before = len(mount.motions)
     for _ in range(6):
@@ -140,6 +140,38 @@ def test_far_off_the_sun_is_moved_at_the_fast_rate_first():
     assert len(mount.motions) > before          # moved at the fast rate
     assert mount.slew_rate == "1x"              # and put the rate back
     assert off_centre(camera, calibration) <= 2.0
+
+
+def test_a_fast_rate_that_moves_in_steps_is_not_used_for_short_moves():
+    """INDI's telescope simulator: its Centering rate moves the sun 110 px a second, in steps of 250 ms.
+
+    Moves of 0.1 s then do nothing or a whole step: the sun bounced between 12 and 15 px off and
+    the centring gave up.  Short corrections must be guide pulses.
+    """
+    mount = FakeMount(rate=7.5, fast=1800, tick_s=0.25)     # guiding 0.47 px/s, the fast rate 112 px/s
+    camera = SimulatedSunCamera(mount, rotation_deg=20)
+    calibration = calibrate(mount, camera)
+    assert calibration.has_fast_rate
+    for push in ((250, 0), (0, -400), (-600, 300)):           # 15 to 40 px off: less than a second fast
+        drift(mount, *push)
+        loop = Centrer(mount, camera, calibration, settle_s=0.0, wait_for_pulses=False)
+        before = len(mount.motions)
+        for _ in range(8):
+            loop.step()
+            if loop.status.state in (CENTRED, STOPPED):
+                break
+        assert loop.status.state == CENTRED, loop.status.message
+        assert len(mount.motions) == before                    # no fast moves
+        assert off_centre(camera, calibration) <= 2.0
+    drift(mount, 2500, 2500)                                    # 220 px off: a fast move first
+    loop = Centrer(mount, camera, calibration, settle_s=0.0, wait_for_pulses=False)
+    before = len(mount.motions)
+    for _ in range(10):
+        loop.step()
+        if loop.status.state in (CENTRED, STOPPED):
+            break
+    assert loop.status.state == CENTRED, loop.status.message
+    assert len(mount.motions) > before
 
 
 # --------------------------------------------------------- when not to guide

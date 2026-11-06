@@ -68,13 +68,13 @@ Setup: `sudo apt install indi-bin`.
 | 1.10 A server that runs already | `indiserver indi_simulator_telescope` in a terminal, then **Connect** with **Start the INDI server** ticked | "(the INDI server that already ran is used)"; **Disconnect** leaves it running |
 | 1.11 Server gone | Stop `indiserver` (Ctrl-C in its terminal) while connected | Status says the connection is lost; buttons disabled; no crash |
 | 1.12 Location change | Connected, change the location in the `Location` window | The new location in `GEOGRAPHIC_COORD` |
-| 1.13 Driver not installed | Choose a model marked "(driver not installed)" → **Connect** | A message that the driver is not installed, and in which package it may be |
+| 1.13 Driver not installed | Only when the list has a model marked "(driver not installed)": choose it → **Connect**.  With Ubuntu's `indi-bin` every model is installed, so there is none: skip this check | A message that the driver is not installed, and in which package it may be |
 | 1.N1 Rates | Connected, look at the speed list next to the nudge buttons | Guide, Centering, Find, Max |
 | 1.N2 Nudge | Hold **▲ N** for 3 s at each speed | The position changes while held (south, see above) and stops when released; faster at a faster speed |
 | 1.N3 Lost release | Hold **E ▶**, move the mouse off the button and release it outside the window; or close the window while holding | The mount stops within a second |
 | 1.N4 Stop | Start a **Park**, then click **Stop** next to the nudge buttons | The park stops |
 | 1.N5 Phone | Phone dashboard, `Mount` panel: hold the buttons | As 1.N2; switch the phone's Wi-Fi off while holding: the mount stops within about a second |
-| 1.S1 Calibrate and centre | After 1.3, open `Live View` on the virtual camera (it shows the sun where the mount points), **Calibrate**, then **Keep the sun centred**; nudge the sun away | Calibration in about 1.5 minutes ("… mirrored …; at the 2x rate …"); the sun is centred in one or two corrections and brought back after a nudge |
+| 1.S1 Calibrate and centre | After 1.3, open `Live View` on the virtual camera (it shows the sun where the mount points), **Calibrate**, then **Keep the sun centred**; nudge the sun away | Calibration in about 1.5 minutes ("… mirrored …; at the 2x rate about 110 px a second").  The sun comes back in three or four guide corrections, about a minute for 30 px: this simulator's Centering rate is so fast that only offsets of more than about 110 px are moved at it first.  Never "calibrate again" |
 | 1.S2 Script | A script with `mount_track` and `mount_park` a minute apart, run as a simulation | Both run at their time; `Mount: track the sun` in the job list |
 | 1.C Bench console | `sew_hardware --debug`, `mount start indi_simulator_telescope`, `mount sun goto`, `mount guide N 1000`, `mount status` | Same results; every XML element is logged |
 
