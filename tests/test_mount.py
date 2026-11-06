@@ -335,3 +335,20 @@ def test_the_example_script_for_the_mount_loads():
     assert timeline.cameras == ["VirtualCamera"]
     assert timeline.dropped == [] and timeline.late == []
     assert timeline.unknown_moments == {}
+
+
+def test_position_updates_do_not_flood_the_debug_log(caplog):
+    """Drivers send the position several times a second: with --debug that buried everything else."""
+    import logging
+
+    client = IndiClient.__new__(IndiClient)
+    client._logged = {}
+    with caplog.at_level(logging.DEBUG, logger="solareclipseworkbench.indi_client"):
+        logged = [client._worth_logging("Number", "Mount", "EQUATORIAL_EOD_COORD", "Ok", "") for _ in range(20)]
+        assert logged == [True] + [False] * 19
+        assert client._worth_logging("Number", "Mount", "EQUATORIAL_EOD_COORD", "Busy", "")     # a slew starts
+        assert client._worth_logging("Number", "Mount", "EQUATORIAL_EOD_COORD", "Busy", "slewing")  # a message
+        assert client._worth_logging("Switch", "Mount", "TELESCOPE_PARK", "Ok", "")
+        assert client._worth_logging("Switch", "Mount", "TELESCOPE_PARK", "Ok", "")          # switches: always
+    with caplog.at_level(logging.INFO, logger="solareclipseworkbench.indi_client"):
+        assert not client._worth_logging("Switch", "Mount", "TELESCOPE_PARK", "Ok", "")      # no debug: nothing

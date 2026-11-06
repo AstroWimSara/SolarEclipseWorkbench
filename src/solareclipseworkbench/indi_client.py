@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 7624
 
+#: Seconds between debug lines of a number property that keeps updating without changing its state
+LOG_REPEAT_S = 10.0
+
 #: Property states, as INDI spells them
 IDLE, OK, BUSY, ALERT = "Idle", "Ok", "Busy", "Alert"
 
@@ -142,6 +145,7 @@ class IndiClient:
         self._cond = threading.Condition()
         self._send_lock = threading.Lock()
         self._last_definition = 0.0
+        self._logged: dict = {}             # (device, name) → (state, time.monotonic()) of the last debug line
         self._closed = False
         self.messages: list = []            # (time, device, message), the last 50
         try:
@@ -338,8 +342,22 @@ class IndiClient:
                             prop.values[child.attrib.get("name", "")] = _element_value(kind, child.text)
                     prop.updates += 1
                     self._cond.notify_all()
-                logger.debug("INDI ← %s.%s %s %s", device, name, prop.state, prop.values)
+                if self._worth_logging(kind, device, name, prop.state, message):
+                    logger.debug("INDI ← %s.%s %s %s", device, name, prop.state, prop.values)
                 return
+
+    def _worth_logging(self, kind: str, device: str, name: str, state: str, message: str) -> bool:
+        """Whether to log an update.  Drivers send the position and the axes several times a second:
+        an update of numbers that does not change the state is logged once every LOG_REPEAT_S."""
+        if not logger.isEnabledFor(logging.DEBUG):
+            return False
+        now = time.monotonic()
+        last = self._logged.get((device, name))
+        if kind == "Number" and not message and last is not None and last[0] == state \
+                and now - last[1] < LOG_REPEAT_S:
+            return False
+        self._logged[(device, name)] = (state, now)
+        return True
 
     def _remember_message(self, device: str, message: str) -> None:
         logger.info("INDI %s: %s", device or "server", message)
