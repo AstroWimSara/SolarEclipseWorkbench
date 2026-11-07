@@ -1,4 +1,4 @@
-"""The Camera(s) button says why it is off while a script is loaded."""
+"""The Camera(s) button says why it is off, and the no-camera dialog says how to use the VirtualCamera."""
 
 import os
 import sys
@@ -70,3 +70,13 @@ def test_stop_gives_the_button_its_normal_tooltip_again(controller, tmp_path, mo
 
     assert controller.view.camera_action.isEnabled()
     assert controller.view.camera_action.toolTip() == CAMERA_TOOLTIP
+
+
+def test_the_no_camera_dialog_names_the_flags_for_the_virtual_camera(controller, monkeypatch):
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text, *args: shown.append(text))
+
+    controller._open_live_view()
+
+    assert len(shown) == 1
+    assert "sew --sim --virtual-camera" in shown[0]

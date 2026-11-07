@@ -2117,8 +2117,10 @@ class SolarEclipseController(Observer):
                 self.view,
                 "No Camera Connected",
                 "Live view requires a connected camera.\n\n"
-                "Click the Camera(s) button first to detect connected cameras.\n"
-                "In simulator mode the VirtualCamera is also supported."
+                "Click the Camera(s) button first to detect connected cameras.\n\n"
+                "To use live view without a camera, start the application with\n"
+                "    sew --sim --virtual-camera\n"
+                "and click the Camera(s) button. The VirtualCamera is then shown."
             )
             return
 
