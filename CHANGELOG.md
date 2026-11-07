@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - The Sun was not the same size everywhere: the check for when the Moon's bite becomes visible after C1 and before C4 used 959.63", while the contact times and the drawing of the eclipse used 959.95".  Everything now uses the selected solar radius (Issue #197)
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
+- In simulation mode, the countdowns and the eclipse drawing did not follow the `Starting time` window.  They showed the real time until a script was loaded, and kept the previous simulation when it was changed.  They now change when `OK` is clicked.  While a loaded script has jobs, they keep the times of those jobs, and the new simulation starts with the next script - by @mrosseel
 
 ## [2.0.0] - 2026-11-03
 

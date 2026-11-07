@@ -1724,6 +1724,7 @@ class SolarEclipseController(Observer):
             self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
             self.sim_offset_minutes = (int(changed_object.offset_minutes.text())
                                        * BEFORE_AFTER[changed_object.before_after_combobox.currentText()])
+            self._apply_simulation_offset()
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -2575,6 +2576,27 @@ class SolarEclipseController(Observer):
             "live_camera": live["camera"] if live else "",
             "live_switch": not self._live_view_paused_at(reference_now),
         }
+
+    def _apply_simulation_offset(self):
+        """ Move the countdowns and the eclipse visualization to the simulated time.
+
+        The contact times do not change: they depend on the location and the date, not on the simulation.  Only
+        the current time changes.  While a loaded script has jobs, the offset stays as it is: the jobs keep the
+        times they were scheduled at, and the countdowns must agree with them.  The new simulation is then used
+        when the next script is loaded.
+        """
+
+        # Imported here, because the utils module imports this module
+        from solareclipseworkbench.utils import simulation_offset
+
+        if self.scheduler is not None and self.scheduler.running and self.scheduler.get_jobs():
+            LOGGER.info("The loaded script keeps its times; the new simulation starts with the next script")
+            return
+
+        offset = simulation_offset(self.model.reference_moments, self.sim_reference_moment, self.sim_offset_minutes)
+        self.view.eclipse_visualization.set_offset(offset)
+        LOGGER.info("Simulation: %s in %s minutes", self.sim_reference_moment, self.sim_offset_minutes)
+        self.update_time()
 
     def _shutdown_scheduler(self):
         """Safely shut down the scheduler and update UI."""
