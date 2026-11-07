@@ -34,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - README: a `What it does` section at the top explains what Solar Eclipse Workbench does and links to the posts about it on the Deep Sky Wim blog.  The notice about pre-release 2.0.0rc5 and `pip install --pre` is replaced by a short note that versions older than 2.0.0 calculate shutter speeds that are too long below 5 degrees solar altitude (Issue #194)
 - The `Baily's beads` window animates smoothly near second and third contact: within two minutes of C2 and C3 it is redrawn every 150 ms instead of once a second, so the beads, which last only a few seconds, no longer show as a few still images.  Further from the contacts, with the window closed, or in low-CPU mode nothing changes (PR #196)
 - Log timestamps are ISO 8601 (`2026-08-12T17:46:38.123Z`): the log file now writes the `T` between date and time, and the console shows the same UTC time with milliseconds instead of local time.  The run report still reads the logs of 2.0.0 (Issue #191)
+- The dates, times, countdowns, azimuths and altitudes in the main window use the fixed-width system font, in the `Local` and the `UTC` columns.  A countdown no longer moves sideways when it changes, and the times in a column line up - by @mrosseel
 
 ### Fixed
 

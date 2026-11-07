@@ -24,7 +24,7 @@ import pytz
 from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
                          QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
-    QFontMetrics
+    QFontMetrics, QFontDatabase
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
 QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle, \
@@ -702,6 +702,25 @@ class SolarEclipseView(QMainWindow, Observable):
         self.statusBar().showMessage(message, SAVE_MESSAGE_TIMEOUT)
         return True
 
+    def number_labels(self) -> tuple:
+        """ Return the labels that show dates, times, countdowns and angles. """
+
+        return (self.date_label_local, self.date_label_utc, self.time_label_local, self.time_label_utc,
+                self.c1_time_local_label, self.c2_time_local_label, self.max_time_local_label,
+                self.c3_time_local_label, self.c4_time_local_label, self.sunrise_time_local_label,
+                self.sunset_time_local_label,
+                self.c1_time_utc_label, self.c2_time_utc_label, self.max_time_utc_label,
+                self.c3_time_utc_label, self.c4_time_utc_label, self.sunrise_time_utc_label,
+                self.sunset_time_utc_label,
+                self.c1_countdown_label, self.c2_countdown_label, self.max_countdown_label,
+                self.c3_countdown_label, self.c4_countdown_label, self.sunrise_countdown_label,
+                self.sunset_countdown_label,
+                self.c1_azimuth_label, self.c2_azimuth_label, self.max_azimuth_label,
+                self.c3_azimuth_label, self.c4_azimuth_label,
+                self.c1_altitude_label, self.c2_altitude_label, self.max_altitude_label,
+                self.c3_altitude_label, self.c4_altitude_label,
+                self.beads_c2_label, self.beads_c3_label)
+
     def save_layout_settings(self):
         """ Save the position of the splitter between the eclipse plot and the jobs table, and how the jobs
         table shows the commands. """
@@ -836,6 +855,12 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.solar_radius_combo, 11, 1, 1, 4)
         reference_moments_grid_layout.addWidget(self.solar_radius_spinbox, 11, 5)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
+        # The dates, times, countdowns and angles use the fixed-width system font.  In a proportional font each
+        # digit has its own width, so a countdown moves sideways when it changes and the times in a column do
+        # not line up.
+        fixed_width_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        for label in self.number_labels():
+            label.setFont(fixed_width_font)
         # At least 600 pixels, but wider when a larger font needs it, so the row
         # titles are never cut off.  The countdown column is sized for its widest
         # value, so the box does not change width while counting down.
