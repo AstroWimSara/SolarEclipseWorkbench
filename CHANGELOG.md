@@ -34,11 +34,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - README: a `What it does` section at the top explains what Solar Eclipse Workbench does and links to the posts about it on the Deep Sky Wim blog.  The notice about pre-release 2.0.0rc5 and `pip install --pre` is replaced by a short note that versions older than 2.0.0 calculate shutter speeds that are too long below 5 degrees solar altitude (Issue #194)
 - The `Baily's beads` window animates smoothly near second and third contact: within two minutes of C2 and C3 it is redrawn every 150 ms instead of once a second, so the beads, which last only a few seconds, no longer show as a few still images.  Further from the contacts, with the window closed, or in low-CPU mode nothing changes (PR #196)
 - Log timestamps are ISO 8601 (`2026-08-12T17:46:38.123Z`): the log file now writes the `T` between date and time, and the console shows the same UTC time with milliseconds instead of local time.  The run report still reads the logs of 2.0.0 (Issue #191)
+- The dates, times, countdowns, azimuths and altitudes in the main window use the fixed-width system font, in the `Local` and the `UTC` columns.  A countdown no longer moves sideways when it changes, and the times in a column line up - by @mrosseel
 
 ### Fixed
 
 - The Sun was not the same size everywhere: the check for when the Moon's bite becomes visible after C1 and before C4 used 959.63", while the contact times and the drawing of the eclipse used 959.95".  Everything now uses the selected solar radius (Issue #197)
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
+- In simulation mode, the countdowns and the eclipse drawing did not follow the `Starting time` window.  They showed the real time until a script was loaded, and kept the previous simulation when it was changed.  They now change when `OK` is clicked.  While a loaded script has jobs, they keep the times of those jobs, and the new simulation starts with the next script - by @mrosseel
+- The `Camera(s)` button is off while a script is loaded, but did not say why.  Its tooltip now says why and that `Stop` turns it on again - by @mrosseel
+- When no camera is connected, the `Live View` warning now gives the command to use the VirtualCamera: `sew --sim --virtual-camera` - by @mrosseel
 
 ## [2.0.0] - 2026-11-03
 
