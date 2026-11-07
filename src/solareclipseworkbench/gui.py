@@ -97,6 +97,11 @@ LIMB_CORRECTION_LOCKED_TOOLTIP = (
     "The lunar limb correction cannot be changed while a script has pending "
     "jobs. Stop the scheduler first, then change the correction and reload the script."
 )
+CAMERA_TOOLTIP = "Detect the connected cameras"
+CAMERA_LOCKED_TOOLTIP = (
+    "Camera detection is off while a script is loaded, because it can interrupt "
+    "the scheduled commands. Click Stop to turn it on again."
+)
 
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
@@ -931,6 +936,7 @@ class SolarEclipseView(QMainWindow, Observable):
         # Camera(s)
 
         self.camera_action.setStatusTip("Camera(s)")
+        self.camera_action.setToolTip(CAMERA_TOOLTIP)
         self.camera_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
         self.camera_action.triggered.connect(self.on_toolbar_button_click)
         self.toolbar.addAction(self.camera_action)
@@ -1913,6 +1919,7 @@ class SolarEclipseController(Observer):
                 self.view.jobs_table.resizeColumnsToContents()
 
                 self.view.camera_action.setDisabled(True)
+                self.view.camera_action.setToolTip(CAMERA_LOCKED_TOOLTIP)
 
                 n_jobs = len(self.scheduler.get_jobs())
                 self._set_limb_correction_locked(n_jobs > 0)
@@ -2606,6 +2613,7 @@ class SolarEclipseController(Observer):
                 if self.jobs_model:
                     self.jobs_model.clear_jobs_overview()
                 self.view.camera_action.setEnabled(True)
+                self.view.camera_action.setToolTip(CAMERA_TOOLTIP)
                 LOGGER.info("Scheduler stopped by user")
                 self.model.camera_overview.set_continuous_mode_commands(None)
         except SchedulerNotRunningError:
