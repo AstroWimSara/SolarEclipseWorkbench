@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - The Sun was not the same size everywhere: the check for when the Moon's bite becomes visible after C1 and before C4 used 959.63", while the contact times and the drawing of the eclipse used 959.95".  Everything now uses the selected solar radius (Issue #197)
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
+- An error in a button or another part of the interface no longer ends the application: PyQt6 aborted the process, and the schedule with it.  The error and its traceback now go to the log, and the schedule keeps running.  One Ctrl-C now ends the application, also with a dialog open or a command in progress, and the relay contacts are opened first.  `Stop` no longer waits for the command in progress, so the window does not freeze.  A native crash writes the stack of every thread to `solareclipseworkbench-crash.log` in the log directory - by @mrosseel
 
 ## [2.0.0] - 2026-11-03
 
