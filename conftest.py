@@ -1,5 +1,6 @@
 """Shared pytest setup for the root-level and tests/ suites."""
 
+import logging
 import os
 import sys
 
@@ -24,3 +25,17 @@ def qapp():
 
     app = QApplication.instance() or QApplication(sys.argv)
     yield app
+
+
+@pytest.fixture(autouse=True)
+def remove_error_log_handlers():
+    """Remove the Error Log handler of each main window that a test did not close.
+
+    A main window adds this handler to the root logger, and removes it only when the window closes.
+    """
+    yield
+    gui = sys.modules.get("solareclipseworkbench.gui")
+    if gui is not None:
+        root = logging.getLogger()
+        for handler in [handler for handler in root.handlers if isinstance(handler, gui.ErrorLogHandler)]:
+            root.removeHandler(handler)

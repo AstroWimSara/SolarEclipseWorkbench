@@ -28,7 +28,7 @@ from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QIm
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
 QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QCheckBox, QSizePolicy, QStyle, \
-QDoubleSpinBox, QDockWidget, QMenu
+QDoubleSpinBox, QDockWidget, QMenu, QTableWidget, QTableWidgetItem, QHeaderView
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -127,6 +127,8 @@ JOBS_COMMAND_STYLE_KEY = "jobs_command_style"
 DOCK_STATE_KEY = "dock_state"
 DOCK_STATE_VERSION = 1
 
+ERROR_LOG_MAX_ROWS = 500  # The Error Log dock removes the oldest rows above this number
+
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 
 
@@ -199,6 +201,114 @@ class BannerNotification(QFrame):
             self.dismissed = False
         self.setText(text)
         self.setVisible(not self.dismissed)
+
+
+class ErrorLogHandler(logging.Handler):
+    """ Logging handler that sends each warning and error to the Error Log dock.
+
+    Records come from any thread.  The handler only emits a Qt signal, so the dock is updated on the GUI thread.
+    """
+
+    # Code that silences the console while a noisy library runs keeps this handler (see file_handlers_only)
+    keep_when_quiet = True
+
+    def __init__(self, dock: "ErrorLogDock"):
+        super().__init__(level=logging.WARNING)
+        self.dock = dock
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            when = datetime.datetime.fromtimestamp(record.created, tz=datetime.timezone.utc).strftime("%H:%M:%S")
+            self.dock.record_logged.emit(when, record.levelname, record.getMessage())
+        except RuntimeError:
+            # The dock is deleted: its window was deleted without a close
+            pass
+        except Exception:
+            self.handleError(record)
+
+
+class ErrorLogDock(QDockWidget):
+    """ Dock with each warning and error of the run, from any logger: time (UTC), level and message. """
+
+    # Time, level and message of a record (emitted by the ErrorLogHandler, from any thread)
+    record_logged = pyqtSignal(str, str, str)
+    # Number of records that came in while the dock was not visible
+    new_count_changed = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__("Error Log", parent)
+        self.setObjectName("error_log_dock")
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Time (UTC)", "Level", "Message"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setWordWrap(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.setToolTip("Remove all lines from the Error Log")
+        self.clear_button.clicked.connect(self.clear)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.clear_button)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.table)
+        layout.addLayout(buttons)
+        body = QWidget()
+        body.setLayout(layout)
+        self.setWidget(body)
+
+        self.new_count = 0
+        self.handler = ErrorLogHandler(self)
+        # Queued also for a record from the GUI thread, so the lines are in the order in which they were logged
+        self.record_logged.connect(self.add_record, Qt.ConnectionType.QueuedConnection)
+        self.visibilityChanged.connect(self.on_visibility_changed)
+
+    def add_record(self, when: str, level: str, message: str):
+        """ Add a line to the Error Log, and remove the oldest lines above ERROR_LOG_MAX_ROWS.
+
+        Only the first line of the message is in the table.  The tooltip has the full message.
+        """
+
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        for column, text in enumerate((when, level, message.split("\n")[0])):
+            item = QTableWidgetItem(text)
+            item.setToolTip(message)
+            self.table.setItem(row, column, item)
+        while self.table.rowCount() > ERROR_LOG_MAX_ROWS:
+            self.table.removeRow(0)
+        self.table.scrollToBottom()
+
+        if not self.isVisible():
+            self.new_count += 1
+            self.new_count_changed.emit(self.new_count)
+
+    def clear(self):
+        """ Remove all lines from the Error Log. """
+
+        self.table.setRowCount(0)
+        self.reset_new_count()
+
+    def reset_new_count(self):
+        """ Set the number of new records to zero. """
+
+        if self.new_count:
+            self.new_count = 0
+            self.new_count_changed.emit(0)
+
+    def on_visibility_changed(self, visible: bool):
+        """ The records are seen when the dock is shown, so they are no longer new. """
+
+        if visible:
+            self.reset_new_count()
 
 
 class SolarEclipseModel:
@@ -479,6 +589,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
         self.phone_dashboard_action = QAction("Phone", self)
+        self.error_log_action = QAction("Error Log", self)
 
         self.place_time_frame = QFrame()
 
@@ -729,7 +840,8 @@ class SolarEclipseView(QMainWindow, Observable):
         """ Put every dock in its default place, with its default size, and show it.
 
         The default layout is the window without docks: the date, time and place, the reference moments and the
-        cameras in a row at the top, the eclipse plot at the left, and the jobs table in the rest.
+        cameras in a row at the top, the eclipse plot at the left, and the jobs table in the rest.  The Error Log is
+        at the bottom and hidden: the Error Log button in the toolbar shows it.
         """
 
         for dock in (self.time_place_dock, self.moments_dock, self.camera_dock):
@@ -739,6 +851,9 @@ class SolarEclipseView(QMainWindow, Observable):
         self.plot_dock.setFloating(False)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.plot_dock)
         self.plot_dock.show()
+        self.error_log_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.error_log_dock)
+        self.error_log_dock.hide()
         # The row at the top is as high as the reference moments need, the plot gets a third of the width, and
         # the jobs table the rest
         self.resizeDocks([self.moments_dock], [self.moments_dock.sizeHint().height()], Qt.Orientation.Vertical)
@@ -899,6 +1014,10 @@ class SolarEclipseView(QMainWindow, Observable):
         self.plot_dock.setObjectName("plot_dock")
         self.plot_dock.setWidget(self.eclipse_visualization)
 
+        # Each warning and error of the run, from any logger.  The handler is removed again when the window closes.
+        self.error_log_dock = ErrorLogDock(self)
+        self.add_error_log_handler()
+
         # The exposure compensation sits right above the jobs it changes
         exposure_hbox = QHBoxLayout()
         exposure_hbox.setContentsMargins(0, 0, 0, 0)
@@ -931,13 +1050,14 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.arrange_docks()
         self.add_panels_menu()
+        self.add_error_log_button()
 
     def add_panels_menu(self):
         """ Add the Panels button to the toolbar: show or hide each dock, or put all docks back in their default
         place. """
 
         menu = QMenu("Panels", self)
-        for dock in (self.time_place_dock, self.moments_dock, self.camera_dock, self.plot_dock):
+        for dock in (self.time_place_dock, self.moments_dock, self.camera_dock, self.plot_dock, self.error_log_dock):
             menu.addAction(dock.toggleViewAction())
         menu.addSeparator()
         self.reset_layout_action = menu.addAction("Reset layout")
@@ -950,6 +1070,36 @@ class SolarEclipseView(QMainWindow, Observable):
         self.panels_button.setMenu(menu)
         self.panels_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.toolbar.addWidget(self.panels_button)
+
+    def add_error_log_button(self):
+        """ Add the Error Log button to the toolbar: it shows the Error Log dock, and the number of new warnings and
+        errors in its text. """
+
+        self.error_log_action.setStatusTip("Show each warning and error of this run")
+        self.error_log_action.triggered.connect(self.show_error_log)
+        self.error_log_dock.new_count_changed.connect(self.show_error_log_count)
+        self.toolbar.addAction(self.error_log_action)
+
+    def show_error_log(self):
+        """ Show the Error Log dock, in front of a dock that it shares a tab bar with. """
+
+        self.error_log_dock.show()
+        self.error_log_dock.raise_()
+
+    def show_error_log_count(self, count: int):
+        """ Show the number of new warnings and errors in the text of the Error Log button. """
+
+        self.error_log_action.setText(f"Error Log ({count})" if count else "Error Log")
+
+    def add_error_log_handler(self):
+        """ Send each warning and error from any logger to the Error Log dock. """
+
+        logging.getLogger().addHandler(self.error_log_dock.handler)
+
+    def remove_error_log_handler(self):
+        """ Stop sending warnings and errors to the Error Log dock. """
+
+        logging.getLogger().removeHandler(self.error_log_dock.handler)
 
     def add_toolbar(self):
         """ Create the toolbar of the UI.
@@ -1335,6 +1485,7 @@ class SolarEclipseView(QMainWindow, Observable):
             # Notify controller so it can clean up cameras, scheduler, etc.
             self.notify_observers(close_event)
             self.save_layout_settings()
+            self.remove_error_log_handler()
             close_event.accept()
         else:
             close_event.ignore()
