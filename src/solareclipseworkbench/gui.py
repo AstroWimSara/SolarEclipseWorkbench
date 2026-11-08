@@ -22,13 +22,13 @@ import numpy as np
 import pandas as pd
 import pytz
 from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
-                         QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice)
+                         QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice, QByteArray)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
     QFontMetrics
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle, \
-QDoubleSpinBox
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QCheckBox, QSizePolicy, QStyle, \
+QDoubleSpinBox, QDockWidget, QMenu
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -121,6 +121,11 @@ JOBS_COMMAND_STYLES = {
 }
 DEFAULT_JOBS_COMMAND_STYLE = "words"
 JOBS_COMMAND_STYLE_KEY = "jobs_command_style"
+
+# Where the docks of the main window are, as saved by QMainWindow.saveState().  Increase the version when the docks
+# change so much that an old saved layout no longer makes sense: the window then starts with the default layout.
+DOCK_STATE_KEY = "dock_state"
+DOCK_STATE_VERSION = 1
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 
@@ -642,7 +647,7 @@ class SolarEclipseView(QMainWindow, Observable):
             - Eclipse date;
             - Date format;
             - Time format;
-            - Position of the splitter between the eclipse plot and the jobs table;
+            - Where the docks are;
             - How the jobs table shows the commands (in words or as in the script).
 
         The outcome is shown in the status bar and logged (Issue #181).
@@ -698,25 +703,54 @@ class SolarEclipseView(QMainWindow, Observable):
         return True
 
     def save_layout_settings(self):
-        """ Save the position of the splitter between the eclipse plot and the jobs table, and how the jobs
-        table shows the commands. """
+        """ Save where the docks are, and how the jobs table shows the commands. """
 
         settings = getattr(self, "settings", None)
         if settings is not None:
-            settings.setValue("output_splitter_state", self.output_splitter.saveState())
+            settings.setValue(DOCK_STATE_KEY, self.saveState(DOCK_STATE_VERSION))
             settings.setValue(JOBS_COMMAND_STYLE_KEY, self.jobs_command_style)
 
     def restore_layout_settings(self):
-        """ Restore the position of the splitter between the eclipse plot and the jobs table, and how the jobs
-        table shows the commands. """
+        """ Restore where the docks are, and how the jobs table shows the commands.
+
+        A saved layout that cannot be restored (e.g. from another version) gives the default layout.
+        """
 
         settings = getattr(self, "settings", None)
         if settings is None:
             return
-        state = settings.value("output_splitter_state", None)
-        if state is not None:
-            self.output_splitter.restoreState(state)
+        state = settings.value(DOCK_STATE_KEY, None)
+        if state is not None and not (isinstance(state, QByteArray) and self.restoreState(state, DOCK_STATE_VERSION)):
+            LOGGER.warning("The saved layout of the main window cannot be restored, so the default layout is used")
+            self.arrange_docks()
         self.set_jobs_command_style(settings.value(JOBS_COMMAND_STYLE_KEY, DEFAULT_JOBS_COMMAND_STYLE, type=str))
+
+    def arrange_docks(self):
+        """ Put every dock in its default place, with its default size, and show it.
+
+        The default layout is the window without docks: the date, time and place, the reference moments and the
+        cameras in a row at the top, the eclipse plot at the left, and the jobs table in the rest.
+        """
+
+        for dock in (self.time_place_dock, self.moments_dock, self.camera_dock):
+            dock.setFloating(False)
+            self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, dock)
+            dock.show()
+        self.plot_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.plot_dock)
+        self.plot_dock.show()
+        # The row at the top is as high as the reference moments need, the plot gets a third of the width, and
+        # the jobs table the rest
+        self.resizeDocks([self.moments_dock], [self.moments_dock.sizeHint().height()], Qt.Orientation.Vertical)
+        self.resizeDocks([self.plot_dock], [self.width() // 3], Qt.Orientation.Horizontal)
+
+    def reset_layout(self):
+        """ Put every dock back in its default place, and forget the saved layout. """
+
+        self.arrange_docks()
+        settings = getattr(self, "settings", None)
+        if settings is not None:
+            settings.remove(DOCK_STATE_KEY)
 
     def init_ui(self):
         """ Add all components to the UI. """
@@ -842,18 +876,29 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_group_box.setMinimumWidth(600)
         reference_moments_group_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
-        # noinspection SpellCheckingInspection
-        input_hbox = QHBoxLayout()
-        input_hbox.addLayout(vbox_left)
-        input_hbox.addWidget(reference_moments_group_box)
+        # Every pane is a dock, so it can be moved, floated (e.g. to a second screen) or closed.  The Panels
+        # button in the toolbar brings a closed dock back.  saveState() needs the object names.
+        time_place_widget = QWidget()
+        time_place_widget.setLayout(vbox_left)
+        time_place_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.time_place_dock = QDockWidget("Date, time and place", self)
+        self.time_place_dock.setObjectName("time_place_dock")
+        self.time_place_dock.setWidget(time_place_widget)
 
-        self.camera_overview.setFixedHeight(300)
-        input_hbox.addWidget(self.camera_overview)
+        self.moments_dock = QDockWidget("Reference moments", self)
+        self.moments_dock.setObjectName("moments_dock")
+        self.moments_dock.setWidget(reference_moments_group_box)
 
-        # Plot and jobs table share a user-resizable splitter, so the plot can be shrunk to give the scheduler
-        # more room (e.g. on widescreen displays).  Neither side can be collapsed completely.
-        self.output_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.output_splitter.addWidget(self.eclipse_visualization)
+        self.camera_dock = QDockWidget("Cameras", self)
+        self.camera_dock.setObjectName("camera_dock")
+        self.camera_dock.setWidget(self.camera_overview)
+
+        # The plot cannot be made so small that it disappears
+        self.eclipse_visualization.setMinimumSize(200, 200)
+        self.plot_dock = QDockWidget("Eclipse plot", self)
+        self.plot_dock.setObjectName("plot_dock")
+        self.plot_dock.setWidget(self.eclipse_visualization)
+
         # The exposure compensation sits right above the jobs it changes
         exposure_hbox = QHBoxLayout()
         exposure_hbox.setContentsMargins(0, 0, 0, 0)
@@ -873,21 +918,38 @@ class SolarEclipseView(QMainWindow, Observable):
         jobs_vbox.addWidget(self.jobs_table, 1)
         jobs_widget = QWidget()
         jobs_widget.setLayout(jobs_vbox)
-        self.output_splitter.addWidget(jobs_widget)
-        self.output_splitter.setChildrenCollapsible(False)
-        self.output_splitter.setStretchFactor(0, 1)
-        self.output_splitter.setStretchFactor(1, 2)
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
         global_layout.addWidget(self.camera_banner)
-        global_layout.addLayout(input_hbox)
 
-        global_layout.addWidget(self.output_splitter, 1)
+        global_layout.addWidget(jobs_widget, 1)
 
         app_frame.setLayout(global_layout)
 
         self.setCentralWidget(app_frame)
+
+        self.arrange_docks()
+        self.add_panels_menu()
+
+    def add_panels_menu(self):
+        """ Add the Panels button to the toolbar: show or hide each dock, or put all docks back in their default
+        place. """
+
+        menu = QMenu("Panels", self)
+        for dock in (self.time_place_dock, self.moments_dock, self.camera_dock, self.plot_dock):
+            menu.addAction(dock.toggleViewAction())
+        menu.addSeparator()
+        self.reset_layout_action = menu.addAction("Reset layout")
+        self.reset_layout_action.setStatusTip("Put all panels back in their default place")
+        self.reset_layout_action.triggered.connect(self.reset_layout)
+
+        self.panels_button = QToolButton(self)
+        self.panels_button.setText("Panels")
+        self.panels_button.setToolTip("Show or hide the panels, or reset the layout")
+        self.panels_button.setMenu(menu)
+        self.panels_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.toolbar.addWidget(self.panels_button)
 
     def add_toolbar(self):
         """ Create the toolbar of the UI.
@@ -906,6 +968,7 @@ class SolarEclipseView(QMainWindow, Observable):
         """
 
         self.toolbar = self.addToolBar('MainToolbar')
+        self.toolbar.setObjectName("MainToolbar")
 
         # Location
 
@@ -2224,7 +2287,7 @@ class SolarEclipseController(Observer):
             - Time format (always present);
             - Location (longitude, latitude, altitude);
             - Eclipse date;
-            - Position of the splitter between the eclipse plot and the jobs table;
+            - Where the docks are;
             - How the jobs table shows the commands (in words or as in the script).
 
         If the location and eclipse date are present in the settings file, the reference moments will be updated
