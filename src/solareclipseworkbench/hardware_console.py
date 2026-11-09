@@ -33,16 +33,48 @@ A mount is tested through its INDI server (``indiserver`` with the mount's drive
 
 import argparse
 import logging
+import os
 import shlex
 import sys
 import time
+from pathlib import Path
 from typing import Optional
+
+try:
+    # Importing readline gives input() line editing and the arrow keys for the history.
+    # Not available on Windows (without pyreadline3); the console then works without it.
+    import readline
+except ImportError:  # pragma: no cover - depends on the platform
+    readline = None
 
 from solareclipseworkbench import relay_trigger as relay_mod
 from solareclipseworkbench.indi_client import IndiError
 from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST
 
 logger = logging.getLogger(__name__)
+
+HISTORY_FILE = Path.home() / ".sew_hardware_history"
+HISTORY_LENGTH = 1000
+
+
+def _load_history(path: Path = HISTORY_FILE) -> None:
+    """Load the command history of earlier sessions, so the up arrow reaches them too."""
+    if readline is None:
+        return
+    readline.set_history_length(HISTORY_LENGTH)
+    try:
+        readline.read_history_file(os.fspath(path))
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _save_history(path: Path = HISTORY_FILE) -> None:
+    if readline is None:
+        return
+    try:
+        readline.write_history_file(os.fspath(path))
+    except OSError as exc:
+        logger.debug(f"Could not save the command history to {path}: {exc}")
 
 BANNER = """Solar Eclipse Workbench — hardware bench console
 Type 'help' for commands, 'quit' to leave.
@@ -579,6 +611,7 @@ class Console:
         if self.simulate:
             self.out("Running with simulated hardware — nothing will actually move.")
         self.out()
+        _load_history()
         try:
             while True:
                 try:
@@ -592,6 +625,7 @@ class Console:
                 if not self.dispatch(line):
                     break
         finally:
+            _save_history()
             self.shutdown()
 
     def shutdown(self) -> None:

@@ -37,3 +37,22 @@ def test_one_command_from_the_command_line(capsys):
     assert main(["--simulate", "relay", "backends"]) == 0
 
     assert "simulated" in capsys.readouterr().out
+
+
+def test_the_command_history_is_kept_between_sessions(tmp_path):
+    import pytest
+    from solareclipseworkbench import hardware_console
+
+    readline = hardware_console.readline
+    if readline is None:
+        pytest.skip("readline is not available on this platform")
+    history = tmp_path / "history"
+    readline.clear_history()
+    readline.add_history("relay connect")
+    readline.add_history("mount track")
+    hardware_console._save_history(history)
+
+    readline.clear_history()
+    hardware_console._load_history(history)
+    assert [readline.get_history_item(i) for i in (1, 2)] == ["relay connect", "mount track"]
+    readline.clear_history()
