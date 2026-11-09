@@ -151,7 +151,7 @@ pip install solareclipseworkbench
 
 ```bash
 sudo apt update
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.14-venv gstreamer1.0-plugins-good
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.14-venv gstreamer1.0-plugins-good gstreamer1.0-plugins-base-apps
 ```
 
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
@@ -203,7 +203,7 @@ pip install solareclipseworkbench
 
 ```bash
 sudo apt update
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv gstreamer1.0-plugins-good
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv gstreamer1.0-plugins-good gstreamer1.0-plugins-base-apps
 ```
 
 - Install gphoto2 to be able to access the cameras by executing the following line in the terminal
@@ -307,7 +307,7 @@ wsl.exe --install Ubuntu-24.04
 ```bash
 sudo apt update
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libxkbcommon-x11-0 libxcb-cursor0 libcairo2-dev python3.12-venv
-sudo apt install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+sudo apt install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-ugly gstreamer1.0-plugins-bad libgstreamer1.0-dev pulseaudio \
   alsa-utils python3-gi gir1.2-gstreamer-1.0
 ```

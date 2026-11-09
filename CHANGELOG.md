@@ -42,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- The voice prompts were silent after the Windows installer and the Linux installer (`No supported audio backends on this system!` at start-up): `gst-play-1.0`, which plays them, is in `gstreamer1.0-plugins-base-apps`, not in `gstreamer1.0-tools`.  Both installers and the manual installation steps in the README now install it
 - The Sun was not the same size everywhere: the check for when the Moon's bite becomes visible after C1 and before C4 used 959.63", while the contact times and the drawing of the eclipse used 959.95".  Everything now uses the selected solar radius (Issue #197)
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map
 
