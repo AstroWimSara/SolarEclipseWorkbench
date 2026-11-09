@@ -216,6 +216,7 @@ class IndiClient:
             if prop is None:
                 raise IndiError(f"{device} has no property {name}")
             kind, before = prop.kind, prop.updates
+        sent = time.time()
         self._send(self._new_vector(device, name, kind, values))
 
         def answered():
@@ -230,7 +231,10 @@ class IndiClient:
         if not ok:
             raise IndiError(f"{device} did not answer the change of {name} within {timeout:.0f} s")
         if prop.state == ALERT:
-            raise IndiError(f"{device} refused the change of {name}" + (f": {prop.message}" if prop.message else ""))
+            # Drivers often give the reason in a separate message, not in the property
+            reason = prop.message or next((m for t, d, m in reversed(self.messages)
+                                           if d == device and t >= sent), "")
+            raise IndiError(f"{device} refused the change of {name}" + (f": {reason}" if reason else ""))
         return prop
 
     @staticmethod

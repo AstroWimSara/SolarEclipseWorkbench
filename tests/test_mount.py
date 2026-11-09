@@ -121,6 +121,41 @@ def test_the_serial_port_is_set_before_connecting(server):
         mount.close()
 
 
+def test_a_wifi_mount_uses_the_driver_address_instead_of_searching_serial_ports(server):
+    # The INDI driver of a Wi-Fi model knows the mount's address (192.168.4.1:11880 for an AZ-GTi)
+    server.props["DEVICE_ADDRESS"].values = {"ADDRESS": "192.168.4.1", "PORT": "11880"}
+    mount = Mount.open(f"127.0.0.1:{server.port}", network=True)
+    try:
+        assert server.values("CONNECTION_MODE")["CONNECTION_TCP"]
+        names = [name for name, _ in server.received]
+        assert "DEVICE_AUTO_SEARCH" not in names
+        assert names.index("CONNECTION_MODE") < names.index("CONNECTION")
+    finally:
+        mount.close()
+
+
+def test_a_wifi_mount_without_an_address_asks_for_one(server):
+    with pytest.raises(MountError, match="host:port"):
+        Mount.open(f"127.0.0.1:{server.port}", network=True)
+
+
+def test_a_failed_connection_without_a_port_hints_at_wifi():
+    server = SimulatedIndiServer(refuse={"CONNECTION"})
+    try:
+        with pytest.raises(MountError, match="Wi-Fi"):
+            Mount.open(f"127.0.0.1:{server.port}", timeout=2.0)
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("label, network", [
+    ("AZ-GTi Alt-Az WiFi", True), ("AZ-GTi Alt-Az Wired", False), ("Some mount Wi-Fi", True), ("CEM40", False),
+])
+def test_wifi_models_are_recognised(label, network):
+    from solareclipseworkbench.indi_server import MountDriver
+    assert MountDriver("SkyWatcher", label, "indi_x").network == network
+
+
 def test_closing_leaves_the_mount_tracking(server, mount):
     mount.track_solar()
     mount.close()

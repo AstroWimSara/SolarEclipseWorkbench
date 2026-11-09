@@ -244,9 +244,9 @@ def test_the_mount_window_starts_the_server_for_the_chosen_model(tmp_path, monke
     opened = []
     real_open = gui.Mount.open
 
-    def open_mount(address, device=None, device_port=None, timeout=15.0):
+    def open_mount(address, device=None, device_port=None, timeout=15.0, network=False):
         opened.append((address, device, device_port, timeout))
-        return real_open(f"localhost:{port}", device, device_port, timeout)
+        return real_open(f"localhost:{port}", device, device_port, timeout, network)
 
     monkeypatch.setattr(gui.Mount, "open", staticmethod(open_mount))
     messages = []

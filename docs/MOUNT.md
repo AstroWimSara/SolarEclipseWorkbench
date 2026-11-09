@@ -84,10 +84,16 @@ is remembered for the next start.
 
 **Mount port** tells the driver how to reach the mount:
 
-- empty: the driver searches the serial ports itself (this can take half a minute),
+- empty: the driver searches the serial ports itself (this can take half a minute).  For a mount
+  model that INDI lists as Wi-Fi (e.g. *SkyWatcher AZ-GTi Alt-Az WiFi*), the driver is put in
+  network mode with its own address instead (`192.168.4.1:11880` for a SkyWatcher),
 - a serial port, e.g. `/dev/ttyUSB0`,
-- the address of a mount on Wi-Fi, `host:port`, e.g. `10.10.100.254:8899` (see the manual of the
-  mount for its address and port).
+- the address of a mount on Wi-Fi, `host:port`, e.g. `192.168.4.1:11880` (SkyWatcher on its own
+  Wi-Fi network) or `10.10.100.254:8899` (iOptron); see the manual of the mount.  This is needed
+  for a Wi-Fi mount whose model INDI does not list as Wi-Fi, such as the iOptron mounts.
+
+sew starts the driver under its own name (e.g. `Skywatcher Alt-Az`), not under the name of the
+model as KStars/Ekos does, so the settings saved in Ekos are not used: give the address here.
 
 The output of the server goes to `~/.SolarEclipseWorkbench/logs/indiserver-<time>Z.log`; when
 the mount does not connect, the last lines are shown with the error.

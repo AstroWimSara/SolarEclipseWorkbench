@@ -1,10 +1,3 @@
-- Better icons.  Aren't there too much icons in the main window?  Can we make them more intuitive?  Can we make them more consistent with the phone dashboard?
-- sew_hardware -> we can not use the arrows to go up and down in the terminal. 
-- Windows with the new installer:
-  - No supported audio backends on this system!
-  - 2026-11-07 16:42:09,541 INFO Found cameras: []
-    - The installation did find the camera, I added it, and when I start up the install package again, I see that this camera is shared.
-
 - Go/no-go panel at T−30 min. Run the Verify with Camera... checks (battery, card space for the script's frame count, mode dial, focus mode, clock) from the main window right before C1, with one clear green or red result.
 
 - Sort the images. Download or rename the images by the script line that took them (phase, label, bracket or HDR group) into folders ready for stacking. Building on that, add the timelapse alignment script (#70).

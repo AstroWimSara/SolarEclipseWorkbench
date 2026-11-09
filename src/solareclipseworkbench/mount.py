@@ -64,6 +64,11 @@ def parse_address(address: str) -> tuple:
     return address, DEFAULT_PORT
 
 
+#: The address of a mount on its own Wi-Fi network (the mount is the access point)
+SKYWATCHER_WIFI = "192.168.4.1:11880"
+IOPTRON_WIFI = "10.10.100.254:8899"
+
+
 def network_address(connection: str) -> Optional[tuple]:
     """(host, port) when a connection is a network address ("192.168.4.1:8899", "tcp://mount.local:8899"),
     None when it is a serial port ("/dev/ttyUSB0", "COM3")."""
@@ -125,7 +130,7 @@ class Mount:
 
     @classmethod
     def open(cls, address: str = "localhost", device: Optional[str] = None, device_port: Optional[str] = None,
-             timeout: float = 15.0) -> "Mount":
+             timeout: float = 15.0, network: bool = False) -> "Mount":
         """Connect to the INDI server, pick the mount and connect its driver to the mount.
 
         Args:
@@ -136,6 +141,10 @@ class Mount:
                            mount on the network (Wi-Fi).  When not given, the
                            driver's own port search is switched on, if it has one.
             - timeout: Seconds to wait for the driver to connect to the mount
+            - network: The mount is on Wi-Fi.  Without a device_port, the driver
+                       is then put in network mode with its own default address
+                       (192.168.4.1:11880 for a SkyWatcher), instead of searching
+                       its serial ports.
         """
         simulator = None
         if address.strip().lower() == SIMULATED_HOST:
@@ -170,7 +179,7 @@ class Mount:
                 raise MountError(f"the INDI server at {client.describe()} has more than one mount "
                                  f"({', '.join(mounts)}); choose one")
             mount = cls(client, device, simulator)
-            mount.connect_driver(device_port, timeout)
+            mount.connect_driver(device_port, timeout, network)
         except BaseException:
             client.close()
             if simulator is not None:
@@ -179,20 +188,30 @@ class Mount:
         logger.info("Mount ready: %s", mount.describe())
         return mount
 
-    def connect_driver(self, device_port: Optional[str] = None, timeout: float = 15.0) -> None:
+    def connect_driver(self, device_port: Optional[str] = None, timeout: float = 15.0,
+                       network: bool = False) -> None:
         """Make the driver connect to the mount, if it is not connected yet."""
         with self._lock:
             if self.driver_connected:
                 return
-            self._set_connection(device_port)
-            self._change("CONNECTION", {"CONNECT": True}, timeout=timeout)
+            self._set_connection(device_port, network)
+            try:
+                self._change("CONNECTION", {"CONNECT": True}, timeout=timeout)
+            except MountError as exc:
+                if device_port or network:
+                    raise
+                raise MountError(f"{exc}\n\nFor a mount on Wi-Fi, give its address as host:port, e.g. "
+                                 f"{SKYWATCHER_WIFI} (SkyWatcher) or {IOPTRON_WIFI} (iOptron)") from exc
             # The driver defines the telescope properties once it is connected
             if not self.client.wait_for(
                     lambda: self._has("EQUATORIAL_EOD_COORD"), 5.0):
                 raise MountError(f"{self.device} connected, but does not report its position")
 
-    def _set_connection(self, connection: Optional[str]) -> None:
+    def _set_connection(self, connection: Optional[str], network: bool = False) -> None:
         """Tell the driver how to reach the mount (the standard INDI connection properties)."""
+        if not connection and network:
+            self._use_driver_address()
+            return
         if not connection:
             if self._has("DEVICE_AUTO_SEARCH"):
                 try:
@@ -217,6 +236,21 @@ class Mount:
                 self.client.wait_for(lambda: self._has("DEVICE_PORT"), 3.0)
             if self._has("DEVICE_PORT"):
                 self._change("DEVICE_PORT", {"PORT": connection})
+
+    def _use_driver_address(self) -> None:
+        """Put the driver in network mode, with the address it has (its default, or the one saved in it)."""
+        mode = self.client.property(self.device, "CONNECTION_MODE")
+        if mode is None or "CONNECTION_TCP" not in mode.values:
+            raise MountError(f"{self.device} cannot connect over the network; give its serial port instead")
+        if not mode.values.get("CONNECTION_TCP"):
+            self._change("CONNECTION_MODE", {"CONNECTION_TCP": True})
+            self.client.wait_for(lambda: self._has("DEVICE_ADDRESS"), 3.0)
+        host = str(self.client.value(self.device, "DEVICE_ADDRESS", "ADDRESS", "") or "").strip()
+        if not host:
+            raise MountError(f"{self.device} has no network address of the mount: give it as host:port, "
+                             f"e.g. {SKYWATCHER_WIFI} (SkyWatcher) or {IOPTRON_WIFI} (iOptron)")
+        logger.info("%s: connecting over the network to %s:%s", self.device, host,
+                    self.client.value(self.device, "DEVICE_ADDRESS", "PORT", ""))
 
     @property
     def driver_connected(self) -> bool:

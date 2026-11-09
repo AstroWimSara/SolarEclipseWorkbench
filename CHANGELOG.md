@@ -34,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- The `Mount`, `Compare sites` and `Phone` toolbar buttons have their own icons (a telescope on a tripod, two map pins and a smartphone) in the style of the other buttons, instead of generic Qt icons; `Mount` and `Compare sites` had the same network-drive icon
+- The toolbar keeps what every run needs on the left (location, date, reference moments, cameras, script, stop, live view) and moves the buttons needed now and then to the right end, in three groups: planning and analysis (`Compare sites`, `Baily's beads`, `Timeline`, `Run report`), optional hardware (`Phone`, `Relay`, `Mount`) and settings (date and time format, save)
 - `Test Camera` knows the sensor of the Fujifilm X-T3, X-T4, X-T5, X-H2, X-H2S, X-S10 and X-S20, so it gives the pixel size of these bodies and does not ask for it
 - The jobs table shows the commands in words, at the shutter speed the camera will use, e.g. `Bracket of 5 frames, 1 EV apart, around 1/1000 s, f/8, ISO 200 (VirtualCamera)` for `take_bracket("VirtualCamera", 1/1000, 8, 200, 1 5)`.  The `Commands` drop-down above the table switches back to the commands as they are written in the script; the choice is saved, and the tooltip of a command shows the other form - by @mrosseel
 - README: a `What it does` section at the top explains what Solar Eclipse Workbench does and links to the posts about it on the Deep Sky Wim blog.  The notice about pre-release 2.0.0rc5 and `pip install --pre` is replaced by a short note that versions older than 2.0.0 calculate shutter speeds that are too long below 5 degrees solar altitude (Issue #194)
@@ -42,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- A mount on Wi-Fi did not connect with an empty `Mount port` ("refused the change of CONNECTION"): the driver searched its serial ports.  For a mount model that INDI lists as Wi-Fi (e.g. *SkyWatcher AZ-GTi Alt-Az WiFi*), the driver is now put in network mode with its own address; otherwise the error says to give the address as `host:port`, and for an iOptron model the empty field shows `10.10.100.254:8899` as an example.  When a driver refuses a change, the reason it gave is now in the error (e.g. the serial port it could not open)
 - The voice prompts were silent after the Windows installer and the Linux installer (`No supported audio backends on this system!` at start-up): `gst-play-1.0`, which plays them, is in `gstreamer1.0-plugins-base-apps`, not in `gstreamer1.0-tools`.  Both installers and the manual installation steps in the README now install it
 - The Sun was not the same size everywhere: the check for when the Moon's bite becomes visible after C1 and before C4 used 959.63", while the contact times and the drawing of the eclipse used 959.95".  Everything now uses the selected solar radius (Issue #197)
 - `compute_central_lat_lon_for_time` in `solar_eclipse.py` returned the wrong duration and path width on the centre line (about 2m40s instead of 4m28s for 8 April 2024), because one variable was used for two quantities.  `compute_outline_point` drew the umbra about 30% too large.  Neither was used by the application until the eclipse path map

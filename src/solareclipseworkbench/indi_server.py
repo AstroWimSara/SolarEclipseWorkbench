@@ -21,6 +21,7 @@ import datetime
 import logging
 import weakref
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -69,6 +70,11 @@ class MountDriver:
         if self.manufacturer and self.manufacturer.lower() not in self.model.lower():
             return f"{self.manufacturer} {self.model}"
         return self.model
+
+    @property
+    def network(self) -> bool:
+        """Whether INDI lists this model as a mount on Wi-Fi (e.g. "AZ-GTi Alt-Az WiFi")."""
+        return re.search(r"\bwi-?fi\b|\bwlan\b", self.label, re.IGNORECASE) is not None
 
     def installed(self) -> bool:
         return find_executable(self.executable) is not None

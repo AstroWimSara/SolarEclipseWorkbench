@@ -52,7 +52,8 @@ from solareclipseworkbench import hardware_problems, job_text, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
-from solareclipseworkbench.mount import Mount, MountError, SIMULATED_HOST, find_mounts, parse_address
+from solareclipseworkbench.mount import (IOPTRON_WIFI, SKYWATCHER_WIFI, Mount, MountError, SIMULATED_HOST,
+                                         find_mounts, parse_address)
 from solareclipseworkbench.indi_client import IndiClient, IndiError
 from solareclipseworkbench.indi_server import IndiServer, IndiServerError, mount_drivers
 from solareclipseworkbench.mount_ui import MountNudgePanel, format_position
@@ -913,138 +914,64 @@ class SolarEclipseView(QMainWindow, Observable):
             - Loading the configuration file to schedule the tasks (voice prompts, taking pictures, updating the camera
               state);
             - Bringing up a pop-up window in which you can choose the time and date format.
+
+        The buttons every run needs are on the left; planning and analysis, optional hardware (phone, relay, mount)
+        and the settings are pushed to the right end.
         """
 
         self.toolbar = self.addToolBar('MainToolbar')
 
-        # Location
+        def add(action, status_tip, icon):
+            action.setStatusTip(status_tip)
+            action.setIcon(icon if isinstance(icon, QIcon) else QIcon(str(ICON_PATH / icon)))
+            action.triggered.connect(self.on_toolbar_button_click)
+            self.toolbar.addAction(action)
 
-        self.location_action.setStatusTip("Location")
-        self.location_action.setIcon(QIcon(str(ICON_PATH / "location.png")))
-        self.location_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.location_action)
+        # Left: what every run needs, in the order it is used
 
-        # Date
-
-        self.date_action.setStatusTip("Date")
-        self.date_action.setIcon(QIcon(str(ICON_PATH / "calendar.png")))
-        self.date_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.date_action)
-
-        # Reference moments
-
-        self.reference_moments_action.setStatusTip("Reference moments")
-        self.reference_moments_action.setIcon(QIcon(str(ICON_PATH / "clock.png")))
-        self.reference_moments_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.reference_moments_action)
-
-        # Camera(s)
-
-        self.camera_action.setStatusTip("Camera(s)")
-        self.camera_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
-        self.camera_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.camera_action)
-
+        add(self.location_action, "Location", "location.png")
+        add(self.date_action, "Date", "calendar.png")
+        add(self.reference_moments_action, "Reference moments", "clock.png")
+        add(self.camera_action, "Camera(s)", "camera.png")
         if self.is_simulator:
-            self.simulator_action.setStatusTip("Configure simulator")
-            self.simulator_action.setIcon(QIcon(str(ICON_PATH / "simulator.png")))
-            self.simulator_action.triggered.connect(self.on_toolbar_button_click)
-            self.toolbar.addAction(self.simulator_action)
-
-        # Configuration file
-
-        self.file_action.setStatusTip("File")
-        self.file_action.setIcon(QIcon(str(ICON_PATH / "folder.png")))
-        self.file_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.file_action)
-
-        # Shutdown scheduler
-
-        self.shutdown_scheduler_action.setStatusTip("Shut down scheduler")
-        self.shutdown_scheduler_action.setIcon(QIcon(str(ICON_PATH / "stop.png")))
-        self.shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.shutdown_scheduler_action)
-
-        # Date & time format
-
-        self.datetime_format_action.setStatusTip("Datetime format")
-        self.datetime_format_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
-        self.datetime_format_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.datetime_format_action)
-
-        # Save settings
-
-        self.save_action.setStatusTip("Save configuration")
-        self.save_action.setIcon(QIcon(str(ICON_PATH / "save.png")))
-        self.save_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.save_action)
-
-        # Live View
-
-        self.live_view_action.setStatusTip("Open live view window (1 fps preview from camera)")
-        self.live_view_action.setIcon(QIcon(str(ICON_PATH / "live.png")))
-        self.live_view_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.live_view_action)
-
-        # Baily's beads
-
-        self.beads_action.setStatusTip("Show the Baily's beads at second and third contact for this location")
-        self.beads_action.setIcon(beads_icon(32))
-        self.beads_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.beads_action)
-
-        # Script timeline
-
-        self.timeline_action.setStatusTip("Show the script per camera: which commands start late or are dropped")
-        self.timeline_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
-        self.timeline_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.timeline_action)
-
-        # Run report
-
-        self.run_report_action.setStatusTip("Show what became of every command of a run, from its log file")
-        self.run_report_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        self.run_report_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.run_report_action)
-
-        # Compare candidate sites
-
-        self.compare_sites_action.setStatusTip("Compare candidate sites: totality, Sun altitude, Baily's beads "
-                                               "and cloud forecast side by side")
-        self.compare_sites_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
-        self.compare_sites_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.compare_sites_action)
-
-        # Phone dashboard
-
-        self.phone_dashboard_action.setStatusTip("Follow the run on a phone: countdown, next commands, cameras, "
-                                                 "\u00b11 EV and abort")
-        self.phone_dashboard_action.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
-        self.phone_dashboard_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.phone_dashboard_action)
-
-        # Relay shutter trigger
-
-        self.relay_action.setStatusTip("Connect and test the USB relay shutter trigger")
-        self.relay_action.setIcon(QIcon(str(ICON_PATH / "relay.png")))
-        self.relay_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.relay_action)
-
-        # Telescope mount (INDI)
-
-        self.mount_action.setStatusTip("Connect the telescope mount through INDI, and let it track the sun")
-        self.mount_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
-        self.mount_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.mount_action)
-
-        # Refresh Plot
+            add(self.simulator_action, "Configure simulator", "simulator.png")
+        add(self.file_action, "File", "folder.png")
+        add(self.shutdown_scheduler_action, "Shut down scheduler", "stop.png")
+        add(self.live_view_action, "Open live view window (1 fps preview from camera)", "live.png")
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
-            self.refresh_plot_action.setStatusTip("Manually update the eclipse geometry plot")
-            self.refresh_plot_action.setIcon(QIcon(str(ICON_PATH / "refresh.png")))
-            self.refresh_plot_action.triggered.connect(self.on_toolbar_button_click)
-            self.toolbar.addAction(self.refresh_plot_action)
+            add(self.refresh_plot_action, "Manually update the eclipse geometry plot", "refresh.png")
+
+        # Right: what is needed now and then, pushed to the far end by a spacer
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.toolbar.addWidget(spacer)
+
+        # Planning and analysis
+
+        add(self.compare_sites_action, "Compare candidate sites: totality, Sun altitude, Baily's beads "
+                                       "and cloud forecast side by side", "compare.png")
+        add(self.beads_action, "Show the Baily's beads at second and third contact for this location",
+            beads_icon(32))
+        add(self.timeline_action, "Show the script per camera: which commands start late or are dropped",
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        add(self.run_report_action, "Show what became of every command of a run, from its log file",
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.toolbar.addSeparator()
+
+        # Optional hardware
+
+        add(self.phone_dashboard_action, "Follow the run on a phone: countdown, next commands, cameras, "
+                                         "\u00b11 EV and abort", "phone.png")
+        add(self.relay_action, "Connect and test the USB relay shutter trigger", "relay.png")
+        add(self.mount_action, "Connect the telescope mount through INDI, and let it track the sun", "mount.png")
+        self.toolbar.addSeparator()
+
+        # Settings
+
+        add(self.datetime_format_action, "Datetime format", "settings.png")
+        add(self.save_action, "Save configuration", "save.png")
 
     @property
     def jobs_command_style(self) -> str:
@@ -3445,8 +3372,10 @@ class MountPopup(QWidget, Observable):
         self.device_port = QLineEdit(settings.value("mount/device_port", "", type=str))
         self.device_port.setPlaceholderText("searched by the driver")
         self.device_port.setToolTip("How the driver reaches the mount: its serial port on the machine of the INDI "
-                                    "server (e.g. /dev/ttyUSB0), or host:port of a mount on Wi-Fi.  Leave empty "
-                                    "to let the driver search the ports, or use the port saved in the driver.")
+                                    "server (e.g. /dev/ttyUSB0), or host:port of a mount on Wi-Fi (e.g. "
+                                    f"{SKYWATCHER_WIFI} for a SkyWatcher, {IOPTRON_WIFI} for an iOptron).  "
+                                    "Leave empty to let the driver search the ports; for a mount model on "
+                                    "Wi-Fi, to use the driver's own network address.")
         connection_layout.addWidget(self.device_port, 2, 1)
 
         # Starting the INDI server here, with the driver of the mount model picked once
@@ -3465,6 +3394,7 @@ class MountPopup(QWidget, Observable):
                                        "cannot be found out (it is behind a USB-serial chip, or on Wi-Fi), so it "
                                        "is chosen here once.")
         self._fill_models(settings.value("mount/driver", "", type=str), settings.value("mount/model", "", type=str))
+        self.model_combobox.currentTextChanged.connect(self.show_state)
         connection_layout.addWidget(self.model_combobox, 5, 1)
 
         connection_group_box.setLayout(connection_layout)
@@ -3581,6 +3511,14 @@ class MountPopup(QWidget, Observable):
             widget.setEnabled(not connected and not simulated and not start_server)
         self.start_server_checkbox.setEnabled(not connected and not simulated and bool(self._models))
         self.model_combobox.setEnabled(not connected and not simulated and start_server and bool(self._models))
+        driver = self.selected_driver() if start_server else None
+        if driver is not None and driver.network:
+            placeholder = "the driver's Wi-Fi address"
+        elif driver is None or "ioptron" in f"{driver.manufacturer} {driver.label}".lower():
+            placeholder = f"searched by the driver; on Wi-Fi e.g. {IOPTRON_WIFI} (iOptron)"
+        else:
+            placeholder = "searched by the driver"
+        self.device_port.setPlaceholderText(placeholder)
         for button in (self.track_button, self.stop_button, self.park_button, self.abort_button):
             button.setEnabled(connected and mount.connected)
         self.status_label.setText(mount.describe() if connected else "Not connected")
@@ -3779,7 +3717,9 @@ class MountPopup(QWidget, Observable):
             else:
                 # Searching the ports for the mount takes longer than opening a known one
                 timeout = 15.0 if device_port else 40.0
-                mount = self._busy(lambda: Mount.open(address, device, device_port, timeout=timeout))
+                network = mount_driver is not None and mount_driver.network
+                mount = self._busy(lambda: Mount.open(address, device, device_port, timeout=timeout,
+                                                      network=network))
         except (MountError, IndiError) as exc:
             if start_server:
                 tail = self.controller.indi_server.log_tail() if self.controller.indi_server else ""
