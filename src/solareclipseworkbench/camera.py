@@ -181,6 +181,7 @@ class _SingleConfig:
         self._log = log
         self._widgets = {}  # name -> widget, in the order they were read
         self._on_camera = {}  # name -> value the camera has
+        self._refused = set()  # settings the camera refused: not sent again by a later commit
 
     def child(self, name: str):
         """The widget of one setting, read from the camera the first time it is asked for."""
@@ -196,11 +197,13 @@ class _SingleConfig:
         result = gp.GP_OK
         for name, widget in self._widgets.items():
             value = _widget_value(widget)
-            if value == self._on_camera[name]:
+            if value == self._on_camera[name] or name in self._refused:
                 continue
             ret = gp.gp_camera_set_single_config(self._target, name, widget, self._context)
             if isinstance(ret, int) and ret < gp.GP_OK:
-                self._log.warning('could not set %s to %s (gphoto2 error %d)', name, value, ret)
+                self._refused.add(name)
+                self._log.warning('could not set %s to %s, it stays %s (gphoto2 error %d)',
+                                  name, value, self._on_camera[name], ret)
                 if result == gp.GP_OK:
                     result = ret
             else:
@@ -1926,9 +1929,14 @@ def __adapt_camera_settings(camera, camera_settings, single_config: bool = False
     # three reach the camera in a single USB round-trip instead of two.
     if vendor == 'Nikon':
         try:
+            # gphoto2 names the manual mode "M".  It used to be set to "1", which
+            # gphoto2 refuses; that went unnoticed in the full set_config.  On a
+            # body with a mode dial (Z6 III) the dial decides and "M" is refused
+            # too, but then the dial is already at M or the warning is deserved.
             exp_program = _config_child(config, 'expprogram')
-            changed |= _set_widget_if_changed(exp_program, "1")  # 1 = Manual
-            log.debug('Queued Nikon expprogram=Manual for next set_config')
+            if _set_widget_if_changed(exp_program, "M"):
+                changed = True
+                log.debug('Queued Nikon expprogram=M for next set_config')
         except gphoto2.GPhoto2Error as e:
             log.warning('Could not queue Nikon expprogram: %s', e)
     elif vendor == 'Canon':

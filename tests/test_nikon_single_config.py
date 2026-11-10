@@ -41,7 +41,7 @@ class _Camera:
 
 def _nikon_settings(shutter="1/13", iso="100", f_number="f/8", capture_mode="Single Shot"):
     return {
-        'expprogram': _Widget("1"),
+        'expprogram': _Widget("M", ["M", "P", "A", "S"]),
         'autoiso': _Widget("Off"),
         'iso': _Widget(iso),
         'shutterspeed': _Widget(shutter, ["1/250", "1/13", "1/6", "1/3"]),
@@ -120,7 +120,7 @@ def test_exposure_mode_is_written_before_the_shutter_speed():
     with ExitStack() as stack:
         _fake_gphoto(stack, nikon)
         take_picture(_Camera(), CameraSettings("Nikon Test", "1/6", "5.6", 100))
-    assert nikon.writes == [('expprogram', "1"), ('iso', "100"), ('shutterspeed', "1/6"),
+    assert nikon.writes == [('expprogram', "M"), ('iso', "100"), ('shutterspeed', "1/6"),
                             ('f-number', "f/5.6")]
 
 
@@ -157,6 +157,28 @@ def test_refused_setting_does_not_stop_the_others():
         take_picture(_Camera(), CameraSettings("Nikon Test", "1/6", "8", 100))
     assert nikon.settings['shutterspeed'].value == "1/6"
     assert nikon.settings['iso'].value == "400"
+
+
+def test_refused_exposure_mode_is_tried_once_per_shot():
+    """A mode dial at A refuses M: one write, not one per set_config (aperture after exposure)."""
+    settings = _nikon_settings(shutter="1/250", f_number="f/5.6")
+    settings['expprogram'].value = "A"
+    nikon = _FakeNikon(settings)
+    accept = nikon.set_single_config
+
+    def set_single_config(target, name, widget, context):
+        if name == 'expprogram':
+            nikon.writes.append((name, widget.value))
+            return gphoto2.GP_ERROR_BAD_PARAMETERS
+        return accept(target, name, widget, context)
+
+    nikon.set_single_config = set_single_config
+    with ExitStack() as stack:
+        _fake_gphoto(stack, nikon)
+        take_picture(_Camera(), CameraSettings("Nikon Test", "1/6", "8", 100))
+    assert [name for name, _ in nikon.writes].count('expprogram') == 1
+    assert nikon.settings['shutterspeed'].value == "1/6"
+    assert nikon.settings['f-number'].value == "f/8"
 
 
 def test_prepare_camera_reads_single_settings_on_a_nikon():
