@@ -152,8 +152,76 @@ def _wrap_camera(gp_camera, model_name: str, vendor: Optional[str], display_name
     return adapter_class(gp_camera, display_name)
 
 
+def _widget_value(widget):
+    """The value of a widget, or a marker that never equals another value when it cannot be read."""
+    try:
+        return gp.check_result(gp.gp_widget_get_value(widget))
+    except Exception:
+        return object()
+
+
+class _SingleConfig:
+    """The few camera settings a command needs, read and written one at a time.
+
+    gp_camera_get_config reads every setting the camera has.  On a Nikon Z that
+    takes about a second: a Z6 III released the shutter 1.3 s after its
+    scheduled time, 0.95 s of which was reading the configuration.  take_picture
+    and prepare_camera need only a handful of settings, so on a Nikon they read
+    each one with gp_camera_get_single_config and write back only those whose
+    value changed, with gp_camera_set_single_config, in the order they were read
+    (the exposure mode before the shutter speed).
+
+    Use it through _config_child and _set_gp_config, which also take a full
+    configuration tree.
+    """
+
+    def __init__(self, target, context, log):
+        self._target = target
+        self._context = context
+        self._log = log
+        self._widgets = {}  # name -> widget, in the order they were read
+        self._on_camera = {}  # name -> value the camera has
+
+    def child(self, name: str):
+        """The widget of one setting, read from the camera the first time it is asked for."""
+        widget = self._widgets.get(name)
+        if widget is None:
+            widget = gp.check_result(gp.gp_camera_get_single_config(self._target, name, self._context))
+            self._widgets[name] = widget
+            self._on_camera[name] = _widget_value(widget)
+        return widget
+
+    def commit(self) -> int:
+        """Write the changed settings to the camera; returns the first error code, or GP_OK."""
+        result = gp.GP_OK
+        for name, widget in self._widgets.items():
+            value = _widget_value(widget)
+            if value == self._on_camera[name]:
+                continue
+            ret = gp.gp_camera_set_single_config(self._target, name, widget, self._context)
+            if isinstance(ret, int) and ret < gp.GP_OK:
+                self._log.warning('could not set %s to %s (gphoto2 error %d)', name, value, ret)
+                if result == gp.GP_OK:
+                    result = ret
+            else:
+                self._on_camera[name] = value
+        return result
+
+
+def _config_child(config, name: str):
+    """The widget of a setting, from a full configuration tree or a _SingleConfig.
+
+    Raises gphoto2.GPhoto2Error when the camera has no such setting.
+    """
+    if isinstance(config, _SingleConfig):
+        return config.child(name)
+    return gp.check_result(gp.gp_widget_get_child_by_name(config, name))
+
+
 def _set_gp_config(camera, config, context):
     """Set camera config using underlying gphoto object when wrapped by adapter."""
+    if isinstance(config, _SingleConfig):
+        return config.commit()
     target = camera._camera if hasattr(camera, '_camera') else camera
     return gp.gp_camera_set_config(target, config, context)
 
@@ -1732,7 +1800,7 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
         and getattr(camera, '_capture_preview_was_called', False)):
         _reset_canon_eos_ptp_session(camera)
 
-    context, config = __adapt_camera_settings(camera, camera_settings)
+    context, config = __adapt_camera_settings(camera, camera_settings, single_config=True)
 
     # If __adapt_camera_settings returned None context, it's a virtual/non-gphoto
     # camera: call its capture() method directly and return.
@@ -1754,10 +1822,11 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
     # never poison the ISO/shutter batch).  The config read by
     # __adapt_camera_settings still holds the camera's capture mode (only the
     # widgets that changed are sent), so it is not read a second time, and
-    # nothing is sent when the camera is already in single-frame mode.
+    # nothing is sent when the camera is already in single-frame mode.  On a
+    # Nikon only this one setting is read here (see _SingleConfig).
     if vendor in ('Nikon', 'Sony'):
         try:
-            capture_mode_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+            capture_mode_widget = _config_child(config, 'capturemode')
             single_choice = _find_capturemode_choice(capture_mode_widget, want_continuous=False)
             if single_choice is not None:
                 if _set_widget_if_changed(capture_mode_widget, single_choice):
@@ -1768,8 +1837,7 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
         except gphoto2.GPhoto2Error as exc:
             if vendor == "Nikon":
                 try:
-                    capture_mode_widget = gp.check_result(
-                        gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
+                    capture_mode_widget = _config_child(config, 'stillcapturemode')
                     gp.gp_widget_set_value(capture_mode_widget, 0)  # 0 = Single Frame
                     _set_gp_config(camera, config, context)
                     log.debug(
@@ -1824,7 +1892,14 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
             raise
 
 
-def __adapt_camera_settings(camera, camera_settings):
+def __adapt_camera_settings(camera, camera_settings, single_config: bool = False):
+    """Set the exposure of the next shot; returns (context, config) for the caller.
+
+    With single_config, a Nikon reads and writes only the settings used here and
+    by the caller (see _SingleConfig) instead of its whole configuration, which
+    takes about a second.  The caller must then look widgets up with
+    _config_child.  Other cameras always get the full configuration tree.
+    """
     # For virtual or non-gphoto cameras, skip gphoto configuration and
     # return (None, None) so callers can handle capture directly.  A camera
     # driven through a vendor SDK applies the settings itself.
@@ -1836,10 +1911,12 @@ def __adapt_camera_settings(camera, camera_settings):
 
     context = gp.gp_context_new()
     target = camera._camera if hasattr(camera, '_camera') else camera
-    config = gp.check_result(gp.gp_camera_get_config(target, context))
-
     vendor = getattr(camera, 'vendor', None)
     log = camera_log(camera)
+    if single_config and vendor == 'Nikon':
+        config = _SingleConfig(target, context, log)
+    else:
+        config = gp.check_result(gp.gp_camera_get_config(target, context))
     # Only values that differ from what the camera reports are queued, and the
     # set_config round-trip is skipped when nothing differs (see _set_widget_if_changed).
     changed = False
@@ -1849,14 +1926,14 @@ def __adapt_camera_settings(camera, camera_settings):
     # three reach the camera in a single USB round-trip instead of two.
     if vendor == 'Nikon':
         try:
-            exp_program = gp.check_result(gp.gp_widget_get_child_by_name(config, 'expprogram'))
+            exp_program = _config_child(config, 'expprogram')
             changed |= _set_widget_if_changed(exp_program, "1")  # 1 = Manual
             log.debug('Queued Nikon expprogram=Manual for next set_config')
         except gphoto2.GPhoto2Error as e:
             log.warning('Could not queue Nikon expprogram: %s', e)
     elif vendor == 'Canon':
         try:
-            ae_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoexposuremodedial'))
+            ae_mode = _config_child(config, 'autoexposuremodedial')
             changed |= _set_widget_if_changed(ae_mode, "Manual")
             log.debug('Queued Canon autoexposuremodedial=Manual for next set_config')
         except gphoto2.GPhoto2Error as e:
@@ -1864,7 +1941,7 @@ def __adapt_camera_settings(camera, camera_settings):
         # Force single-frame drive mode so that eosremoterelease='Immediate' fires
         # exactly one shot even if the camera was left in continuous/burst mode.
         try:
-            drive_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'drivemode'))
+            drive_w = _config_child(config, 'drivemode')
             changed |= _set_widget_if_changed(drive_w, 'Single')
             log.debug('Queued Canon drivemode=Single for next set_config')
         except gphoto2.GPhoto2Error:
@@ -1888,24 +1965,24 @@ def __adapt_camera_settings(camera, camera_settings):
     if vendor == 'Nikon':
         try:
             changed |= _set_widget_if_changed(
-                gp.check_result(gp.gp_widget_get_child_by_name(config, 'autoiso')), "Off")
+                _config_child(config, 'autoiso'), "Off")
         except gphoto2.GPhoto2Error as e:
             log.debug('Could not disable auto ISO: %s', e)
 
     try:
         changed |= _set_widget_if_changed(
-            gp.check_result(gp.gp_widget_get_child_by_name(config, 'iso')), str(camera_settings.iso))
+            _config_child(config, 'iso'), str(camera_settings.iso))
     except gphoto2.GPhoto2Error as e:
         log.warning('Could not set ISO to %s: %s', camera_settings.iso, e)
 
     try:
-        ss_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed'))
+        ss_widget = _config_child(config, 'shutterspeed')
         closest = _find_closest_shutter_choice(ss_widget, camera_settings.shutter_speed)
         if closest is not None:
             changed |= _set_widget_if_changed(ss_widget, closest)
             log.info('Using closest shutter speed choice: %s', closest)
         else:
-            ss2_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'shutterspeed2'))
+            ss2_widget = _config_child(config, 'shutterspeed2')
             closest = _find_closest_shutter_choice(ss2_widget, camera_settings.shutter_speed)
             if closest is not None:
                 changed |= _set_widget_if_changed(ss2_widget, closest)
@@ -1922,7 +1999,7 @@ def __adapt_camera_settings(camera, camera_settings):
     # Skip Sony cameras, as this option is set in stone once USB is connected.
     try:
         if not _is_sony_camera_instance(camera):
-            capture_target_w = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturetarget'))
+            capture_target_w = _config_child(config, 'capturetarget')
             card_value = _find_memory_card_choice(capture_target_w)
             changed |= _set_widget_if_changed(capture_target_w, card_value)
             log.debug('Asserted capturetarget="%s" before capture', card_value)
@@ -1944,12 +2021,12 @@ def __adapt_camera_settings(camera, camera_settings):
         cam_key = camera_settings.camera_name
 
         if vendor == 'Canon':
-            ap_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aperture'))
+            ap_widget = _config_child(config, 'aperture')
             if _set_widget_if_changed(ap_widget, ap_key, same=_same_aperture):
                 _set_gp_config(camera, config, context)
         elif vendor in ('Nikon', 'Sony'):
             try:
-                f_widget = gp.check_result(gp.gp_widget_get_child_by_name(config, 'f-number'))
+                f_widget = _config_child(config, 'f-number')
                 f_actual = str(gp.check_result(gp.gp_widget_get_value(f_widget)))
                 if f_actual != "f/0":
                     # Inspect choices to detect whether widget expects values like 'f/5.6'
@@ -1976,9 +2053,12 @@ def __adapt_camera_settings(camera, camera_settings):
         # verified to avoid an extra USB round-trip on every shot in a tight sequence.
         if ap_key not in _aperture_verified.get(cam_key, set()):
             try:
-                config_rb = gp.check_result(gp.gp_camera_get_config(target, context))
                 widget_name = 'aperture' if vendor == 'Canon' else 'f-number'
-                rb_widget = gp.check_result(gp.gp_widget_get_child_by_name(config_rb, widget_name))
+                if isinstance(config, _SingleConfig):
+                    rb_widget = gp.check_result(gp.gp_camera_get_single_config(target, widget_name, context))
+                else:
+                    config_rb = gp.check_result(gp.gp_camera_get_config(target, context))
+                    rb_widget = gp.check_result(gp.gp_widget_get_child_by_name(config_rb, widget_name))
                 rb_actual = str(gp.check_result(gp.gp_widget_get_value(rb_widget)))
 
                 def _strip_f(v: str) -> str:
@@ -2575,7 +2655,7 @@ def prepare_camera(camera: Camera, camera_settings: CameraSettings, mode: str) -
     """
     log = camera_log(camera)
     mode = parse_prepare_mode(mode)
-    context, config = __adapt_camera_settings(camera, camera_settings)
+    context, config = __adapt_camera_settings(camera, camera_settings, single_config=True)
     if context is None:
         return
     if getattr(camera, 'vendor', None) != 'Sony':
