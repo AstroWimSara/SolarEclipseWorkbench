@@ -185,3 +185,6 @@ test_full_script_output.txt
 # Fujifilm Shooting SDK, distributed by Fujifilm under its own licence (see docs/FUJI.md)
 /SDK/
 /fujixsdk/
+
+# Full-size eclipse frames used to develop the sun finder (131 MB); a reduced set is in tests/data/sun_frames
+tests/data/sun/

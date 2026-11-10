@@ -3,8 +3,9 @@
 import threading
 
 import pytest
-from PyQt6.QtCore import QBuffer, QIODevice
+from PyQt6.QtCore import QBuffer, QIODevice, Qt
 from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from solareclipseworkbench import gui
@@ -135,5 +136,84 @@ def test_the_phone_gets_the_histogram_and_loupe_also_when_they_are_off_here(qapp
         window._on_frame(_disc_jpeg())
         window._poll_frame()
         assert window.phone_tools()[0]["loupe"]["x"] == pytest.approx(0.25)
+    finally:
+        window.close()
+
+
+def test_the_keys_toggle_the_crosshair_and_the_loupe(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        assert window._crosshair_box.isChecked() and not window._loupe_box.isChecked()
+        QTest.keyClick(window, Qt.Key.Key_C)
+        assert not window._crosshair_box.isChecked()
+        QTest.keyClick(window, Qt.Key.Key_L)
+        assert window._loupe_box.isChecked() and not window._loupe.isHidden()
+        # A key on a check box or a button goes on to the window
+        QTest.keyClick(window._histogram_box, Qt.Key.Key_C)
+        assert window._crosshair_box.isChecked()
+        QTest.keyClick(window._toggle_btn, Qt.Key.Key_L)
+        assert not window._loupe_box.isChecked()
+        # Ctrl+C is not C
+        QTest.keyClick(window, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        assert window._crosshair_box.isChecked()
+    finally:
+        window.close()
+
+
+def test_a_combo_box_keeps_the_letter_keys(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        window._peaking_box.setChecked(True)
+        # L selects "Low" in the sensitivity box, and does not turn on the loupe
+        QTest.keyClick(window._peaking_sensitivity_combo, Qt.Key.Key_L)
+        assert window._peaking_sensitivity_combo.currentData() == "low"
+        assert not window._loupe_box.isChecked()
+        # F selects "Fit" in the zoom box, and does not fill the screen
+        window._zoom_combo.setCurrentText("5x")
+        QTest.keyClick(window._zoom_combo, Qt.Key.Key_F)
+        assert window._zoom_combo.currentText() == "Fit"
+        assert not window.isFullScreen()
+    finally:
+        window.close()
+
+
+def test_full_screen_with_the_keys_and_the_button(qapp, no_gphoto):
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        window.show()
+        QTest.keyClick(window, Qt.Key.Key_F)
+        assert window.isFullScreen()
+        assert window._fullscreen_btn.text() == "Leave full screen"
+        QTest.keyClick(window, Qt.Key.Key_F)
+        assert not window.isFullScreen()
+
+        window._fullscreen_btn.click()
+        assert window.isFullScreen()
+        QTest.keyClick(window, Qt.Key.Key_Escape)
+        assert not window.isFullScreen()
+        assert window._fullscreen_btn.text() == "Full screen"
+        # Esc out of full screen does nothing
+        QTest.keyClick(window, Qt.Key.Key_Escape)
+        assert not window.isFullScreen() and window.isVisible()
+    finally:
+        window.close()
+
+
+def test_the_window_shows_the_frame_rate(qapp, no_gphoto, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(gui.time, "monotonic", lambda: clock[0])
+    window = gui.LiveViewWindow(_GphotoLike())
+    try:
+        window._poll_frame()
+        assert window._fps_label.text() == "FPS: --"
+        for _ in range(5):
+            window._on_frame(_disc_jpeg())
+            window._poll_frame()
+            clock[0] += 0.5
+        assert window._fps_label.text() == "FPS: 2.0"
+        # No frames come: the rate goes away when the last frames leave the window
+        clock[0] += 10.0
+        window._poll_frame()
+        assert window._fps_label.text() == "FPS: --"
     finally:
         window.close()

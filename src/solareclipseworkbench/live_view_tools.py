@@ -13,6 +13,7 @@ gphoto2 camera, a camera driven through a vendor SDK, or the virtual camera.
   part that is black.
 - Crosshair: lines with a gap and a ring at the centre of the frame, so the
   Sun can be centred in the ring.
+- Frame rate: the number of frames per second that the window shows.
 
 The calculations are functions without Qt widgets, so a test can check them on
 a synthetic image.
@@ -20,6 +21,7 @@ a synthetic image.
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -423,8 +425,73 @@ def draw_crosshair(pixmap: QPixmap) -> None:
 
 
 # ----------------------------------------------------------------------
+# Frame rate
+# ----------------------------------------------------------------------
+
+class FrameRate:
+    """The frames per second of the last frames, from the times they arrived.
+
+    The rate uses the frames of the last `window_s` seconds.  Thus it follows a
+    change of rate, and it goes to None some seconds after the frames stop.
+    """
+
+    def __init__(self, window_s: float = 5.0):
+        self._window_s = window_s
+        self._times: deque = deque()
+
+    def add(self, t: float) -> None:
+        """Count a frame that arrived at time t [s]."""
+        self._times.append(t)
+
+    def rate(self, now: float) -> Optional[float]:
+        """Frames per second at time now [s], or None with fewer than two frames in the window."""
+        while self._times and now - self._times[0] > self._window_s:
+            self._times.popleft()
+        if len(self._times) < 2 or self._times[-1] <= self._times[0]:
+            return None
+        return (len(self._times) - 1) / (self._times[-1] - self._times[0])
+
+
+# ----------------------------------------------------------------------
 # Click to set the zoom centre
 # ----------------------------------------------------------------------
+
+def draw_centring(pixmap: QPixmap, shown: QRect, overlay: dict) -> None:
+    """Draw what the centring of the mount sees on a displayed frame.
+
+    The sun found (a green circle, orange when the centring is waiting or
+    paused) and the target (a small cross), mapped from frame pixels through the
+    part of the frame shown (``shown``) to the pixmap.
+    """
+    sx = pixmap.width() / shown.width()
+    sy = pixmap.height() / shown.height()
+
+    def to_pixmap(x, y):
+        return QPointF((x - shown.x() + 0.5) * sx, (y - shown.y() + 0.5) * sy)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    target = overlay.get("target")
+    if target is not None:
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        centre = to_pixmap(*target)
+        for dx, dy in ((-8, 0), (8, 0), (0, -8), (0, 8)):
+            painter.drawLine(centre, centre + QPointF(dx, dy))
+    sun = overlay.get("sun")
+    if sun is not None and overlay.get("radius"):
+        state = overlay.get("state", "")
+        colour = QColor(60, 220, 90) if state in ("centred", "correcting") else QColor(255, 160, 40)
+        painter.setPen(QPen(colour, 1))
+        centre = to_pixmap(*sun)
+        painter.drawEllipse(centre, overlay["radius"] * sx, overlay["radius"] * sy)
+        painter.drawLine(centre + QPointF(-4, -4), centre + QPointF(4, 4))
+        painter.drawLine(centre + QPointF(-4, 4), centre + QPointF(4, -4))
+    message = overlay.get("message")
+    if message:
+        painter.setPen(QPen(QColor(230, 230, 230)))
+        painter.drawText(QPointF(6, pixmap.height() - 6), f"Centring: {message}")
+    painter.end()
+
 
 def click_to_source(nx: float, ny: float, shown: QRect, source_w: int, source_h: int) -> QPointF:
     """A click on the shown part of a frame, as a normalised point of the full frame.

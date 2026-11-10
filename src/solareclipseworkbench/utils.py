@@ -19,6 +19,7 @@ from solareclipseworkbench.bracketing import parse_bracket, parse_hdr_sequence
 from solareclipseworkbench.gui import SolarEclipseController
 from solareclipseworkbench.hardware_registry import HARDWARE, HARDWARE_COMMANDS
 from solareclipseworkbench.relay_trigger import relay_shoot, relay_burst, relay_bulb, relay_arm, relay_release
+from solareclipseworkbench.mount import mount_track, mount_stop, mount_park
 from solareclipseworkbench.solar_eclipse import get_solar_eclipses
 
 COMMANDS = {
@@ -35,6 +36,9 @@ COMMANDS = {
     'relay_bulb': relay_bulb,
     'relay_arm': relay_arm,
     'relay_release': relay_release,
+    'mount_track': mount_track,
+    'mount_stop': mount_stop,
+    'mount_park': mount_park,
 }
 
 #: Name under which relay commands appear in the load-time timing warnings.
@@ -513,6 +517,22 @@ class DeviceAtRuntime:
         return getattr(device, name)
 
 
+def _hardware_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
+    """Check the arguments of a relay or mount command now, so a typo shows up when the script is loaded."""
+    if HARDWARE_COMMANDS[func_name] == 'mount':
+        return _mount_args_are_valid(func_name, args, cmd_str)
+    return _relay_args_are_valid(func_name, args, cmd_str)
+
+
+def _mount_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
+    """The mount commands take no arguments, only the description."""
+    if not [arg for arg in args if arg.strip()]:
+        return True
+    hardware_problems.report("Script", f"{func_name} takes no arguments.  This mount command will not run.",
+                             detail=cmd_str.strip())
+    return False
+
+
 def _relay_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
     """Check the arguments of a relay command now, so a typo shows up when the script is loaded."""
     values = [arg.strip() for arg in args if arg.strip()]
@@ -538,7 +558,7 @@ def _relay_args_are_valid(func_name: str, args: list, cmd_str: str) -> bool:
 
 #: Commands that leave the camera alone, so a job running one of them is not
 #: holding the shutter when the next contact needs it.
-CAMERA_FREE_COMMANDS = frozenset({'voice_prompt'})
+CAMERA_FREE_COMMANDS = frozenset({'voice_prompt', 'mount_track', 'mount_stop', 'mount_park'})
 
 #: Which script command each scheduled job runs, by job id.  Filled in as the
 #: script is scheduled: the scheduler itself only knows times, not what a job
@@ -547,6 +567,39 @@ JOB_COMMANDS: dict = {}
 
 #: The reference moment each scheduled job was written against, by job id.
 JOB_REFERENCES: dict = {}
+
+#: When each scheduled job that uses a camera or the relay starts (UTC, on the
+#: computer clock) and how long it keeps it busy, by job id.  The centring of the
+#: mount waits for a gap between these (see quiet_for).
+JOB_BUSY: dict = {}
+
+#: Busy time assumed for a command whose busy time is not estimated (sync_cameras, command)
+DEFAULT_BUSY_S = 2.0
+
+
+def quiet_for(scheduler, seconds: float, now: Optional[datetime] = None, margin_s: float = 2.0) -> bool:
+    """Whether no camera or relay is busy now and none will be for ``seconds`` (plus a margin).
+
+    Counts the jobs still on the scheduler and the ones that have started already
+    (which may still be running): not the jobs of a run that was stopped before
+    they started.  Without a scheduler (no script running) it is always quiet.
+    """
+    if scheduler is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    end = now + timedelta(seconds=seconds + margin_s)
+    try:
+        pending = {job.id for job in scheduler.get_jobs()}
+    except Exception:
+        pending = set()
+    for job_id, (start, busy_s) in list(JOB_BUSY.items()):
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if job_id not in pending and start > now:
+            continue        # a job of a stopped run
+        if start < end and start + timedelta(seconds=busy_s + margin_s) > now:
+            return False
+    return True
 
 #: Reference moments that move with third contact.  A command written against
 #: one of them (e.g. a chromosphere shot at C3-2s) follows the totality it runs
@@ -688,10 +741,10 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     camera_obj = None
 
     if func_name in HARDWARE_COMMANDS:
-        # A relay command takes its device as the first argument, the way a
-        # camera command takes a camera, but the device is looked up when the
-        # job fires (see DeviceAtRuntime).
-        if not _relay_args_are_valid(func_name, args, cmd_str):
+        # A relay or mount command takes its device as the first argument, the
+        # way a camera command takes a camera, but the device is looked up when
+        # the job fires (see DeviceAtRuntime).
+        if not _hardware_args_are_valid(func_name, args, cmd_str):
             return
         kind = HARDWARE_COMMANDS[func_name]
         if HARDWARE.get(kind) is None:
@@ -815,6 +868,7 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
         job = scheduler.add_job(func, trigger=trigger, args=args, kwargs=kwargs, name=description)
         JOB_COMMANDS[job.id] = func_name
         JOB_REFERENCES[job.id] = ref_moment
+        scheduled_job = (job.id, execution_time)
     except KeyError as missing:
         # A line naming a moment the calculation did not produce.  Usually a
         # limb-corrected moment — BEADS_C2 and friends only exist when the
@@ -832,13 +886,18 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
         return None
 
     window = None
-    if func_name in HARDWARE_COMMANDS:
+    if func_name in HARDWARE_COMMANDS and HARDWARE_COMMANDS[func_name] != 'relay':
+        pass        # a mount command keeps no camera busy
+    elif func_name in HARDWARE_COMMANDS:
         busy_s = relay_duration_s(func_name, [arg.strip() for arg in script_args if arg.strip()])
         if busy_s is not None:
             window = CameraBusyWindow(RELAY_BUSY_NAME, execution_time, busy_s, description)
     elif camera_obj is not None:
         profile = (timing_profiles or {}).get(script_args[0].strip(), DEFAULT_PROFILE)
         window = camera_busy_window(execution_time, func_name, script_args, description, camera_obj, profile)
+    if func_name not in CAMERA_FREE_COMMANDS:
+        job_id, start = scheduled_job
+        JOB_BUSY[job_id] = (start, window.duration_s if window is not None else DEFAULT_BUSY_S)
     # The run report lines the log of the run up against this
     run_report.log_planned(func_name, script_args[0].strip() if camera_obj is not None else None, execution_time,
                            f"{ref_moment}{sign}{cmd_str_split[3].strip()}",
