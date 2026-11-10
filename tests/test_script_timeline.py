@@ -5,8 +5,12 @@ from types import SimpleNamespace
 import pytz
 from matplotlib.figure import Figure
 
-from solareclipseworkbench.script_timeline import build_timeline, command_at, describe, draw_timeline, format_timeline
-from solareclipseworkbench.utils import RELAY_BUSY_NAME, CameraBusyWindow, find_camera_conflicts, replay_camera_windows
+from solareclipseworkbench.command_timing import BURST_LEAD_S, NIKON_BURST_FPS, burst_lead_s, hdr_shot_overhead_s
+from solareclipseworkbench.script_timeline import (FrameCount, TimelineCommand, build_timeline, busy_fraction,
+                                                   command_at, command_frames, count_frames, describe, draw_timeline,
+                                                   format_timeline, merged_intervals)
+from solareclipseworkbench.utils import (RELAY_BUSY_NAME, CameraBusyWindow, ReplayedWindow, find_camera_conflicts,
+                                         replay_camera_windows)
 
 C2 = datetime(2026, 8, 12, 18, 28, 25, 600000, tzinfo=pytz.utc)
 C3 = C2 + timedelta(seconds=104)
@@ -114,3 +118,83 @@ def test_drawing_finds_the_command_under_the_mouse(tmp_path):
     event = SimpleNamespace(x=centre[0], y=centre[1], inaxes=bar.axes, canvas=figure.canvas)
     assert command_at(artists, event) is command
     assert "busy about" in describe(timeline, command)
+
+
+def _args(extra=None, shutter="1/100"):
+    return ["Camera", shutter, "8", "200"] + ([extra] if extra is not None else [])
+
+
+def test_frames_of_a_picture_a_bracket_and_an_hdr():
+    assert command_frames("take_picture", _args(), "Sony").offsets_s == (0.0,)
+    # 5 frames 1 EV apart, darkest first, each one starting as the one before it ends
+    bracket = command_frames("take_bracket", _args('"1 5"', "1/4"), "Sony").offsets_s
+    assert bracket == (0.0, 1 / 16, 1 / 16 + 1 / 8, 1 / 16 + 1 / 8 + 1 / 4, 1 / 16 + 1 / 8 + 1 / 4 + 1 / 2)
+    assert len(command_frames("take_bracket", _args('"not a bracket"'), "Sony").offsets_s) == 1
+    # 2 stops up and back down: 1/100, 1/50, 1/25, 1/50, 1/100
+    hdr = command_frames("take_hdr", _args("2"), "Sony").offsets_s
+    assert len(hdr) == 5 and abs(hdr[1] - (0.01 + hdr_shot_overhead_s())) < 1e-9
+    assert command_frames("relay_shoot", [], None).offsets_s == (0.0,)
+    assert command_frames("prepare_camera", _args('"burst"'), "Sony").offsets_s == ()
+
+
+def test_frames_of_a_burst():
+    # A Nikon burst is a number of frames, taken at the frame rate of the estimates
+    nikon = command_frames("take_burst", _args("20"), "Nikon").offsets_s
+    assert len(nikon) == 20
+    assert nikon[0] == BURST_LEAD_S and abs(nikon[-1] - (BURST_LEAD_S + 19 / NIKON_BURST_FPS)) < 1e-9
+    # Other bursts are a time: the number of frames is not known, only when the shutter is held
+    other = command_frames("take_burst", _args("2"), "Sony")
+    lead_s = burst_lead_s("Sony")
+    assert other.offsets_s is None and other.shooting_s == (lead_s, lead_s + 2)
+    relay = command_frames("relay_burst", ["4.5"], None)
+    assert relay.offsets_s is None and relay.shooting_s[1] >= 4.5
+    assert command_frames("relay_burst", ["long"], None).offsets_s == ()
+
+
+def test_frames_between_c2_and_c3(tmp_path):
+    script = tmp_path / "nikon.txt"
+    script.write_text('take_burst, C2, -, 0:00:02.0, Nikon Z 8, 1/2000, 8, 200, 30, "Beads"\n'
+                      'take_picture, C2, +, 0:00:01.0, Nikon Z 8, 1/1000, 8, 200, "Dropped"\n'
+                      'take_picture, C2, +, 0:00:10.0, Nikon Z 8, 1/2, 8, 200, "Corona"\n'
+                      'take_picture, C3, +, 0:00:20.0, Nikon Z 8, 1/1000, 8, 200, "Partial"\n')
+    timeline = build_timeline(str(script), _moments())
+    commands = timeline.camera_commands()
+    assert [c.description for c in timeline.dropped] == ["Dropped"]
+    # 30 + corona + partial; the dropped picture takes no frame
+    assert count_frames(commands) == FrameCount(32)
+    # The burst shoots from C2-1 s at 10 fps: 20 of its frames are after C2, plus the corona
+    assert count_frames(commands, C2, C3) == FrameCount(21)
+
+
+def test_burst_of_unknown_frames_between_c2_and_c3(tmp_path):
+    timeline = _timeline(tmp_path)
+    commands = timeline.camera_commands("Canon EOS R")
+    assert count_frames(commands) == FrameCount(3, unknown=1)
+    # The diamond ring burst shoots from C2-5 s to C2-3 s: it is busy, but takes no frame, after C2
+    assert count_frames(commands, C2, C3) == FrameCount(3)
+
+
+def test_merged_intervals():
+    assert merged_intervals([(5, 8), (0, 2), (1, 3), (8, 9)]) == [(0, 3), (5, 9)]
+
+
+def _busy(camera, start_s, duration_s, dropped=False):
+    window = CameraBusyWindow(camera, C2 + timedelta(seconds=start_s), duration_s, "")
+    replay = ReplayedWindow(window, window.start, 0.0 if dropped else duration_s, dropped=dropped)
+    return TimelineCommand("take_picture", camera, window.start, "", "", replay)
+
+
+def test_busy_fraction_counts_overlapping_commands_once():
+    commands = [_busy("A", -5, 10), _busy("B", 2, 10), _busy("A", 50, 4), _busy("A", 60, 4, dropped=True),
+                _busy("B", 100, 10)]
+    # C2-C2+12 (A and B overlap), 50-54 and C3-4 s to C3: 20 s of the 104 s
+    assert abs(busy_fraction(commands, C2, C3) - 20 / 104) < 1e-9
+    assert abs(busy_fraction(commands[:1], C2, C3) - 5 / 104) < 1e-9
+
+
+def test_text_gives_the_frames_and_the_busy_time(tmp_path):
+    text = format_timeline(_timeline(tmp_path))
+    assert ("All cameras: 4 + unknown frame(s), 3 between C2 and C3; at least one camera busy 9 % of C2 to C3; "
+            "the frames of 1 burst(s) are unknown") in text
+    assert "Canon EOS R\n-----------\n3 + unknown frame(s), 3 between C2 and C3; busy 9 % of C2 to C3" in text
+    assert "Sony A7\n-------\n1 frame(s), 0 between C2 and C3; busy 1 % of C2 to C3\n" in text

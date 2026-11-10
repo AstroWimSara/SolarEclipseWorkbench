@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QHeaderView, Q
                              QVBoxLayout, QWidget)
 
 from solareclipseworkbench import run_report
-from solareclipseworkbench.script_timeline import build_timeline, command_at, describe, draw_timeline, format_timeline
+from solareclipseworkbench.script_timeline import (build_timeline, command_at, describe, draw_timeline, format_timeline,
+                                                   frames_text)
 
 
 class TimelineWindow(QWidget):
@@ -122,7 +123,10 @@ class TimelineWindow(QWidget):
             parts.append("no command has to wait for its camera")
         for name, count in timeline.unknown_moments.items():
             parts.append(f"<b style='color:#d62728'>{count} line(s) against {name}, which does not exist here</b>")
-        self.summary.setText("; ".join(parts) + ".  Hover over a bar for its command.")
+        frames = [f"{camera}: {frames_text(timeline, camera)}." for camera in timeline.cameras]
+        if cameras > 1:
+            frames.append(f"All cameras: {frames_text(timeline)}.")
+        self.summary.setText("<br>".join(["; ".join(parts) + ".  Hover over a bar for its command."] + frames))
 
     def _on_hover(self, event):
         if self.timeline is None or event.inaxes is None:
