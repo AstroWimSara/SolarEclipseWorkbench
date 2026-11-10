@@ -451,6 +451,12 @@ class VirtualCamera(BaseCamera):
         from PyQt6.QtCore import QBuffer, QIODevice
         from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen
 
+        # With a simulated mount connected: the sun where the mount points
+        from solareclipseworkbench.sun_simulator import simulated_live_view_jpeg
+        sun = simulated_live_view_jpeg()
+        if sun is not None:
+            return sun
+
         width, height = 640, 480
         img = QImage(width, height, QImage.Format.Format_RGB888)
         img.fill(QColor(30, 30, 30))

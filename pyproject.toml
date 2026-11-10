@@ -1,6 +1,6 @@
 [project]
 name = "solareclipseworkbench"
-version = "2.0.0"
+version = "2.1.0"
 
 description = "Tools to photograph solar eclipses"
 readme = "README.md"
@@ -31,6 +31,13 @@ dependencies = [
     "astropy-iers-data==0.2026.11.2.0.34.55",
     "requests==2.34.2",
     "qrcode==8.2",
+    "numpy==2.4.6; python_version < '3.12'",
+    "numpy==2.5.4; python_version >= '3.12'",
+    "pillow==13.0.0",
+    # Raw files for sew_align.  No wheel for Intel Macs: there the raw files have to be converted first.
+    "rawpy==0.27.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    # An ffmpeg binary for the timelapse video of sew_align, on every platform
+    "imageio-ffmpeg==0.6.0",
 ]
 
 [project.urls]
@@ -40,6 +47,8 @@ Repository = "https://github.com/AstroWimSara/SolarEclipseWorkbench"
 sew = "solareclipseworkbench.gui:main"
 sew_wizard = "solareclipseworkbench.wizard:main"
 sew_hardware = "solareclipseworkbench.hardware_console:main"
+sew_sort = "solareclipseworkbench.image_sorter:main"
+sew_align = "solareclipseworkbench.timelapse:main"
 
 # Relay backends for the USB relay shutter trigger.  The built-in backends
 # register themselves on import; this group lets a board type ship in its own

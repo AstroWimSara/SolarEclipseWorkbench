@@ -200,12 +200,13 @@ check_macos() {
 # System packages
 # ---------------------------------------------------------------------------
 
-# gst-play-1.0 (gstreamer1.0-tools) plays the voice prompts; the gphoto2 package
+# gst-play-1.0 (gstreamer1.0-plugins-base-apps) plays the voice prompts; the gphoto2 package
 # brings the udev rules that let the plugdev group use the cameras; the libxcb
 # and GL libraries are what Qt needs to open windows, usually there already on a
-# desktop.
-APT_PACKAGES="ca-certificates curl usbutils gphoto2 \
-gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio \
+# desktop.  exiftool reads the capture time of every raw format for sew_sort.
+APT_PACKAGES="ca-certificates curl usbutils gphoto2 libimage-exiftool-perl \
+gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good \
+gstreamer1.0-pulseaudio \
 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libgl1 libegl1 libfontconfig1 libdbus-1-3 \
 fonts-noto-color-emoji"

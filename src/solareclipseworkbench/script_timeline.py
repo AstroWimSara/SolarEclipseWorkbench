@@ -5,6 +5,8 @@ dropped, but a warning does not show why: which command is still running, how
 much room there is, and how close the contacts are.  The timeline shows every
 command as a bar from its start to the end of its estimated busy time, on one
 row per camera, with the contacts and the Baily's beads windows drawn across.
+Per camera it also counts the frames, the frames between C2 and C3 and the
+part of C2 to C3 in which the camera is busy.
 
 It uses the same estimates and the same replay of the camera USB lock as that
 check (utils.camera_busy_window, utils.replay_camera_windows), so a command
@@ -21,10 +23,13 @@ import csv
 import io
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from solareclipseworkbench import scripts
-from solareclipseworkbench.command_timing import DEFAULT_PROFILE, parse_timing_directives, relay_duration_s
+from solareclipseworkbench.bracketing import bracket_exposures, hdr_offsets, parse_bracket, parse_hdr_sequence
+from solareclipseworkbench.command_timing import (DEFAULT_PROFILE, TimingProfile, _exposure_s, burst_lead_s,
+                                                  burst_shooting_s, hdr_shot_overhead_s, parse_timing_directives,
+                                                  relay_duration_s, vendor_from_name)
 from solareclipseworkbench.hardware_registry import HARDWARE_COMMANDS
 from solareclipseworkbench.utils import (RELAY_BUSY_NAME, CameraBusyWindow, ReplayedWindow, camera_busy_window,
                                          replay_camera_windows)
@@ -42,6 +47,70 @@ TOTALITY_MARGIN_S = 90.0
 ROW_PROMPTS = "Prompts & commands"
 
 
+@dataclass(frozen=True)
+class CommandFrames:
+    """When a command takes its frames, in seconds after it gets the camera."""
+
+    offsets_s: Optional[Tuple[float, ...]] = ()         # one per frame; None: the number of frames is not known
+    shooting_s: Optional[Tuple[float, float]] = None    # when a burst of unknown frames holds the shutter
+
+
+NO_FRAMES = CommandFrames()
+
+
+def command_frames(func_name: str, script_args: list, vendor: Optional[str],
+                   profile: TimingProfile = DEFAULT_PROFILE) -> CommandFrames:
+    """The frames a command takes, from the same estimates as its busy time.
+
+    A take_picture, relay_shoot and relay_bulb take one frame, a take_bracket
+    one per frame of the bracket and a take_hdr one per exposure.  A Nikon
+    take_burst gives its number of frames.  A take_burst on another camera and
+    a relay_burst give the time the shutter is held, and the estimates have no
+    frame rate for these cameras, so their number of frames is not known.
+
+    Args:
+        - func_name, script_args: As for utils.estimate_busy_s (for the relay
+          commands, the script fields after the time offset)
+        - vendor: 'Canon', 'Nikon', 'Sony', 'Fuji' or None
+        - profile: Overheads to use (defaults, or measured on the camera)
+    """
+    args = [arg.strip() for arg in script_args]
+    try:
+        if func_name in ("take_picture", "relay_shoot", "relay_bulb"):
+            return CommandFrames((0.0,))
+        if func_name == "take_bracket":
+            try:
+                spec = parse_bracket(args[4])
+            except ValueError:
+                # The busy time estimate counts a single frame for a bracket it cannot read
+                return CommandFrames((0.0,))
+            return CommandFrames(_back_to_back(bracket_exposures(_exposure_s(args[1]), spec)))
+        if func_name == "take_hdr":
+            start_s = _exposure_s(args[1])
+            sequence = parse_hdr_sequence(args[5] if len(args) > 5 else None)
+            return CommandFrames(_back_to_back([start_s * 2 ** k + hdr_shot_overhead_s(profile)
+                                                for k in hdr_offsets(int(args[4]), sequence)]))
+        if func_name == "take_burst":
+            lead_s = burst_lead_s(vendor)
+            if vendor == "Nikon":
+                return CommandFrames(tuple(lead_s + i / profile.nikon_burst_fps for i in range(int(float(args[4])))))
+            return CommandFrames(None, (lead_s, lead_s + burst_shooting_s(vendor, float(args[4]), profile)))
+        if func_name == "relay_burst" and relay_duration_s(func_name, args) is not None:
+            return CommandFrames(None, (0.0, relay_duration_s(func_name, args)))
+    except (IndexError, ValueError):
+        pass
+    return NO_FRAMES
+
+
+def _back_to_back(durations_s: List[float]) -> Tuple[float, ...]:
+    """The start of each frame when every frame starts as the one before it ends."""
+    starts, at = [], 0.0
+    for duration_s in durations_s:
+        starts.append(at)
+        at += duration_s
+    return tuple(starts)
+
+
 @dataclass
 class TimelineCommand:
     """A command of the script, at the time it is written for."""
@@ -52,6 +121,21 @@ class TimelineCommand:
     reference: str                              # as written, e.g. C2-00:00:04.0
     description: str
     replay: Optional[ReplayedWindow] = None     # camera commands whose busy time is estimated
+    frames: CommandFrames = NO_FRAMES
+
+    @property
+    def taken_at(self) -> datetime:
+        """When the command gets the camera: later than planned when it has to wait."""
+        return self.replay.start if self.replay is not None else self.start
+
+    @property
+    def frame_times(self) -> Optional[List[datetime]]:
+        """When each frame is taken: [] for a dropped command, None when the number of frames is not known."""
+        if self.replay is not None and self.replay.dropped:
+            return []
+        if self.frames.offsets_s is None:
+            return None
+        return [self.taken_at + timedelta(seconds=s) for s in self.frames.offsets_s]
 
     @property
     def status(self) -> str:
@@ -168,9 +252,12 @@ def build_timeline(filename: str, reference_moments: dict, cameras: Optional[dic
         start = reference + delta if sign == "+" else reference - delta
         latest = start if latest is None else max(latest, start)
 
-        if func_name in HARDWARE_COMMANDS:
+        if HARDWARE_COMMANDS.get(func_name) == 'relay':
             # The relay commands have no camera argument.  They share one row.
             camera_name = RELAY_BUSY_NAME
+        elif func_name in HARDWARE_COMMANDS:
+            # A mount command keeps no camera busy
+            camera_name = None
         elif script_args and func_name not in NON_CAMERA_COMMANDS:
             camera_name = script_args[0].strip()
         else:
@@ -181,12 +268,16 @@ def build_timeline(filename: str, reference_moments: dict, cameras: Optional[dic
         if camera_name is None:
             continue
         if func_name in HARDWARE_COMMANDS:
-            busy_s = relay_duration_s(func_name, [arg.strip() for arg in script_args if arg.strip()])
+            relay_args = [arg.strip() for arg in script_args if arg.strip()]
+            busy_s = relay_duration_s(func_name, relay_args)
             window = CameraBusyWindow(RELAY_BUSY_NAME, start, busy_s, description) if busy_s is not None else None
+            command.frames = command_frames(func_name, relay_args, None)
         else:
             profile = timing_profiles.get(camera_name, DEFAULT_PROFILE)
-            window = camera_busy_window(start, func_name, script_args, description,
-                                        (cameras or {}).get(camera_name), profile)
+            camera = (cameras or {}).get(camera_name)
+            window = camera_busy_window(start, func_name, script_args, description, camera, profile)
+            vendor = getattr(camera, "vendor", None) or vendor_from_name(camera_name)
+            command.frames = command_frames(func_name, script_args, vendor, profile)
         if window is not None:
             windows.append(window)
             window_of[id(window)] = command
@@ -196,6 +287,85 @@ def build_timeline(filename: str, reference_moments: dict, cameras: Optional[dic
 
     commands.sort(key=lambda c: c.start)
     return Timeline(commands, moments, unknown)
+
+
+@dataclass(frozen=True)
+class FrameCount:
+    """A number of frames, and the bursts left out of it because their number of frames is not known."""
+
+    frames: int = 0
+    unknown: int = 0
+
+    def __str__(self):
+        return f"{self.frames} + unknown" if self.unknown else str(self.frames)
+
+
+def count_frames(commands: List[TimelineCommand], start: Optional[datetime] = None,
+                 end: Optional[datetime] = None) -> FrameCount:
+    """The frames the commands take: all of them, or the ones from start to end.
+
+    A dropped command takes no frames.  A burst of unknown frames is counted
+    between start and end when it holds the shutter for part of that time.
+    """
+    frames = unknown = 0
+    for command in commands:
+        times = command.frame_times
+        if times is None:
+            first, last = (command.taken_at + timedelta(seconds=s) for s in command.frames.shooting_s)
+            if start is None or (first <= end and last >= start):
+                unknown += 1
+        else:
+            frames += sum(1 for moment in times if start is None or start <= moment <= end)
+    return FrameCount(frames, unknown)
+
+
+def merged_intervals(intervals: List[tuple]) -> List[tuple]:
+    """(start, end) pairs with the overlapping ones merged, so that no time is counted twice."""
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def busy_fraction(commands: List[TimelineCommand], start: datetime, end: datetime) -> float:
+    """The part of start to end in which at least one of the commands keeps its camera busy.
+
+    The busy times are the bars of the timeline.  Commands that overlap, on
+    different cameras, count once.  A dropped command does not keep its camera busy.
+    """
+    total_s = (end - start).total_seconds()
+    if total_s <= 0:
+        return 0.0
+    intervals = []
+    for command in commands:
+        replay = command.replay
+        if replay is None or replay.dropped:
+            continue
+        busy_from = max(replay.start, start)
+        busy_until = min(replay.start + timedelta(seconds=replay.duration_s), end)
+        if busy_from < busy_until:
+            intervals.append((busy_from, busy_until))
+    busy_s = sum((b - a).total_seconds() for a, b in merged_intervals(intervals))
+    return busy_s / total_s
+
+
+def frames_text(timeline: Timeline, camera: Optional[str] = None) -> str:
+    """The frames of one camera (None: of all cameras), the ones between C2 and C3, and how busy C2 to C3 is."""
+    commands = timeline.camera_commands(camera)
+    total = count_frames(commands)
+    parts = [f"{total} frame(s)"]
+    if timeline.totality:
+        c2, c3 = timeline.totality
+        busy = "busy" if camera is not None else "at least one camera busy"
+        parts[0] += f", {count_frames(commands, c2, c3)} between C2 and C3"
+        parts.append(f"{busy} {100 * busy_fraction(commands, c2, c3):.0f} % of C2 to C3")
+    if total.unknown:
+        parts.append(f"the frames of {total.unknown} burst(s) are unknown: the estimates have no frame rate "
+                     f"for the camera")
+    return "; ".join(parts)
 
 
 def format_timeline(timeline: Timeline) -> str:
@@ -223,10 +393,14 @@ def format_timeline(timeline: Timeline) -> str:
     if not timeline.dropped and not timeline.late and not timeline.unknown_moments:
         lines.append("No command has to wait for its camera.")
     lines.append("")
+    if timeline.cameras:
+        lines.append(f"All cameras: {frames_text(timeline)}")
+        lines.append("")
 
     for camera in timeline.cameras:
         lines.append(camera)
         lines.append("-" * len(camera))
+        lines.append(frames_text(timeline, camera))
         lines.append(f"{'Start UTC':<11} {'Relative':<14} {'Command':<15} {'Busy s':>6} {'Ends':<11} {'Status':<8} "
                      f"Description")
         for command in timeline.camera_commands(camera):

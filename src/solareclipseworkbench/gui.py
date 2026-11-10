@@ -23,13 +23,13 @@ import numpy as np
 import pandas as pd
 import pytz
 from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
-                         QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice)
+                         QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice, QByteArray)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
-    QFontMetrics
+    QFontMetrics, QFontDatabase
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
-QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle, \
-QDoubleSpinBox
+QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QCheckBox, QSizePolicy, QStyle, \
+QDoubleSpinBox, QDockWidget, QMenu
 from PyQt6 import QtWidgets
 from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
@@ -54,12 +54,22 @@ from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import LOG_DIR, setup_logging, file_handlers_only, camera_log
+from solareclipseworkbench.mount import (IOPTRON_WIFI, SKYWATCHER_WIFI, Mount, MountError, SIMULATED_HOST,
+                                         find_mounts, parse_address)
+from solareclipseworkbench.indi_client import IndiClient, IndiError
+from solareclipseworkbench.indi_server import IndiServer, IndiServerError, mount_drivers
+from solareclipseworkbench.mount_ui import MountNudgePanel, format_position
+from solareclipseworkbench.live_frames import LiveFrames
+from solareclipseworkbench import sun_simulator
+from solareclipseworkbench.centring import (Calibration, CalibrationError, Calibrator, Centrer, CentringStatus,
+                                            OFF as CENTRING_OFF, STOPPED as CENTRING_STOPPED)
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
                                                    set_enabled as set_limb_correction_enabled,
                                                    ensure_limb_profile)
 from solareclipseworkbench.observer import Observer, Observable
 from solareclipseworkbench.phone_dashboard import (DashboardServer, ACTION_ABORT, ACTION_EV_DOWN, ACTION_EV_RESET,
-                                                   ACTION_EV_UP, ACTION_LIVE_CAMERA, ACTION_LIVE_POINT)
+                                                   ACTION_EV_UP, ACTION_LIVE_CAMERA, ACTION_LIVE_POINT, ACTION_MOUNT_HOLD,
+                                                   ACTION_MOUNT_RELEASE, ACTION_MOUNT_STOP, PHONE_HOLD_S)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
@@ -99,6 +109,11 @@ LIMB_CORRECTION_LOCKED_TOOLTIP = (
     "The lunar limb correction cannot be changed while a script has pending "
     "jobs. Stop the scheduler first, then change the correction and reload the script."
 )
+CAMERA_TOOLTIP = "Detect the connected cameras"
+CAMERA_LOCKED_TOOLTIP = (
+    "Camera detection is off while a script is loaded, because it can interrupt "
+    "the scheduled commands. Click Stop to turn it on again."
+)
 
 DATE_FORMATS = {
     "dd Month yyyy": "%d %b %Y",
@@ -123,6 +138,11 @@ JOBS_COMMAND_STYLES = {
 }
 DEFAULT_JOBS_COMMAND_STYLE = "words"
 JOBS_COMMAND_STYLE_KEY = "jobs_command_style"
+
+# Where the docks of the main window are, as saved by QMainWindow.saveState().  Increase the version when the docks
+# change so much that an old saved layout no longer makes sense: the window then starts with the default layout.
+DOCK_STATE_KEY = "dock_state"
+DOCK_STATE_VERSION = 1
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
 
@@ -472,6 +492,7 @@ class SolarEclipseView(QMainWindow, Observable):
         self.live_view_action = QAction("Live View", self)
         self.beads_action = QAction("Baily's beads", self)
         self.relay_action = QAction("Relay", self)
+        self.mount_action = QAction("Mount", self)
         self.timeline_action = QAction("Timeline", self)
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
@@ -644,7 +665,7 @@ class SolarEclipseView(QMainWindow, Observable):
             - Eclipse date;
             - Date format;
             - Time format;
-            - Position of the splitter between the eclipse plot and the jobs table;
+            - Where the docks are;
             - How the jobs table shows the commands (in words or as in the script).
 
         The outcome is shown in the status bar and logged (Issue #181).
@@ -699,26 +720,74 @@ class SolarEclipseView(QMainWindow, Observable):
         self.statusBar().showMessage(message, SAVE_MESSAGE_TIMEOUT)
         return True
 
+    def number_labels(self) -> tuple:
+        """ Return the labels that show dates, times, countdowns and angles. """
+
+        return (self.date_label_local, self.date_label_utc, self.time_label_local, self.time_label_utc,
+                self.c1_time_local_label, self.c2_time_local_label, self.max_time_local_label,
+                self.c3_time_local_label, self.c4_time_local_label, self.sunrise_time_local_label,
+                self.sunset_time_local_label,
+                self.c1_time_utc_label, self.c2_time_utc_label, self.max_time_utc_label,
+                self.c3_time_utc_label, self.c4_time_utc_label, self.sunrise_time_utc_label,
+                self.sunset_time_utc_label,
+                self.c1_countdown_label, self.c2_countdown_label, self.max_countdown_label,
+                self.c3_countdown_label, self.c4_countdown_label, self.sunrise_countdown_label,
+                self.sunset_countdown_label,
+                self.c1_azimuth_label, self.c2_azimuth_label, self.max_azimuth_label,
+                self.c3_azimuth_label, self.c4_azimuth_label,
+                self.c1_altitude_label, self.c2_altitude_label, self.max_altitude_label,
+                self.c3_altitude_label, self.c4_altitude_label,
+                self.beads_c2_label, self.beads_c3_label)
+
     def save_layout_settings(self):
-        """ Save the position of the splitter between the eclipse plot and the jobs table, and how the jobs
-        table shows the commands. """
+        """ Save where the docks are, and how the jobs table shows the commands. """
 
         settings = getattr(self, "settings", None)
         if settings is not None:
-            settings.setValue("output_splitter_state", self.output_splitter.saveState())
+            settings.setValue(DOCK_STATE_KEY, self.saveState(DOCK_STATE_VERSION))
             settings.setValue(JOBS_COMMAND_STYLE_KEY, self.jobs_command_style)
 
     def restore_layout_settings(self):
-        """ Restore the position of the splitter between the eclipse plot and the jobs table, and how the jobs
-        table shows the commands. """
+        """ Restore where the docks are, and how the jobs table shows the commands.
+
+        A saved layout that cannot be restored (e.g. from another version) gives the default layout.
+        """
 
         settings = getattr(self, "settings", None)
         if settings is None:
             return
-        state = settings.value("output_splitter_state", None)
-        if state is not None:
-            self.output_splitter.restoreState(state)
+        state = settings.value(DOCK_STATE_KEY, None)
+        if state is not None and not (isinstance(state, QByteArray) and self.restoreState(state, DOCK_STATE_VERSION)):
+            LOGGER.warning("The saved layout of the main window cannot be restored, so the default layout is used")
+            self.arrange_docks()
         self.set_jobs_command_style(settings.value(JOBS_COMMAND_STYLE_KEY, DEFAULT_JOBS_COMMAND_STYLE, type=str))
+
+    def arrange_docks(self):
+        """ Put every dock in its default place, with its default size, and show it.
+
+        The default layout is the window without docks: the date, time and place, the reference moments and the
+        cameras in a row at the top, the eclipse plot at the left, and the jobs table in the rest.
+        """
+
+        for dock in (self.time_place_dock, self.moments_dock, self.camera_dock):
+            dock.setFloating(False)
+            self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, dock)
+            dock.show()
+        self.plot_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.plot_dock)
+        self.plot_dock.show()
+        # The row at the top is as high as the reference moments need, the plot gets a third of the width, and
+        # the jobs table the rest
+        self.resizeDocks([self.moments_dock], [self.moments_dock.sizeHint().height()], Qt.Orientation.Vertical)
+        self.resizeDocks([self.plot_dock], [self.width() // 3], Qt.Orientation.Horizontal)
+
+    def reset_layout(self):
+        """ Put every dock back in its default place, and forget the saved layout. """
+
+        self.arrange_docks()
+        settings = getattr(self, "settings", None)
+        if settings is not None:
+            settings.remove(DOCK_STATE_KEY)
 
     def init_ui(self):
         """ Add all components to the UI. """
@@ -833,6 +902,12 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.solar_radius_combo, 11, 1, 1, 4)
         reference_moments_grid_layout.addWidget(self.solar_radius_spinbox, 11, 5)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
+        # The dates, times, countdowns and angles use the fixed-width system font.  In a proportional font each
+        # digit has its own width, so a countdown moves sideways when it changes and the times in a column do
+        # not line up.
+        fixed_width_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        for label in self.number_labels():
+            label.setFont(fixed_width_font)
         # At least 600 pixels, but wider when a larger font needs it, so the row
         # titles are never cut off.  The countdown column is sized for its widest
         # value, so the box does not change width while counting down.
@@ -844,18 +919,29 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_group_box.setMinimumWidth(600)
         reference_moments_group_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
-        # noinspection SpellCheckingInspection
-        input_hbox = QHBoxLayout()
-        input_hbox.addLayout(vbox_left)
-        input_hbox.addWidget(reference_moments_group_box)
+        # Every pane is a dock, so it can be moved, floated (e.g. to a second screen) or closed.  The Panels
+        # button in the toolbar brings a closed dock back.  saveState() needs the object names.
+        time_place_widget = QWidget()
+        time_place_widget.setLayout(vbox_left)
+        time_place_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.time_place_dock = QDockWidget("Date, time and place", self)
+        self.time_place_dock.setObjectName("time_place_dock")
+        self.time_place_dock.setWidget(time_place_widget)
 
-        self.camera_overview.setFixedHeight(300)
-        input_hbox.addWidget(self.camera_overview)
+        self.moments_dock = QDockWidget("Reference moments", self)
+        self.moments_dock.setObjectName("moments_dock")
+        self.moments_dock.setWidget(reference_moments_group_box)
 
-        # Plot and jobs table share a user-resizable splitter, so the plot can be shrunk to give the scheduler
-        # more room (e.g. on widescreen displays).  Neither side can be collapsed completely.
-        self.output_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.output_splitter.addWidget(self.eclipse_visualization)
+        self.camera_dock = QDockWidget("Cameras", self)
+        self.camera_dock.setObjectName("camera_dock")
+        self.camera_dock.setWidget(self.camera_overview)
+
+        # The plot cannot be made so small that it disappears
+        self.eclipse_visualization.setMinimumSize(200, 200)
+        self.plot_dock = QDockWidget("Eclipse plot", self)
+        self.plot_dock.setObjectName("plot_dock")
+        self.plot_dock.setWidget(self.eclipse_visualization)
+
         # The exposure compensation sits right above the jobs it changes
         exposure_hbox = QHBoxLayout()
         exposure_hbox.setContentsMargins(0, 0, 0, 0)
@@ -875,21 +961,38 @@ class SolarEclipseView(QMainWindow, Observable):
         jobs_vbox.addWidget(self.jobs_table, 1)
         jobs_widget = QWidget()
         jobs_widget.setLayout(jobs_vbox)
-        self.output_splitter.addWidget(jobs_widget)
-        self.output_splitter.setChildrenCollapsible(False)
-        self.output_splitter.setStretchFactor(0, 1)
-        self.output_splitter.setStretchFactor(1, 2)
 
         global_layout = QVBoxLayout()
         # show reminder banner at top
         global_layout.addWidget(self.camera_banner)
-        global_layout.addLayout(input_hbox)
 
-        global_layout.addWidget(self.output_splitter, 1)
+        global_layout.addWidget(jobs_widget, 1)
 
         app_frame.setLayout(global_layout)
 
         self.setCentralWidget(app_frame)
+
+        self.arrange_docks()
+        self.add_panels_menu()
+
+    def add_panels_menu(self):
+        """ Add the Panels button to the toolbar: show or hide each dock, or put all docks back in their default
+        place. """
+
+        menu = QMenu("Panels", self)
+        for dock in (self.time_place_dock, self.moments_dock, self.camera_dock, self.plot_dock):
+            menu.addAction(dock.toggleViewAction())
+        menu.addSeparator()
+        self.reset_layout_action = menu.addAction("Reset layout")
+        self.reset_layout_action.setStatusTip("Put all panels back in their default place")
+        self.reset_layout_action.triggered.connect(self.reset_layout)
+
+        self.panels_button = QToolButton(self)
+        self.panels_button.setText("Panels")
+        self.panels_button.setToolTip("Show or hide the panels, or reset the layout")
+        self.panels_button.setMenu(menu)
+        self.panels_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.toolbar.addWidget(self.panels_button)
 
     def add_toolbar(self):
         """ Create the toolbar of the UI.
@@ -905,131 +1008,66 @@ class SolarEclipseView(QMainWindow, Observable):
             - Loading the configuration file to schedule the tasks (voice prompts, taking pictures, updating the camera
               state);
             - Bringing up a pop-up window in which you can choose the time and date format.
+
+        The buttons every run needs are on the left; planning and analysis, optional hardware (phone, relay, mount)
+        and the settings are pushed to the right end.
         """
 
         self.toolbar = self.addToolBar('MainToolbar')
+        self.toolbar.setObjectName("MainToolbar")
 
-        # Location
+        def add(action, status_tip, icon):
+            action.setStatusTip(status_tip)
+            action.setIcon(icon if isinstance(icon, QIcon) else QIcon(str(ICON_PATH / icon)))
+            action.triggered.connect(self.on_toolbar_button_click)
+            self.toolbar.addAction(action)
 
-        self.location_action.setStatusTip("Location")
-        self.location_action.setIcon(QIcon(str(ICON_PATH / "location.png")))
-        self.location_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.location_action)
+        # Left: what every run needs, in the order it is used
 
-        # Date
-
-        self.date_action.setStatusTip("Date")
-        self.date_action.setIcon(QIcon(str(ICON_PATH / "calendar.png")))
-        self.date_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.date_action)
-
-        # Reference moments
-
-        self.reference_moments_action.setStatusTip("Reference moments")
-        self.reference_moments_action.setIcon(QIcon(str(ICON_PATH / "clock.png")))
-        self.reference_moments_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.reference_moments_action)
-
-        # Camera(s)
-
-        self.camera_action.setStatusTip("Camera(s)")
-        self.camera_action.setIcon(QIcon(str(ICON_PATH / "camera.png")))
-        self.camera_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.camera_action)
-
+        add(self.location_action, "Location", "location.png")
+        add(self.date_action, "Date", "calendar.png")
+        add(self.reference_moments_action, "Reference moments", "clock.png")
+        add(self.camera_action, "Camera(s)", "camera.png")
+        self.camera_action.setToolTip(CAMERA_TOOLTIP)
         if self.is_simulator:
-            self.simulator_action.setStatusTip("Configure simulator")
-            self.simulator_action.setIcon(QIcon(str(ICON_PATH / "simulator.png")))
-            self.simulator_action.triggered.connect(self.on_toolbar_button_click)
-            self.toolbar.addAction(self.simulator_action)
-
-        # Configuration file
-
-        self.file_action.setStatusTip("File")
-        self.file_action.setIcon(QIcon(str(ICON_PATH / "folder.png")))
-        self.file_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.file_action)
-
-        # Shutdown scheduler
-
-        self.shutdown_scheduler_action.setStatusTip("Shut down scheduler")
-        self.shutdown_scheduler_action.setIcon(QIcon(str(ICON_PATH / "stop.png")))
-        self.shutdown_scheduler_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.shutdown_scheduler_action)
-
-        # Date & time format
-
-        self.datetime_format_action.setStatusTip("Datetime format")
-        self.datetime_format_action.setIcon(QIcon(str(ICON_PATH / "settings.png")))
-        self.datetime_format_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.datetime_format_action)
-
-        # Save settings
-
-        self.save_action.setStatusTip("Save configuration")
-        self.save_action.setIcon(QIcon(str(ICON_PATH / "save.png")))
-        self.save_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.save_action)
-
-        # Live View
-
-        self.live_view_action.setStatusTip("Open live view window (1 fps preview from camera)")
-        self.live_view_action.setIcon(QIcon(str(ICON_PATH / "live.png")))
-        self.live_view_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.live_view_action)
-
-        # Baily's beads
-
-        self.beads_action.setStatusTip("Show the Baily's beads at second and third contact for this location")
-        self.beads_action.setIcon(beads_icon(32))
-        self.beads_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.beads_action)
-
-        # Script timeline
-
-        self.timeline_action.setStatusTip("Show the script per camera: which commands start late or are dropped")
-        self.timeline_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
-        self.timeline_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.timeline_action)
-
-        # Run report
-
-        self.run_report_action.setStatusTip("Show what became of every command of a run, from its log file")
-        self.run_report_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        self.run_report_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.run_report_action)
-
-        # Compare candidate sites
-
-        self.compare_sites_action.setStatusTip("Compare candidate sites: totality, Sun altitude, Baily's beads "
-                                               "and cloud forecast side by side")
-        self.compare_sites_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon))
-        self.compare_sites_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.compare_sites_action)
-
-        # Phone dashboard
-
-        self.phone_dashboard_action.setStatusTip("Follow the run on a phone: countdown, next commands, cameras, "
-                                                 "\u00b11 EV and abort")
-        self.phone_dashboard_action.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
-        self.phone_dashboard_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.phone_dashboard_action)
-
-        # Relay shutter trigger
-
-        self.relay_action.setStatusTip("Connect and test the USB relay shutter trigger")
-        self.relay_action.setIcon(QIcon(str(ICON_PATH / "relay.png")))
-        self.relay_action.triggered.connect(self.on_toolbar_button_click)
-        self.toolbar.addAction(self.relay_action)
-
-        # Refresh Plot
+            add(self.simulator_action, "Configure simulator", "simulator.png")
+        add(self.file_action, "File", "folder.png")
+        add(self.shutdown_scheduler_action, "Shut down scheduler", "stop.png")
+        add(self.live_view_action, "Open live view window (1 fps preview from camera)", "live.png")
         if self.low_cpu_mode:
             self.refresh_plot_action = QAction("Refresh Plot", self)
-            self.refresh_plot_action.setStatusTip("Manually update the eclipse geometry plot")
-            self.refresh_plot_action.setIcon(QIcon(str(ICON_PATH / "refresh.png")))
-            self.refresh_plot_action.triggered.connect(self.on_toolbar_button_click)
-            self.toolbar.addAction(self.refresh_plot_action)
+            add(self.refresh_plot_action, "Manually update the eclipse geometry plot", "refresh.png")
+
+        # Right: what is needed now and then, pushed to the far end by a spacer
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.toolbar.addWidget(spacer)
+
+        # Planning and analysis
+
+        add(self.compare_sites_action, "Compare candidate sites: totality, Sun altitude, Baily's beads "
+                                       "and cloud forecast side by side", "compare.png")
+        add(self.beads_action, "Show the Baily's beads at second and third contact for this location",
+            beads_icon(32))
+        add(self.timeline_action, "Show the script per camera: which commands start late or are dropped",
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        add(self.run_report_action, "Show what became of every command of a run, from its log file",
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.toolbar.addSeparator()
+
+        # Optional hardware
+
+        add(self.phone_dashboard_action, "Follow the run on a phone: countdown, next commands, cameras, "
+                                         "\u00b11 EV and abort", "phone.png")
+        add(self.relay_action, "Connect and test the USB relay shutter trigger", "relay.png")
+        add(self.mount_action, "Connect the telescope mount through INDI, and let it track the sun", "mount.png")
+        self.toolbar.addSeparator()
+
+        # Settings
+
+        add(self.datetime_format_action, "Datetime format", "settings.png")
+        add(self.save_action, "Save configuration", "save.png")
 
     @property
     def jobs_command_style(self) -> str:
@@ -1341,6 +1379,17 @@ class SolarEclipseController(Observer):
         self.relay_popup: Union['RelayPopup', None] = None
         # The connected relay, also registered for the relay_* script commands
         self.relay_trigger: Union[RelayTrigger, None] = None
+        self.mount_popup: Union['MountPopup', None] = None
+        # The connected mount, also registered for the mount_* script commands
+        self.mount: Union[Mount, None] = None
+        # The INDI server started for the mount (None when it was started by hand or runs elsewhere)
+        self.indi_server: Optional[IndiServer] = None
+        # Keeping the sun centred: the frames of the Live View window, the calibration and the loop
+        self.live_frames = LiveFrames()
+        self.mount_calibration: Optional[Calibration] = self._load_mount_calibration()
+        self.centrer: Optional[Centrer] = None
+        # The simulated camera shows the eclipse in the phase of the (simulated) time
+        sun_simulator.ECLIPSE_CLOCK = self._eclipse_clock
         self._timeline_window = None
         self._run_report_window = None
         self._sites_window = None
@@ -1517,7 +1566,8 @@ class SolarEclipseController(Observer):
                 worst = "error" if any(p.severity == "error" for p in pending) else "warning"
                 marker = "\u26d4" if worst == "error" else "\u26a0"
                 self.view.setWindowTitle(
-                    f"{marker} {len(pending)} camera problem(s) - Solar Eclipse Workbench"
+                    f"{marker} {len(pending)} {'mount' if {p.source for p in pending} == {'Mount'} else 'camera'} "
+                    f"problem(s) - Solar Eclipse Workbench"
                 )
                 return
 
@@ -1525,7 +1575,8 @@ class SolarEclipseController(Observer):
             summary = hardware_problems.summarise(problems)
             has_error = any(p.severity == "error" for p in problems)
             box = QMessageBox.critical if has_error else QMessageBox.warning
-            kind = "Script" if all(p.source == "Script" for p in problems) else "Camera"
+            sources = {p.source for p in problems}
+            kind = "Script" if sources == {"Script"} else "Mount" if sources == {"Mount"} else "Camera"
             box(
                 self.view,
                 f"{kind} problem" if len(problems) == 1 else f"{kind} problems",
@@ -1570,6 +1621,7 @@ class SolarEclipseController(Observer):
         self._reference_now = reference_now
         if self._live_view_window is not None:
             self._live_view_window.set_totality_paused(self._live_view_paused_at(reference_now))
+            self._live_view_window.centring_overlay = self._centring_overlay()
 
         if self._beads_window is not None and self._beads_window.isVisible():
             self._beads_window.set_current_time(reference_now)
@@ -1703,6 +1755,13 @@ class SolarEclipseController(Observer):
 
             self.view.eclipse_visualization.set_location(longitude, latitude, altitude)
 
+            if self.mount is not None:
+                try:
+                    self.send_site_to_mount()
+                except (MountError, IndiError) as exc:
+                    hardware_problems.report("Mount", f"The new location was not sent to the mount: {exc}",
+                                             severity="warning")
+
             # The eclipse may have been changed on the map in the location window.
             selected = changed_object.location_plot.selected_eclipse_date()
             if selected and selected != changed_object.initial_eclipse_date:
@@ -1726,6 +1785,7 @@ class SolarEclipseController(Observer):
             self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
             self.sim_offset_minutes = (int(changed_object.offset_minutes.text())
                                        * BEFORE_AFTER[changed_object.before_after_combobox.currentText()])
+            self._apply_simulation_offset()
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -1771,12 +1831,24 @@ class SolarEclipseController(Observer):
             # The popup has already stored and registered the relay
             return
 
+        elif isinstance(changed_object, MountPopup):
+            # The popup has already stored and registered the mount
+            return
+
         elif isinstance(changed_object, QCloseEvent):
 
             if self.relay_trigger is not None:
                 self.relay_trigger.close()
                 self.relay_trigger = None
                 register_hardware('relay', None)
+
+            self.stop_centring()
+            if self.mount is not None:
+                # Only the connection closes: the mount keeps tracking
+                self.mount.close()
+                self.mount = None
+                register_hardware('mount', None)
+            self.stop_indi_server()
 
             if self._keep_alive_thread is not None:
                 self._keep_alive_thread.stop()
@@ -1914,6 +1986,7 @@ class SolarEclipseController(Observer):
                 self.view.jobs_table.resizeColumnsToContents()
 
                 self.view.camera_action.setDisabled(True)
+                self.view.camera_action.setToolTip(CAMERA_LOCKED_TOOLTIP)
 
                 n_jobs = len(self.scheduler.get_jobs())
                 self._set_limb_correction_locked(n_jobs > 0)
@@ -1983,6 +2056,10 @@ class SolarEclipseController(Observer):
         elif text == "Relay":
             self.relay_popup = RelayPopup(self)
             self.relay_popup.show()
+
+        elif text == "Mount":
+            self.mount_popup = MountPopup(self)
+            self.mount_popup.show()
 
         elif text == "Timeline":
             self._open_timeline_window()
@@ -2059,6 +2136,8 @@ class SolarEclipseController(Observer):
     def _show_live_view(self, camera):
         """Open the live view window on this camera (the open one, if any, must be closed first)."""
         window = LiveViewWindow(camera, parent=None)
+        # The calibration and the centring of the mount look at the same frames
+        window.frames_sink = self.live_frames
         # Paused right away when opened around totality, not only at the next clock tick
         window.set_totality_paused(self._live_view_paused_at(getattr(self, "_reference_now", None)))
         window.share_with_phone = self._phone_dashboard is not None
@@ -2090,6 +2169,121 @@ class SolarEclipseController(Observer):
         else:
             LOGGER.info("Live view closed from the phone dashboard")
 
+    # ------------------------------------------------------------------
+    # Keeping the sun centred
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_mount_calibration() -> Optional[Calibration]:
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        text = settings.value("mount/calibration", "", type=str)
+        if not text:
+            return None
+        try:
+            return Calibration.from_json(text)
+        except Exception:
+            LOGGER.warning("The saved calibration of the mount could not be read; calibrate again", exc_info=True)
+            return None
+
+    def _eclipse_clock(self) -> Optional[tuple]:
+        """(seconds from C2, seconds from C3) of the (simulated) time now, or None without totality here."""
+        now = getattr(self, "_reference_now", None)
+        c2, c3 = self.model.c2_info, self.model.c3_info
+        if now is None or c2 is None or c3 is None:
+            return None
+        return (now - c2.time_utc).total_seconds(), (now - c3.time_utc).total_seconds()
+
+    def set_mount_calibration(self, calibration: Calibration) -> None:
+        """Use and keep a new calibration (a running centring starts again with it)."""
+        self.mount_calibration = calibration
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        settings.setValue("mount/calibration", calibration.to_json())
+        if self.centrer is not None and self.centrer.running:
+            self.stop_centring()
+            self.start_centring()
+
+    def live_view_frame_size(self) -> Optional[tuple]:
+        """(width, height) of the frames of the open live view, or None when there are none."""
+        latest = self.live_frames.latest()
+        return None if latest is None else (latest[1].shape[1], latest[1].shape[0])
+
+    def centring_problem(self) -> Optional[str]:
+        """Why the centring cannot start now, or None when it can."""
+        if self.mount is None or not self.mount.connected:
+            return "Connect the mount first."
+        window = self._live_view_window
+        if window is None or not window.isVisible():
+            return "Open the live view of the camera that shows the sun first."
+        calibration = self.mount_calibration
+        if calibration is None:
+            return "Calibrate first, with the sun in the live view."
+        size = self.live_view_frame_size()
+        if size is None:
+            return "No live view frame yet: wait a moment."
+        if not calibration.matches(size, window._camera.name):
+            return (f"The calibration was made on frames of {calibration.frame_size[0]}×{calibration.frame_size[1]}"
+                    f"{' of ' + calibration.camera if calibration.camera else ''}; the live view now shows "
+                    f"{size[0]}×{size[1]} of {window._camera.name}.  Calibrate again.")
+        if not calibration.matches(size, window._camera.name, self.mount.identity):
+            made_with = f"with {calibration.mount}" if calibration.mount else "without recording the mount"
+            return (f"The calibration was made {made_with}; the mount now is {self.mount.identity}.  "
+                    f"Calibrate again.")
+        return None
+
+    def start_centring(self) -> Optional[str]:
+        """Start keeping the sun centred.  Returns why not, or None when it started."""
+        problem = self.centring_problem()
+        if problem is not None:
+            return problem
+        if self.centrer is not None and self.centrer.running:
+            return None
+        from solareclipseworkbench.utils import quiet_for
+        self.centrer = Centrer(
+            self.mount, self.live_frames, self.mount_calibration,
+            quiet=lambda seconds: quiet_for(self.scheduler, seconds),
+            paused=lambda: self._live_view_paused_at(getattr(self, "_reference_now", None)))
+        self.centrer.start()
+        LOGGER.info("Keeping the sun centred: %s", self.mount_calibration.describe())
+        return None
+
+    def stop_centring(self) -> None:
+        if self.centrer is not None:
+            self.centrer.stop()
+            LOGGER.info("Stopped keeping the sun centred after %d correction(s)", self.centrer.status.corrections)
+        self.centrer = None
+
+    def centring_status(self) -> CentringStatus:
+        return self.centrer.status if self.centrer is not None else CentringStatus()
+
+    def _centring_overlay(self) -> Optional[dict]:
+        """What the live view draws for the centring: the sun found and the target, or None."""
+        centrer = self.centrer
+        if centrer is None or not centrer.running:
+            return None
+        status = centrer.status
+        # While a correction moves the sun, where it was at the last look is no longer where it is
+        sun = None if status.state == "correcting" else status.sun
+        return {"sun": sun, "radius": centrer.radius, "target": status.target, "state": status.state,
+                "message": status.message}
+
+    def stop_indi_server(self) -> None:
+        """Stop the INDI server started for the mount; the mount keeps tracking on its own controller."""
+        if self.indi_server is not None:
+            self.indi_server.stop()
+            self.indi_server = None
+
+    def send_site_to_mount(self) -> list:
+        """ Send the observing location and the (GPS-corrected) time to the connected mount.
+
+        Returns: What was sent, as text; empty when no location is set yet.
+        """
+
+        model = self.model
+        if self.mount is None or None in (model.longitude, model.latitude, model.altitude):
+            return []
+        utc = datetime.datetime.now(tz=datetime.timezone.utc) + model.gps_time_offset
+        return self.mount.send_site(model.latitude, model.longitude, model.altitude, utc)
+
     def _open_live_view(self):
         """Open (or bring to front) the live view window.
 
@@ -2111,8 +2305,10 @@ class SolarEclipseController(Observer):
                 self.view,
                 "No Camera Connected",
                 "Live view requires a connected camera.\n\n"
-                "Click the Camera(s) button first to detect connected cameras.\n"
-                "In simulator mode the VirtualCamera is also supported."
+                "Click the Camera(s) button first to detect connected cameras.\n\n"
+                "To use live view without a camera, start the application with\n"
+                "    sew --sim --virtual-camera\n"
+                "and click the Camera(s) button. The VirtualCamera is then shown."
             )
             return
 
@@ -2226,7 +2422,7 @@ class SolarEclipseController(Observer):
             - Time format (always present);
             - Location (longitude, latitude, altitude);
             - Eclipse date;
-            - Position of the splitter between the eclipse plot and the jobs table;
+            - Where the docks are;
             - How the jobs table shows the commands (in words or as in the script).
 
         If the location and eclipse date are present in the settings file, the reference moments will be updated
@@ -2508,6 +2704,10 @@ class SolarEclipseController(Observer):
                     window = self._live_view_window
                     if window is not None and window.isVisible():
                         window.set_zoom_centre_from_phone(float(data["x"]), float(data["y"]))
+                elif action in (ACTION_MOUNT_HOLD, ACTION_MOUNT_RELEASE, ACTION_MOUNT_STOP):
+                    self._mount_action_from_phone(action, data)
+                    # Nothing on the main window changes
+                    continue
                 handled = True
             except Exception:
                 LOGGER.exception("Phone dashboard action %s failed", action)
@@ -2576,7 +2776,66 @@ class SolarEclipseController(Observer):
             "live_cameras": [name for name, _ in self._live_view_cameras()],
             "live_camera": live["camera"] if live else "",
             "live_switch": not self._live_view_paused_at(reference_now),
+            "mount": self._phone_mount_state(),
         }
+
+    def _apply_simulation_offset(self):
+        """ Move the countdowns and the eclipse visualization to the simulated time.
+
+        The contact times do not change: they depend on the location and the date, not on the simulation.  Only
+        the current time changes.  While a loaded script has jobs, the offset stays as it is: the jobs keep the
+        times they were scheduled at, and the countdowns must agree with them.  The new simulation is then used
+        when the next script is loaded.
+        """
+
+        # Imported here, because the utils module imports this module
+        from solareclipseworkbench.utils import simulation_offset
+
+        if self.scheduler is not None and self.scheduler.running and self.scheduler.get_jobs():
+            LOGGER.info("The loaded script keeps its times; the new simulation starts with the next script")
+            return
+
+        offset = simulation_offset(self.model.reference_moments, self.sim_reference_moment, self.sim_offset_minutes)
+        self.view.eclipse_visualization.set_offset(offset)
+        LOGGER.info("Simulation: %s in %s minutes", self.sim_reference_moment, self.sim_offset_minutes)
+        self.update_time()
+
+    def _phone_mount_state(self) -> Optional[dict]:
+        """The mount as the phone dashboard shows it, or None when no mount is connected."""
+
+        mount = self.mount
+        if mount is None:
+            return None
+        connected = mount.connected
+        return {
+            "connected": connected,
+            "status": mount.describe(),
+            "position": format_position(mount.position()) if connected else "",
+            "rates": [list(rate) for rate in mount.slew_rates()] if connected else [],
+            "rate": mount.slew_rate if connected else None,
+            "centring": self._phone_centring_text(),
+        }
+
+    def _phone_centring_text(self) -> str:
+        if self.centrer is None:
+            return ""
+        status = self.centrer.status
+        return f"Centring: {status.message}" if status.message else "Centring on"
+
+    def _mount_action_from_phone(self, action: str, data: dict) -> None:
+        """Nudge or stop the mount from the phone.  Never waits for the mount (see mount.Nudger)."""
+
+        mount = self.mount
+        if mount is None:
+            return
+        if action == ACTION_MOUNT_HOLD:
+            if mount.connected:
+                mount.nudger.hold(data["direction"], data.get("rate"), hold_s=PHONE_HOLD_S)
+        elif action == ACTION_MOUNT_RELEASE:
+            mount.nudger.release(data["direction"])
+        else:
+            LOGGER.info("Mount stopped from the phone dashboard")
+            mount.nudger.abort()
 
     def _shutdown_scheduler(self):
         """Safely shut down the scheduler and update UI."""
@@ -2588,6 +2847,7 @@ class SolarEclipseController(Observer):
                 if self.jobs_model:
                     self.jobs_model.clear_jobs_overview()
                 self.view.camera_action.setEnabled(True)
+                self.view.camera_action.setToolTip(CAMERA_TOOLTIP)
                 LOGGER.info("Scheduler stopped by user")
                 self.model.camera_overview.set_continuous_mode_commands(None)
         except SchedulerNotRunningError:
@@ -3167,6 +3427,536 @@ class RelayPopup(QWidget, Observable):
         self.controller.relay_trigger.release_all()
 
 
+class MountPopup(QWidget, Observable):
+
+    #: A line of progress of the calibration (from its thread)
+    calibration_progress = pyqtSignal(str)
+    #: The calibration ended: (Calibration or None, error message)
+    calibration_done = pyqtSignal(object, str)
+
+    def __init__(self, observer: 'SolarEclipseController'):
+        """ Panel to connect the telescope mount through an INDI server, and to track, stop and park it.
+
+        The connected mount is registered with the hardware registry, so the
+        mount_* commands in a script use it when they fire.  On connecting, the
+        observing location and the time (GPS-corrected when a GPS was used) are
+        sent to the mount.  The mount is never sent to a position: point it at
+        the sun by hand, behind the solar filter.
+
+        Args:
+            - observer: SolarEclipseController that needs to be notified when the
+                        mount is connected or disconnected
+        """
+
+        QWidget.__init__(self)
+        self.setWindowTitle("Telescope mount")
+        self.setGeometry(QRect(100, 100, 560, 300))
+        self.add_observer(observer)
+        self.controller = observer
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+
+        layout = QVBoxLayout()
+
+        connection_group_box = QGroupBox("INDI server")
+        connection_layout = QGridLayout()
+
+        self.simulated_checkbox = QCheckBox("Simulated mount")
+        self.simulated_checkbox.setToolTip("Use a simulated mount that starts pointed at the sun, to try the "
+                                           "controls and scripts without a mount or an INDI server")
+        self.simulated_checkbox.setChecked(settings.value("mount/simulated", False, type=bool)
+                                           or bool(getattr(observer, "is_simulator", False)))
+        self.simulated_checkbox.toggled.connect(self.show_state)
+        connection_layout.addWidget(self.simulated_checkbox, 3, 1)
+
+        connection_layout.addWidget(QLabel("Server"), 0, 0)
+        self.address = QLineEdit(settings.value("mount/address", "localhost", type=str))
+        self.address.setToolTip("host[:port] of the INDI server (port 7624 when not given), "
+                                f"or '{SIMULATED_HOST}' to try the controls without a mount")
+        connection_layout.addWidget(self.address, 0, 1)
+        self.find_button = QPushButton("Find mounts")
+        self.find_button.setToolTip("Ask the INDI server which mounts it has")
+        self.find_button.clicked.connect(self.find_mounts)
+        connection_layout.addWidget(self.find_button, 0, 2)
+
+        connection_layout.addWidget(QLabel("Mount"), 1, 0)
+        self.device_combobox = QComboBox()
+        self.device_combobox.setEditable(True)
+        self.device_combobox.setToolTip("Name of the mount on the INDI server.  "
+                                        "May be left empty when the server has only one.")
+        saved_device = settings.value("mount/device", "", type=str)
+        if saved_device:
+            self.device_combobox.addItem(saved_device)
+        connection_layout.addWidget(self.device_combobox, 1, 1)
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.clicked.connect(self.connect_or_disconnect)
+        connection_layout.addWidget(self.connect_button, 1, 2)
+
+        connection_layout.addWidget(QLabel("Mount port"), 2, 0)
+        self.device_port = QLineEdit(settings.value("mount/device_port", "", type=str))
+        self.device_port.setPlaceholderText("searched by the driver")
+        self.device_port.setToolTip("How the driver reaches the mount: its serial port on the machine of the INDI "
+                                    "server (e.g. /dev/ttyUSB0), or host:port of a mount on Wi-Fi (e.g. "
+                                    f"{SKYWATCHER_WIFI} for a SkyWatcher, {IOPTRON_WIFI} for an iOptron).  "
+                                    "Leave empty to let the driver search the ports; for a mount model on "
+                                    "Wi-Fi, to use the driver's own network address.")
+        connection_layout.addWidget(self.device_port, 2, 1)
+
+        # Starting the INDI server here, with the driver of the mount model picked once
+        self.start_server_checkbox = QCheckBox("Start the INDI server, for this mount:")
+        self.start_server_checkbox.setToolTip("Start indiserver on this computer (in WSL on Windows) with the driver "
+                                              "of the mount model chosen here, when connecting.  An INDI server that "
+                                              "already runs is used instead.")
+        self.start_server_checkbox.setChecked(settings.value("mount/start_server", False, type=bool))
+        self.start_server_checkbox.toggled.connect(self.show_state)
+        connection_layout.addWidget(self.start_server_checkbox, 4, 1)
+        connection_layout.addWidget(QLabel("Mount model"), 5, 0)
+        self.model_combobox = QComboBox()
+        self.model_combobox.setEditable(True)
+        self.model_combobox.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.model_combobox.setToolTip("The mount, as INDI lists it: type to search.  Which mount is connected "
+                                       "cannot be found out (it is behind a USB-serial chip, or on Wi-Fi), so it "
+                                       "is chosen here once.")
+        self._fill_models(settings.value("mount/driver", "", type=str), settings.value("mount/model", "", type=str))
+        self.model_combobox.currentTextChanged.connect(self.show_state)
+        connection_layout.addWidget(self.model_combobox, 5, 1)
+
+        connection_group_box.setLayout(connection_layout)
+        layout.addWidget(connection_group_box)
+
+        control_layout = QHBoxLayout()
+        self.track_button = QPushButton("Track sun")
+        self.track_button.setToolTip("Unpark when needed, and track at the solar rate")
+        self.track_button.clicked.connect(self.track)
+        control_layout.addWidget(self.track_button)
+        self.stop_button = QPushButton("Stop tracking")
+        self.stop_button.clicked.connect(lambda: self._run(self.controller.mount.stop_tracking))
+        control_layout.addWidget(self.stop_button)
+        self.park_button = QPushButton("Park")
+        self.park_button.setToolTip("Move the mount to its park position")
+        self.park_button.clicked.connect(self.park)
+        control_layout.addWidget(self.park_button)
+        self.abort_button = QPushButton("Abort")
+        self.abort_button.setToolTip("Stop every motion now (a park or a nudge)")
+        self.abort_button.clicked.connect(lambda: self._run(self.controller.mount.abort))
+        control_layout.addWidget(self.abort_button)
+        layout.addLayout(control_layout)
+
+        self.nudge_panel = MountNudgePanel(self)
+        layout.addWidget(self.nudge_panel)
+
+        reverse_layout = QHBoxLayout()
+        self.reverse_ns_checkbox = QCheckBox("Reverse N/S")
+        self.reverse_we_checkbox = QCheckBox("Reverse E/W")
+        for checkbox, buttons in ((self.reverse_ns_checkbox, "▲ N and ▼ S"), (self.reverse_we_checkbox, "◀ W and E ▶")):
+            checkbox.setToolTip(f"Swap the {buttons} buttons (here, in the live view and on the phone), when the "
+                                "mount moves the other way.  Kept for this mount.  The centring is not affected: "
+                                "the calibration measures which way the mount moves.")
+            checkbox.toggled.connect(self.reverse_toggled)
+            reverse_layout.addWidget(checkbox)
+        reverse_layout.addStretch(1)
+        layout.addLayout(reverse_layout)
+
+        # Keeping the sun centred from the live view
+        centring_group_box = QGroupBox("Keep the sun centred")
+        centring_layout = QGridLayout()
+        self.calibrate_button = QPushButton("Calibrate")
+        self.calibrate_button.setToolTip("Guide east, west, north and south (about 1.5 minutes) and measure how the "
+                                         "sun moves in the live view.  Needs the live view open with the sun in it.")
+        self.calibrate_button.clicked.connect(self.calibrate)
+        centring_layout.addWidget(self.calibrate_button, 0, 0)
+        self.calibration_label = QLabel()
+        self.calibration_label.setWordWrap(True)
+        centring_layout.addWidget(self.calibration_label, 0, 1)
+        self.centring_checkbox = QCheckBox("Keep the sun centred")
+        self.centring_checkbox.setToolTip("Every 30 s, find the sun in the live view and guide it back to the "
+                                          "middle when it is more than 2 px off, in a gap between the scheduled "
+                                          "shots.  Paused from 15 s before C2 to 15 s after C3.")
+        self.centring_checkbox.toggled.connect(self.centring_toggled)
+        centring_layout.addWidget(self.centring_checkbox, 1, 0)
+        self.centring_label = QLabel()
+        self.centring_label.setWordWrap(True)
+        centring_layout.addWidget(self.centring_label, 1, 1)
+        centring_layout.setColumnStretch(1, 1)
+        centring_group_box.setLayout(centring_layout)
+        layout.addWidget(centring_group_box)
+
+        self._calibrator: Optional[Calibrator] = None
+        self.calibration_progress.connect(self._on_calibration_progress)
+        self.calibration_done.connect(self._on_calibration_done)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+        self.site_label = QLabel()
+        self.site_label.setWordWrap(True)
+        layout.addWidget(self.site_label)
+
+        self.setLayout(layout)
+
+        # The mount state changes on its own (a park finishing, a lost connection)
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.show_state)
+        self.status_timer.start(1000)
+        self._show_reversal()
+        self.show_state()
+
+    @staticmethod
+    def _reverse_keys(mount) -> tuple:
+        """ Settings keys of the reversed N/S and E/W of this mount. """
+
+        name = mount.identity.replace("/", "_")
+        return f"mount/reverse_ns/{name}", f"mount/reverse_we/{name}"
+
+    def load_reversal(self, mount):
+        """ Give a mount that was just connected the reversed axes saved for it. """
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        ns_key, we_key = self._reverse_keys(mount)
+        mount.reverse_ns = settings.value(ns_key, False, type=bool)
+        mount.reverse_we = settings.value(we_key, False, type=bool)
+        self._show_reversal()
+
+    def _show_reversal(self):
+        """ Tick the reverse check boxes as the connected mount has them. """
+
+        mount = self.controller.mount
+        for checkbox, reversed_axis in ((self.reverse_ns_checkbox, getattr(mount, "reverse_ns", False)),
+                                        (self.reverse_we_checkbox, getattr(mount, "reverse_we", False))):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(bool(reversed_axis))
+            checkbox.blockSignals(False)
+
+    def reverse_toggled(self):
+        """ Reverse the nudge buttons of the connected mount, and keep it for this mount. """
+
+        mount = self.controller.mount
+        if mount is None:
+            return
+        mount.reverse_ns = self.reverse_ns_checkbox.isChecked()
+        mount.reverse_we = self.reverse_we_checkbox.isChecked()
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        ns_key, we_key = self._reverse_keys(mount)
+        settings.setValue(ns_key, mount.reverse_ns)
+        settings.setValue(we_key, mount.reverse_we)
+
+    def _fill_models(self, driver: str, model: str):
+        """ List the mounts of the INDI driver lists; select the saved one. """
+
+        self._models = mount_drivers()
+        self.model_combobox.clear()
+        for mount_driver in self._models:
+            installed = mount_driver.installed()
+            self.model_combobox.addItem(mount_driver.label + ("" if installed else "  (driver not installed)"),
+                                        mount_driver.executable)
+        completer = self.model_combobox.completer()
+        if completer is not None:
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        for index, mount_driver in enumerate(self._models):
+            if mount_driver.executable == driver and (not model or mount_driver.label == model):
+                self.model_combobox.setCurrentIndex(index)
+                break
+        if not self._models:
+            self.start_server_checkbox.setChecked(False)
+            self.start_server_checkbox.setToolTip(
+                "INDI is not installed here: install it (on Ubuntu and in WSL: sudo apt install indi-bin), or "
+                "connect to an INDI server that runs elsewhere")
+
+    def selected_driver(self):
+        """ The MountDriver chosen in the model list, or None. """
+
+        index = self.model_combobox.currentIndex()
+        text = self.model_combobox.currentText().strip()
+        if 0 <= index < len(self._models) and self.model_combobox.itemText(index) == text:
+            return self._models[index]
+        matches = [m for m in self._models if m.label.lower() == text.lower()]
+        return matches[0] if matches else None
+
+    def show_state(self):
+        """ Show the connection state in the buttons and the status label. """
+
+        mount = self.controller.mount
+        connected = mount is not None
+        self.connect_button.setText("Disconnect" if connected else "Connect")
+        simulated = self.simulated_checkbox.isChecked()
+        start_server = self.start_server_checkbox.isChecked()
+        self.simulated_checkbox.setEnabled(not connected)
+        self.device_port.setEnabled(not connected and not simulated)
+        for widget in (self.address, self.device_combobox, self.find_button):
+            widget.setEnabled(not connected and not simulated and not start_server)
+        self.start_server_checkbox.setEnabled(not connected and not simulated and bool(self._models))
+        self.model_combobox.setEnabled(not connected and not simulated and start_server and bool(self._models))
+        driver = self.selected_driver() if start_server else None
+        if driver is not None and driver.network:
+            placeholder = "the driver's Wi-Fi address"
+        elif driver is None or "ioptron" in f"{driver.manufacturer} {driver.label}".lower():
+            placeholder = f"searched by the driver; on Wi-Fi e.g. {IOPTRON_WIFI} (iOptron)"
+        else:
+            placeholder = "searched by the driver"
+        self.device_port.setPlaceholderText(placeholder)
+        for button in (self.track_button, self.stop_button, self.park_button, self.abort_button,
+                       self.reverse_ns_checkbox, self.reverse_we_checkbox):
+            button.setEnabled(connected and mount.connected)
+        self.status_label.setText(mount.describe() if connected else "Not connected")
+        self.nudge_panel.refresh()
+        self._show_centring()
+
+    def _show_centring(self):
+        """ Show the calibration and the state of the centring. """
+
+        controller = self.controller
+        mount = controller.mount
+        connected = mount is not None and mount.connected
+        calibrating = self._calibrator is not None
+        self.calibrate_button.setText("Stop calibrating" if calibrating else "Calibrate")
+        self.calibrate_button.setEnabled(connected or calibrating)
+        if not calibrating:
+            calibration = controller.mount_calibration
+            if calibration is None:
+                self.calibration_label.setText("Not calibrated.")
+            else:
+                made = datetime.datetime.fromtimestamp(calibration.made).strftime("%Y-%m-%d %H:%M")
+                self.calibration_label.setText(f"Calibrated {made}"
+                                               + (f" on {calibration.camera}" if calibration.camera else "")
+                                               + (f" with {calibration.mount}" if calibration.mount else "")
+                                               + f": {calibration.describe()}")
+        centrer = controller.centrer
+        running = centrer is not None and centrer.running
+        with QSignalBlocker(self.centring_checkbox):
+            self.centring_checkbox.setChecked(running)
+        self.centring_checkbox.setEnabled(connected and not calibrating
+                                          and (running or controller.mount_calibration is not None))
+        if running:
+            status = centrer.status
+            self.centring_label.setText(f"{status.message} — {status.corrections} correction(s)")
+        elif centrer is not None and centrer.status.state == CENTRING_STOPPED:
+            self.centring_label.setText(centrer.status.message)
+        elif not calibrating:
+            self.centring_label.setText("")
+
+    def calibrate(self):
+        """ Start the calibration on a thread of its own, or stop the one that runs. """
+
+        if self._calibrator is not None:
+            self._calibrator.stop()
+            return
+        controller = self.controller
+        window = controller._live_view_window
+        if window is None or not window.isVisible():
+            QMessageBox.warning(self, "Mount", "Open the live view of the camera that shows the sun first.")
+            return
+        answer = QMessageBox.question(
+            self, "Mount", "The calibration guides the mount east, west, north and south, for about 1.5 minutes "
+                           "at the guide rate, and brings the sun back where it was.\n\nThe sun must be in the "
+                           "live view, roughly in the middle, through the filter.  Calibrate now?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        controller.stop_centring()
+        self._calibrator = Calibrator(controller.mount, controller.live_frames, camera=window._camera.name,
+                                      progress=self.calibration_progress.emit)
+        calibrator = self._calibrator
+
+        def run():
+            try:
+                result = calibrator.run()
+                error = ""
+            except CalibrationError as exc:
+                result, error = None, str(exc)
+            except Exception as exc:
+                LOGGER.exception("Calibration failed")
+                result, error = None, str(exc)
+            try:
+                self.calibration_done.emit(result, error)
+            except RuntimeError:
+                pass        # the window was closed
+
+        threading.Thread(target=run, name="mount-calibration", daemon=True).start()
+        self.calibration_label.setText("Calibrating…")
+        self._show_centring()
+
+    def _on_calibration_progress(self, line: str):
+        self.calibration_label.setText(f"Calibrating: {line}")
+
+    def _on_calibration_done(self, calibration, error: str):
+        self._calibrator = None
+        if calibration is not None:
+            self.controller.set_mount_calibration(calibration)
+            if calibration.warnings:
+                QMessageBox.information(self, "Mount", "Calibrated, but: " + "; ".join(calibration.warnings))
+        else:
+            QMessageBox.warning(self, "Mount", f"The calibration failed: {error}")
+        self._show_centring()
+
+    def centring_toggled(self, checked: bool):
+        """ Start or stop keeping the sun centred. """
+
+        if checked:
+            problem = self.controller.start_centring()
+            if problem is not None:
+                QMessageBox.warning(self, "Mount", problem)
+        else:
+            self.controller.stop_centring()
+        self._show_centring()
+
+    def _busy(self, func):
+        """ Run func with a wait cursor; INDI calls block until the server answers. """
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return func()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _run(self, func):
+        """ Run a mount call, and show a refusal instead of raising. """
+
+        try:
+            return self._busy(func)
+        except (MountError, IndiError) as exc:
+            QMessageBox.warning(self, "Mount", str(exc))
+        finally:
+            self.show_state()
+
+    def find_mounts(self):
+        """ List the mounts of the INDI server in the mount list. """
+
+        address = self.address.text().strip()
+        if address.lower() == SIMULATED_HOST:
+            mounts = ["Telescope Simulator"]
+        else:
+            try:
+                host, port = parse_address(address)
+
+                def ask():
+                    client = IndiClient(host, port, timeout=3.0)
+                    try:
+                        client.wait_settled()
+                        return find_mounts(client)
+                    finally:
+                        client.close()
+
+                mounts = self._busy(ask)
+            except (MountError, IndiError) as exc:
+                QMessageBox.warning(self, "Mount", str(exc))
+                return
+        if not mounts:
+            QMessageBox.information(self, "Mount", "The INDI server has no mount.  Start it with the driver "
+                                                   "of the mount, e.g. 'indiserver indi_eqmod_telescope'.")
+            return
+        typed = self.device_combobox.currentText()
+        self.device_combobox.clear()
+        self.device_combobox.addItems(mounts)
+        if typed in mounts:
+            self.device_combobox.setCurrentText(typed)
+
+    def connect_or_disconnect(self):
+        """ Connect the mount and register it, or close the connection to it. """
+
+        if self.controller.mount is not None:
+            if self._calibrator is not None:
+                self._calibrator.stop()
+            self.controller.stop_centring()
+            # The driver stays connected and the mount keeps tracking
+            self.controller.mount.close()
+            self.controller.mount = None
+            register_hardware('mount', None)
+            self.controller.stop_indi_server()
+            self.site_label.setText("")
+            self.show_state()
+            self.notify_observers(self)
+            return
+
+        simulated = self.simulated_checkbox.isChecked()
+        start_server = self.start_server_checkbox.isChecked() and not simulated
+        address = self.address.text().strip() or "localhost"
+        device = self.device_combobox.currentText().strip() or None
+        device_port = self.device_port.text().strip() or None
+        mount_driver = self.selected_driver() if start_server else None
+        server_note = ""
+        if start_server:
+            if mount_driver is None:
+                QMessageBox.warning(self, "Mount", "Choose the model of the mount in the list.")
+                return
+            server = IndiServer(mount_driver.executable)
+            try:
+                self._busy(server.start)
+            except IndiServerError as exc:
+                QMessageBox.warning(self, "Mount", f"The INDI server could not be started: {exc}")
+                return
+            self.controller.indi_server = server
+            address, device = "localhost", None
+            server_note = (" (the INDI server that already ran is used)" if server.borrowed
+                           else f" (INDI server started with {mount_driver.executable})")
+        try:
+            if simulated:
+                mount = self._busy(lambda: Mount.open(SIMULATED_HOST))
+            else:
+                # Searching the ports for the mount takes longer than opening a known one
+                timeout = 15.0 if device_port else 40.0
+                network = mount_driver is not None and mount_driver.network
+                mount = self._busy(lambda: Mount.open(address, device, device_port, timeout=timeout,
+                                                      network=network))
+        except (MountError, IndiError) as exc:
+            if start_server:
+                tail = self.controller.indi_server.log_tail() if self.controller.indi_server else ""
+                self.controller.stop_indi_server()
+                if tail:
+                    exc = f"{exc}\n\nThe INDI server said: {tail}"
+            QMessageBox.warning(self, "Mount", str(exc))
+            return
+
+        self.controller.mount = mount
+        self.load_reversal(mount)
+        register_hardware('mount', mount)
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        settings.setValue("mount/simulated", simulated)
+        if not simulated:
+            settings.setValue("mount/start_server", start_server)
+            if mount_driver is not None:
+                settings.setValue("mount/driver", mount_driver.executable)
+                settings.setValue("mount/model", mount_driver.label)
+            else:
+                settings.setValue("mount/address", address)
+                settings.setValue("mount/device", mount.device)
+            settings.setValue("mount/device_port", device_port or "")
+
+        try:
+            sent = self._busy(self.controller.send_site_to_mount)
+            self.site_label.setText(("Sent to the mount: " + "; ".join(sent) if sent else
+                                     "No location is set yet: it is sent to the mount once one is chosen.")
+                                    + server_note)
+        except (MountError, IndiError) as exc:
+            self.site_label.setText(f"The location and time could not be sent: {exc}")
+
+        self.show_state()
+        self.notify_observers(self)
+
+    def track(self):
+        """ Track at the solar rate, and say so when the mount has no solar rate. """
+
+        rate = self._run(self.controller.mount.track_solar)
+        if rate == "sidereal":
+            QMessageBox.information(self, "Mount", "The mount has no solar tracking rate, so it tracks at the "
+                                                   "sidereal rate.  The sun drifts about 2.5′ an hour.")
+
+    def park(self):
+        """ Park, after a confirmation: parking moves the mount. """
+
+        answer = QMessageBox.question(self, "Mount", "Parking moves the mount to its park position.  "
+                                                     "Park it now?")
+        if answer == QMessageBox.StandardButton.Yes:
+            self._run(self.controller.mount.park)
+
+    def closeEvent(self, event):
+        self.status_timer.stop()
+        if self._calibrator is not None:
+            # A calibration must not go on guiding with nobody seeing it
+            self._calibrator.stop()
+        super().closeEvent(event)
+
+
 class SettingsPopup(QWidget, Observable):
 
     def __init__(self, observer: SolarEclipseController):
@@ -3583,6 +4373,9 @@ class LiveViewWindow(QWidget):
     The focus tools (peaking, focus score, loupe, histogram) and the crosshair
     work on the frames of every camera.  A click on the preview sets the zoom
     centre and the part of the frame that the loupe shows.
+
+    Keys: F puts the window in full screen and back, Esc leaves full screen, C
+    shows or hides the crosshair and L the loupe.
     """
 
     def __init__(self, camera, parent=None):
@@ -3598,6 +4391,10 @@ class LiveViewWindow(QWidget):
         # The phone dashboard shows the frames of this window (it never reads the camera itself).
         # Set by the controller while the dashboard runs; the frames are only encoded then.
         self.share_with_phone: bool = False
+        # The frames are also handed to the calibration and the centring of the mount (set by the controller)
+        self.frames_sink: Optional[LiveFrames] = None
+        # What the centring draws: {"sun", "radius", "target", "state", "message"} or None (set by the controller)
+        self.centring_overlay: Optional[dict] = None
         self._phone_jpeg: Optional[bytes] = None
         self._phone_frame_time: Optional[float] = None
         self._phone_frame_id: int = 0
@@ -3628,6 +4425,9 @@ class LiveViewWindow(QWidget):
         self._toggle_btn.clicked.connect(self._on_toggle)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
+        self._fullscreen_btn = QPushButton("Full screen")
+        self._fullscreen_btn.setToolTip("Fill the screen with the preview (F).  Esc leaves full screen.")
+        self._fullscreen_btn.clicked.connect(self.toggle_fullscreen)
 
         # Zoom control: Fit / 5x / 10x
         self._zoom_combo = QComboBox()
@@ -3697,6 +4497,11 @@ class LiveViewWindow(QWidget):
         self._histogram = live_view_tools.HistogramWidget()
         self._histogram.setVisible(False)
 
+        # Frames per second that the window shows
+        self._frame_rate = live_view_tools.FrameRate()
+        self._fps_label = QLabel("FPS: --")
+        self._fps_label.setStyleSheet("color: gray; font-size: 11px;")
+
         # Pan controls (hidden until a zoom > 1 is selected)
         self._last_image: Union[QImage, None] = None
         self._last_ts: Union[datetime.datetime, None] = None
@@ -3714,6 +4519,7 @@ class LiveViewWindow(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self._toggle_btn)
         btn_layout.addWidget(close_btn)
+        btn_layout.addWidget(self._fullscreen_btn)
         btn_layout.addStretch(1)
         btn_layout.addWidget(QLabel("Preview size:"))
         btn_layout.addWidget(self._size_combo)
@@ -3728,6 +4534,7 @@ class LiveViewWindow(QWidget):
         tools_layout.addWidget(self._histogram_box)
         tools_layout.addWidget(self._crosshair_box)
         tools_layout.addStretch(1)
+        tools_layout.addWidget(self._fps_label)
 
         # Image area with optional vertical pan slider and the loupe
         layout = QVBoxLayout()
@@ -3742,6 +4549,9 @@ class LiveViewWindow(QWidget):
         layout.addWidget(self._timestamp_label)
         layout.addWidget(self._status_label)
         layout.addLayout(tools_layout)
+        # Nudges of the telescope mount, shown while one is connected
+        self._mount_panel = MountNudgePanel(self, hide_when_absent=True)
+        layout.addWidget(self._mount_panel)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
@@ -3771,16 +4581,20 @@ class LiveViewWindow(QWidget):
 
     def _on_frame(self, jpeg_bytes: bytes):
         """Called from the LiveViewThread; enqueue (frame, timestamp) for GUI thread."""
+        sink = self.frames_sink
+        if sink is not None:
+            sink.push(jpeg_bytes, self._camera.name)
         try:
             self._frame_queue.put_nowait((jpeg_bytes, datetime.datetime.now()))
         except queue.Full:
             pass  # drop the frame; the previous one hasn't been displayed yet
 
     def _poll_frame(self):
-        """Called on the Qt main thread by the poll timer; updates the image."""
+        """Called on the Qt main thread by the poll timer; updates the image and the frame rate."""
         try:
             jpeg_bytes, ts = self._frame_queue.get_nowait()
         except queue.Empty:
+            self._show_frame_rate()
             return
         if isinstance(jpeg_bytes, memoryview):
             jpeg_bytes = jpeg_bytes.tobytes()
@@ -3796,6 +4610,12 @@ class LiveViewWindow(QWidget):
         # Store and render using the centralized renderer so pan/zoom UI
         # remains in sync with the latest frame.
         self._render_image(image, ts, new_frame=True)
+        self._frame_rate.add(time.monotonic())
+        self._show_frame_rate()
+
+    def _show_frame_rate(self):
+        rate = self._frame_rate.rate(time.monotonic())
+        self._fps_label.setText("FPS: --" if rate is None else f"FPS: {rate:.1f}")
 
     def _apply_state(self):
         """Push the user+totality state into the thread and refresh the button."""
@@ -3844,6 +4664,37 @@ class LiveViewWindow(QWidget):
     def _on_toggle(self):
         self._user_enabled = not self._user_enabled
         self._apply_state()
+
+    def toggle_fullscreen(self):
+        """Fill the screen with the window, or bring it back to its normal size."""
+        if self.isFullScreen():
+            self.showNormal()
+            self._fullscreen_btn.setText("Full screen")
+        else:
+            self.showFullScreen()
+            self._fullscreen_btn.setText("Leave full screen")
+
+    def keyPressEvent(self, event):
+        """F, Esc, C and L, without Ctrl, Alt or Meta.
+
+        A combo box with the focus uses the letter keys to select an item.  It
+        keeps them, so they do not come here and do not change a tool.
+        """
+        modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier \
+            | Qt.KeyboardModifier.MetaModifier
+        key = event.key()
+        if event.modifiers() & modifiers:
+            super().keyPressEvent(event)
+        elif key == Qt.Key.Key_F:
+            self.toggle_fullscreen()
+        elif key == Qt.Key.Key_Escape and self.isFullScreen():
+            self.toggle_fullscreen()
+        elif key == Qt.Key.Key_C:
+            self._crosshair_box.toggle()
+        elif key == Qt.Key.Key_L:
+            self._loupe_box.toggle()
+        else:
+            super().keyPressEvent(event)
 
     def _on_size_changed(self, size: str):
         """Slot for preview size combo box changes."""
@@ -3986,6 +4837,8 @@ class LiveViewWindow(QWidget):
         )
         if self._crosshair_box.isChecked():
             live_view_tools.draw_crosshair(disp)
+        if self.centring_overlay is not None and shown_rect.width() and shown_rect.height():
+            live_view_tools.draw_centring(disp, shown_rect, self.centring_overlay)
 
         if new_frame and self.share_with_phone:
             self._encode_phone_frame(shown)
@@ -4077,6 +4930,9 @@ class LiveViewWindow(QWidget):
 
     def closeEvent(self, event):
         self._poll_timer.stop()
+        if self.frames_sink is not None:
+            # Old frames must not count as the sun now
+            self.frames_sink.clear()
         if self._thread is not None:
             self._thread.stop()
             self._thread = None

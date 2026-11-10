@@ -459,18 +459,30 @@ def prepare_duration_s(switch_s: float, profile: TimingProfile = DEFAULT_PROFILE
     return profile.picture_overhead_s + switch_s
 
 
-def beads_burst_start(window: Tuple[float, float], shooting_s: float, lead_s: float = BURST_LEAD_S) -> float:
-    """When to start a beads burst so its shooting is centred on the Baily's beads window.
+def beads_burst_start(window: Tuple[float, float], shooting_s: float, entering: bool,
+                      lead_s: float = BURST_LEAD_S) -> float:
+    """When to start a beads burst so its shooting holds the totality side of the Baily's beads window.
+
+    The last bead before totality is at the end of the C2 window (BEADS_C2_END),
+    and the first bead after totality is at the start of the C3 window
+    (BEADS_C3_START).  A burst can be shorter than the window, so it is put
+    against that edge: the C2 burst ends BEADS_WINDOW_MARGIN_S after the window,
+    and the C3 burst starts BEADS_WINDOW_MARGIN_S before it.  A burst that covers
+    the window plus that margin on either side is then centred on the window.
 
     Args:
         - window: Start and end of the window, in seconds relative to the contact (negative: before it)
         - shooting_s: Time the shutter is held during the burst
+        - entering: True for the window at C2, False for the window at C3
         - lead_s: Seconds from the command until the camera starts shooting (see burst_lead_s)
 
     Returns: Start of the take_burst command in seconds relative to the contact, to a tenth of a second.
     """
-    centre = (window[0] + window[1]) / 2
-    return round(centre - shooting_s / 2 - lead_s, 1)
+    if entering:
+        shooting_start = window[1] + BEADS_WINDOW_MARGIN_S - shooting_s
+    else:
+        shooting_start = window[0] - BEADS_WINDOW_MARGIN_S
+    return round(shooting_start - lead_s, 1)
 
 
 def beads_burst_seconds(window: Tuple[float, float], profile: TimingProfile = DEFAULT_PROFILE) -> float:
@@ -496,8 +508,9 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
                           neighbouring shots then keep their usual distance from C2/C3.
         - profile: Overheads to plan with (defaults, or measured on the camera)
         - beads_c2, beads_c3: Baily's beads window around C2 and C3 (BEADS_C2_START/_END, ...), in
-                              seconds relative to the contact.  The beads bursts are centred on them
-                              and, on a tested camera, cover them (see beads_burst_seconds);
+                              seconds relative to the contact.  The beads bursts hold the edge of
+                              each window next to totality (see beads_burst_start) and, on a tested
+                              camera, cover the window (see beads_burst_seconds);
                               without both, the bursts start at C2-4 s and C3+1 s.
 
     Every burst shoots CONTACT_BURST_S, except a beads burst that covers its
@@ -518,11 +531,11 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
     switch_s = mode_switch_s(vendor) if bursts_enabled else 0.0
     beads_timed = beads_c2 is not None and beads_c3 is not None
 
-    def beads(window, seconds, fixed_start):
+    def beads(window, seconds, fixed_start, entering):
         """(param, shooting s, busy s, start relative to the contact) of a beads burst."""
         param = burst_param_for_s(vendor, seconds, profile) if window is not None else burst_param
         shooting = burst_shooting_s(vendor, param, profile)
-        start = beads_burst_start(window, shooting, lead_s) if window is not None else fixed_start
+        start = beads_burst_start(window, shooting, entering, lead_s) if window is not None else fixed_start
         return param, shooting, burst_duration_s(vendor, param, profile), start
 
     def c2_diamond(c2_beads):
@@ -531,21 +544,21 @@ def contact_burst_plan(vendor: Optional[str], bursts_enabled: bool = True,
     def c3_diamond(c3_beads):
         return round(c3_beads[3] + math.ceil(c3_beads[2]), 1)
 
-    def fitted(window, fixed_start, diamond_start):
+    def fitted(window, fixed_start, diamond_start, entering):
         """The beads burst that covers its window without moving the diamond ring burst too far."""
-        standard = beads(window, CONTACT_BURST_S, fixed_start)
+        standard = beads(window, CONTACT_BURST_S, fixed_start, entering)
         if window is None:
             return standard
         seconds = beads_burst_seconds(window, profile)
         while True:
-            burst = beads(window, seconds, fixed_start)
+            burst = beads(window, seconds, fixed_start, entering)
             if (seconds <= CONTACT_BURST_S
-                    or abs(diamond_start(burst) - diamond_start(standard)) <= DIAMOND_RING_SHIFT_MAX_S):
+                    or round(abs(diamond_start(burst) - diamond_start(standard)), 1) <= DIAMOND_RING_SHIFT_MAX_S):
                 return burst
             seconds = round(seconds - 0.1, 1)
 
-    c2_beads = fitted(beads_c2 if beads_timed else None, -C2_BEADS_START_S, c2_diamond)
-    c3_beads = fitted(beads_c3 if beads_timed else None, C3_BEADS_START_S, c3_diamond)
+    c2_beads = fitted(beads_c2 if beads_timed else None, -C2_BEADS_START_S, c2_diamond, True)
+    c3_beads = fitted(beads_c3 if beads_timed else None, C3_BEADS_START_S, c3_diamond, False)
     c2_beads_start = -c2_beads[3]
     c3_beads_start = c3_beads[3]
     c2_diamond_start = c2_diamond(c2_beads)

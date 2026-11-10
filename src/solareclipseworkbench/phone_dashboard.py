@@ -55,7 +55,19 @@ ACTION_ABORT = "abort"
 ACTION_LIVE_POINT = "live_point"
 # Show the live view of another camera: "camera" is its name, or "" to close live view
 ACTION_LIVE_CAMERA = "live_camera"
-ACTIONS = (ACTION_EV_UP, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_ABORT, ACTION_LIVE_POINT, ACTION_LIVE_CAMERA)
+# Nudge the mount: "direction" is N, S, E or W, "rate" the name of a slew rate (optional).  The page
+# sends it again every MOUNT_RENEW_MS while the button is held; each one keeps the mount moving for
+# PHONE_HOLD_S, so the mount stops by itself when the phone loses the network.
+ACTION_MOUNT_HOLD = "mount_hold"
+# The button was let go: "direction" as above
+ACTION_MOUNT_RELEASE = "mount_release"
+# Stop every motion of the mount
+ACTION_MOUNT_STOP = "mount_stop"
+ACTIONS = (ACTION_EV_UP, ACTION_EV_DOWN, ACTION_EV_RESET, ACTION_ABORT, ACTION_LIVE_POINT, ACTION_LIVE_CAMERA,
+           ACTION_MOUNT_HOLD, ACTION_MOUNT_RELEASE, ACTION_MOUNT_STOP)
+
+#: How long one mount_hold from the phone keeps the mount moving: longer than on the laptop, for the network
+PHONE_HOLD_S = 1.0
 
 # Largest request body accepted for an action
 _MAX_BODY = 1024
@@ -118,6 +130,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   #camSel { flex:1; min-width:0; font-size:16px; padding:8px; border-radius:8px; background:#21262d;
             color:var(--fg); border:1px solid var(--line); }
   #liveHead label { font-size:13px; color:var(--dim); text-transform:none; letter-spacing:0; font-weight:400; }
+  #mountRow { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  #mountRow label { font-size:14px; color:var(--dim); }
+  #rateSel { flex:1; min-width:0; font-size:16px; padding:8px; border-radius:8px; background:#21262d;
+             color:var(--fg); border:1px solid var(--line); }
+  #pad { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  #pad button { touch-action:none; user-select:none; -webkit-user-select:none; }
+  #pad button.held { background:#30363d; border-color:var(--accent); }
+  #mountStatus { font-size:14px; color:var(--dim); margin-top:8px; text-align:center; }
   #msg { min-height:1.3em; text-align:center; font-size:14px; margin-top:8px; color:var(--warn); }
 </style>
 </head>
@@ -163,6 +183,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<div id="mountBox" hidden>
+<h2>Mount</h2>
+<div class="panel">
+  <div id="mountRow"><label for="rateSel">Speed</label><select id="rateSel"></select></div>
+  <div id="pad">
+    <span></span><button data-dir="N">&#9650; N</button><span></span>
+    <button data-dir="W">&#9664; W</button><button id="mountStop" onclick="act('mount_stop')">Stop</button>
+    <button data-dir="E">E &#9654;</button>
+    <span></span><button data-dir="S">&#9660; S</button><span></span>
+  </div>
+  <div id="mountStatus">&nbsp;</div>
+  <div class="small" style="text-align:center">Hold a button to move.  Directions are on the sky:
+    the picture may be turned or mirrored.</div>
+</div>
+</div>
+
 <h2>Cameras</h2>
 <div class="panel"><table id="cameras"></table></div>
 
@@ -189,6 +225,53 @@ function pickCamera() {
   camPicked = sel.value; camPickedAt = performance.now();
   liveShown = loupeShown = histShown = -1;
   act('live_camera', {camera: sel.value}, sel.value ? 'Switching to ' + sel.value + '\u2026' : 'Live view off.');
+}
+
+// Mount nudges: renewed while held; the laptop stops the mount by itself when the renewals stop
+const MOUNT_RENEW_MS = 250;
+let heldDir = null, holdTimer = null;
+function sendQuiet(action, extra) {
+  fetch('action?k=' + encodeURIComponent(KEY), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(Object.assign({action}, extra || {}))}).catch(() => {});
+}
+function holdMount(dir) {
+  releaseMount();
+  heldDir = dir;
+  const rate = document.getElementById('rateSel').value;
+  const send = () => sendQuiet('mount_hold', rate ? {direction: dir, rate} : {direction: dir});
+  send(); holdTimer = setInterval(send, MOUNT_RENEW_MS);
+  for (const b of document.querySelectorAll('#pad button[data-dir]')) b.classList.toggle('held', b.dataset.dir === dir);
+}
+function releaseMount() {
+  if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
+  if (heldDir) { sendQuiet('mount_release', {direction: heldDir}); heldDir = null; }
+  for (const b of document.querySelectorAll('#pad button[data-dir]')) b.classList.remove('held');
+}
+for (const b of document.querySelectorAll('#pad button[data-dir]')) {
+  b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); holdMount(b.dataset.dir); });
+  for (const end of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(end, releaseMount);
+  b.addEventListener('contextmenu', ev => ev.preventDefault());
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseMount(); });
+
+function renderMount(stale) {
+  const m = state.mount;
+  document.getElementById('mountBox').hidden = !m;
+  if (!m) { releaseMount(); return; }
+  const sel = document.getElementById('rateSel');
+  const key = m.rates.map(r => r[0]).join('\\n');
+  if (sel.dataset.key !== key) {
+    sel.innerHTML = m.rates.length ? m.rates.map(r => '<option value="' + esc(r[0]) + '">' + esc(r[1]) + '</option>').join('')
+                                   : '<option value="">driver default</option>';
+    sel.dataset.key = key;
+    if (m.rate) sel.value = m.rate;
+  }
+  sel.disabled = stale || m.rates.length < 2;
+  for (const b of document.querySelectorAll('#pad button')) b.disabled = stale || !m.connected;
+  if (stale) releaseMount();
+  document.getElementById('mountStatus').textContent = m.status + (m.position ? ' \u00b7 ' + m.position : '') +
+    (m.centring ? ' \u00b7 ' + m.centring : '');
 }
 
 function renderCameras() {
@@ -347,6 +430,7 @@ function render() {
     esc(c.free) + '</td></tr>'
   ).join('') : '<tr><td class="small">No cameras connected</td></tr>';
 
+  renderMount(stale);
   renderLive();
 }
 
@@ -505,7 +589,20 @@ class DashboardServer:
             if not isinstance(camera, str) or len(camera) > 200:
                 return 400
             data = {"action": action, "camera": camera}
-        if action == ACTION_LIVE_CAMERA:
+        if action in (ACTION_MOUNT_HOLD, ACTION_MOUNT_RELEASE):
+            direction = data.get("direction")
+            if not isinstance(direction, str) or direction.upper() not in ("N", "S", "E", "W"):
+                return 400
+            rate = data.get("rate")
+            if rate is not None and (not isinstance(rate, str) or len(rate) > 40):
+                return 400
+            data = {"action": action, "direction": direction.upper()}
+            if action == ACTION_MOUNT_HOLD and rate:
+                data["rate"] = rate
+        if action in (ACTION_MOUNT_HOLD, ACTION_MOUNT_RELEASE):
+            # Several a second while a button is held
+            LOGGER.debug("Phone dashboard: %s %s", action, data["direction"])
+        elif action == ACTION_LIVE_CAMERA:
             LOGGER.info("Phone dashboard: live view of %r", data["camera"] or "no camera")
         elif action == ACTION_LIVE_POINT:
             LOGGER.debug("Phone dashboard: loupe moved to %.3f, %.3f", data["x"], data["y"])

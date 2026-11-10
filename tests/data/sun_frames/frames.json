@@ -1,0 +1,194 @@
+{
+ "source": "Canon EOS R, total solar eclipse of 2026-08-12 (Spain), by Wim De Meester; frames reduced to 1000 px, JPEG quality 90.  'sun' is [x, y, radius] found on the lossless frame with radius_hint=60 and checked by eye, or null where no sun must be found.",
+ "c2": "2026-08-12T20:29:22+02:00",
+ "c3": "2026-08-12T20:31:14+02:00",
+ "radius": 60,
+ "frames": [
+  {
+   "file": "eclipse2026_001.jpg",
+   "time": "2026-08-12T19:34:22.94+02:00",
+   "note": "full disk, filtered",
+   "sun": [
+    500.81,
+    332.97,
+    61.11
+   ]
+  },
+  {
+   "file": "eclipse2026_100.jpg",
+   "time": "2026-08-12T19:51:16.24+02:00",
+   "note": "partial",
+   "sun": [
+    503.79,
+    342.48,
+    61.0
+   ]
+  },
+  {
+   "file": "eclipse2026_200.jpg",
+   "time": "2026-08-12T20:07:55.90+02:00",
+   "note": "partial, crescent",
+   "sun": [
+    500.78,
+    331.93,
+    60.84
+   ]
+  },
+  {
+   "file": "eclipse2026_280.jpg",
+   "time": "2026-08-12T20:21:15.68+02:00",
+   "note": "crescent",
+   "sun": [
+    506.64,
+    342.44,
+    60.58
+   ]
+  },
+  {
+   "file": "eclipse2026_300.jpg",
+   "time": "2026-08-12T20:24:35.55+02:00",
+   "note": "thin crescent",
+   "sun": [
+    494.23,
+    326.29,
+    60.61
+   ]
+  },
+  {
+   "file": "eclipse2026_315.jpg",
+   "time": "2026-08-12T20:27:05.51+02:00",
+   "note": "C2 - 2 min",
+   "sun": [
+    494.65,
+    329.08,
+    60.0
+   ]
+  },
+  {
+   "file": "eclipse2026_321.jpg",
+   "time": "2026-08-12T20:28:05.48+02:00",
+   "note": "C2 - 77 s",
+   "sun": [
+    495.79,
+    329.89,
+    60.0
+   ]
+  },
+  {
+   "file": "eclipse2026_325.jpg",
+   "time": "2026-08-12T20:28:45.47+02:00",
+   "note": "C2 - 37 s, crescent 1-2 px wide",
+   "sun": [
+    496.53,
+    329.92,
+    60.0
+   ]
+  },
+  {
+   "file": "eclipse2026_327.jpg",
+   "time": "2026-08-12T20:29:05.49+02:00",
+   "note": "C2 - 17 s",
+   "sun": [
+    496.68,
+    330.65,
+    60.0
+   ]
+  },
+  {
+   "file": "eclipse2026_336.jpg",
+   "time": "2026-08-12T20:29:21.57+02:00",
+   "note": "Baily's beads, unfiltered glare",
+   "sun": null
+  },
+  {
+   "file": "eclipse2026_350.jpg",
+   "time": "2026-08-12T20:29:27.66+02:00",
+   "note": "totality, corona",
+   "sun": null
+  },
+  {
+   "file": "eclipse2026_398.jpg",
+   "time": "2026-08-12T20:31:11.50+02:00",
+   "note": "diamond ring at C3",
+   "sun": null
+  },
+  {
+   "file": "eclipse2026_415.jpg",
+   "time": "2026-08-12T20:31:18.55+02:00",
+   "note": "C3 + 5 s, unfiltered glare",
+   "sun": null
+  },
+  {
+   "file": "eclipse2026_425.jpg",
+   "time": "2026-08-12T20:31:49.34+02:00",
+   "note": "C3 + 40 s, thin crescent",
+   "sun": [
+    501.14,
+    329.76,
+    60.0
+   ]
+  },
+  {
+   "file": "eclipse2026_449.jpg",
+   "time": "2026-08-12T20:35:49.26+02:00",
+   "note": "after C3",
+   "sun": [
+    504.16,
+    334.48,
+    60.14
+   ]
+  },
+  {
+   "file": "eclipse2026_486.jpg",
+   "time": "2026-08-12T20:43:35.18+02:00",
+   "note": "after C3, portrait frame",
+   "sun": [
+    325.93,
+    510.11,
+    59.61
+   ]
+  },
+  {
+   "file": "eclipse2026_560.jpg",
+   "time": "2026-08-12T20:56:09.23+02:00",
+   "note": "partial, low sun",
+   "sun": [
+    511.91,
+    343.34,
+    59.64
+   ]
+  },
+  {
+   "file": "eclipse2026_610.jpg",
+   "time": "2026-08-12T21:04:30.35+02:00",
+   "note": "partial, low sun",
+   "sun": [
+    302.45,
+    512.15,
+    58.29
+   ]
+  },
+  {
+   "file": "eclipse2026_640.jpg",
+   "time": "2026-08-12T21:09:38.86+02:00",
+   "note": "partial near sunset, red with a ghost edge",
+   "sun": [
+    325.38,
+    510.34,
+    57.58
+   ]
+  },
+  {
+   "file": "eclipse2026_655.jpg",
+   "time": "2026-08-12T21:12:08.82+02:00",
+   "note": "near sunset, overexposed in a pink sky",
+   "sun": null
+  },
+  {
+   "file": "eclipse2026_689.jpg",
+   "time": "2026-08-12T21:17:23.59+02:00",
+   "note": "landscape, no sun",
+   "sun": null
+  }
+ ]
+}
