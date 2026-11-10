@@ -3421,6 +3421,18 @@ class MountPopup(QWidget, Observable):
         self.nudge_panel = MountNudgePanel(self)
         layout.addWidget(self.nudge_panel)
 
+        reverse_layout = QHBoxLayout()
+        self.reverse_ns_checkbox = QCheckBox("Reverse N/S")
+        self.reverse_we_checkbox = QCheckBox("Reverse E/W")
+        for checkbox, buttons in ((self.reverse_ns_checkbox, "▲ N and ▼ S"), (self.reverse_we_checkbox, "◀ W and E ▶")):
+            checkbox.setToolTip(f"Swap the {buttons} buttons (here, in the live view and on the phone), when the "
+                                "mount moves the other way.  Kept for this mount.  The centring is not affected: "
+                                "the calibration measures which way the mount moves.")
+            checkbox.toggled.connect(self.reverse_toggled)
+            reverse_layout.addWidget(checkbox)
+        reverse_layout.addStretch(1)
+        layout.addLayout(reverse_layout)
+
         # Keeping the sun centred from the live view
         centring_group_box = QGroupBox("Keep the sun centred")
         centring_layout = QGridLayout()
@@ -3462,7 +3474,47 @@ class MountPopup(QWidget, Observable):
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.show_state)
         self.status_timer.start(1000)
+        self._show_reversal()
         self.show_state()
+
+    @staticmethod
+    def _reverse_keys(mount) -> tuple:
+        """ Settings keys of the reversed N/S and E/W of this mount. """
+
+        name = mount.identity.replace("/", "_")
+        return f"mount/reverse_ns/{name}", f"mount/reverse_we/{name}"
+
+    def load_reversal(self, mount):
+        """ Give a mount that was just connected the reversed axes saved for it. """
+
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        ns_key, we_key = self._reverse_keys(mount)
+        mount.reverse_ns = settings.value(ns_key, False, type=bool)
+        mount.reverse_we = settings.value(we_key, False, type=bool)
+        self._show_reversal()
+
+    def _show_reversal(self):
+        """ Tick the reverse check boxes as the connected mount has them. """
+
+        mount = self.controller.mount
+        for checkbox, reversed_axis in ((self.reverse_ns_checkbox, getattr(mount, "reverse_ns", False)),
+                                        (self.reverse_we_checkbox, getattr(mount, "reverse_we", False))):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(bool(reversed_axis))
+            checkbox.blockSignals(False)
+
+    def reverse_toggled(self):
+        """ Reverse the nudge buttons of the connected mount, and keep it for this mount. """
+
+        mount = self.controller.mount
+        if mount is None:
+            return
+        mount.reverse_ns = self.reverse_ns_checkbox.isChecked()
+        mount.reverse_we = self.reverse_we_checkbox.isChecked()
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        ns_key, we_key = self._reverse_keys(mount)
+        settings.setValue(ns_key, mount.reverse_ns)
+        settings.setValue(we_key, mount.reverse_we)
 
     def _fill_models(self, driver: str, model: str):
         """ List the mounts of the INDI driver lists; select the saved one. """
@@ -3519,7 +3571,8 @@ class MountPopup(QWidget, Observable):
         else:
             placeholder = "searched by the driver"
         self.device_port.setPlaceholderText(placeholder)
-        for button in (self.track_button, self.stop_button, self.park_button, self.abort_button):
+        for button in (self.track_button, self.stop_button, self.park_button, self.abort_button,
+                       self.reverse_ns_checkbox, self.reverse_we_checkbox):
             button.setEnabled(connected and mount.connected)
         self.status_label.setText(mount.describe() if connected else "Not connected")
         self.nudge_panel.refresh()
@@ -3730,6 +3783,7 @@ class MountPopup(QWidget, Observable):
             return
 
         self.controller.mount = mount
+        self.load_reversal(mount)
         register_hardware('mount', mount)
 
         settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)

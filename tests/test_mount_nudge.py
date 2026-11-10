@@ -114,6 +114,25 @@ def test_the_opposite_direction_replaces_the_first_and_axes_are_independent(serv
     assert _until(lambda: _motion(server) == [])
 
 
+def test_a_reversed_axis_swaps_the_buttons_but_not_the_guide_pulses(server, mount):
+    mount.reverse_ns = True
+    nudger = mount.nudger
+    nudger.hold("N")
+    nudger.hold("E")
+    assert _until(lambda: _motion(server) == ["MOTION_EAST", "MOTION_SOUTH"])
+    nudger.release("N")
+    assert _until(lambda: _motion(server) == ["MOTION_EAST"])
+    mount.reverse_we = True
+    nudger.release("E")         # E was started before the swap: it stops by itself
+    assert _until(lambda: _motion(server) == [])
+    nudger.hold("E")
+    assert _until(lambda: _motion(server) == ["MOTION_WEST"])
+    nudger.release("E")
+    assert _until(lambda: _motion(server) == [])
+    mount.guide("N", 100)       # the centring's pulses are measured by the calibration, never swapped
+    assert ("TELESCOPE_TIMED_GUIDE_NS", {"TIMED_GUIDE_N": 100.0}) in server.received
+
+
 def test_abort_stops_the_nudge_and_the_mount(server, mount):
     mount.nudger.hold("W")
     assert _until(lambda: _motion(server) == ["MOTION_WEST"])

@@ -83,44 +83,30 @@ Setup: `sudo apt install indi-bin`.
 Mount powered, no telescope or the telescope pointed away from any window.  Start the server with the
 driver of the mount, e.g. `indiserver -vvv indi_eqmod_telescope`.
 
-| Check | How | Expected |
-|-------|-----|----------|
-| 2.1 Port | Fill **Mount port** with the serial port (`ls /dev/ttyUSB* /dev/ttyACM*`) → **Connect** | Connects within 15 s (R1).  If not, note how long the driver takes in the server output |
--> Works
-| 2.2 Port saved | Disconnect, restart `indiserver`, connect with **Mount port** empty | Note whether the driver remembers the port (it does when its configuration was saved) |
--> Works
-| 2.3 Location and time | As 1.3, and on the handset or in the driver's own UI (e.g. KStars/Ekos) | Same location and time on the mount (R2).  Note any `INDI ...` message in the log |
--> Works
-| 2.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning when the driver has no solar rate (R3).  Note which |
--> Works
-| 2.5 Motors | Listen/watch the RA axis after 2.4 | The RA motor runs at tracking speed |
--> Works
-| 2.6 Stop | **Stop tracking** | RA motor stops |
--> Works
-| 2.7 Response time | In the log, time between `mount_track` / button and `tracks at the … rate` | Under 1 s.  A 5 s wait followed by a timeout error means R4 |
--> Works
-| 2.8 Park / unpark | **Park**, wait, **Track sun** | Parks at the driver's park position; unparks and tracks again (R5) |
--> Works, but only after clicking three times on the Track sun button.
-| 2.9 Abort | **Park**, then **Abort** after 1 s | The mount stops at once |
--> Works
-| 2.10 Find mounts | **Find mounts** with an empty mount name | The mount is listed (R6) |
--> I don't see the find mounts option...
-| 2.11 Guide pulses | `sew_hardware`: `mount connect`, `mount guide N 2000`, `mount guide E 2000` | Short movements of the axes; no error |
--> No error, sew_hardware tells me Guide pulse N 2000 ms sent.  I could not see the mount move.
-| 2.N1 Nudge directions | At the slowest speed, hold each button for 2 s; watch the axes | N/S moves the Dec axis, E/W the RA axis, each both ways |
--> Works, but N goes down, S goes up, E goes left, W goes right.
-| 2.N2 Speeds | Hold **▲ N** for 2 s at each speed | Clearly faster at each step.  Note the speeds the driver offers |
--> Works, speeds from 1x, 2x, 8x, 16x, 64x 128x, 256x, 512x, Max.
-| 2.N3 Stop latency | Hold at the fastest speed, release | The motor stops within half a second of the release (the laptop) |
--> Works
-| 2.N4 Lost release | As 1.N3 and 1.N5 with the real mount | The motor stops within a second |
--> Works
-| 2.12 Script | Simulation mode (`sew --sim`), a script with `mount_track` and `mount_park` a minute apart, mount connected | Both commands run at their time (log: `mount_track`, `mount_park`); `Mount: track the sun` in the job list |
--> Works
-| 2.13 Script without mount | The same script, mount not connected when `mount_track` fires | The job fails in the log; the run goes on |
--> Works
-| 2.14 Close sew | Close `sew` while tracking | The mount keeps tracking |
--> Works
+Tested on 2026-11-07 with the **iOptron HAZ31** and the **iOptron v3** driver (`indi_ioptronv3_telescope`,
+INDI 1.9.9), see also [Your mount: iOptron HAZ31](#your-mount-ioptron-haz31) and
+[Results so far](#results-so-far).
+
+| Check | How | Expected | Result |
+|-------|-----|----------|--------|
+| 2.1 Port | Fill **Mount port** with the serial port (`ls /dev/ttyUSB* /dev/ttyACM*`) → **Connect** | Connects within 15 s (R1).  If not, note how long the driver takes in the server output | ✅ |
+| 2.2 Port saved | Disconnect, restart `indiserver`, connect with **Mount port** empty | Note whether the driver remembers the port (it does when its configuration was saved) | ✅ Remembered |
+| 2.3 Location and time | As 1.3, and on the handset or in the driver's own UI (e.g. KStars/Ekos) | Same location and time on the mount (R2).  Note any `INDI ...` message in the log | ✅ |
+| 2.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning when the driver has no solar rate (R3).  Note which | ✅ Solar |
+| 2.5 Motors | Listen/watch the RA axis after 2.4 | The RA motor runs at tracking speed | ✅ |
+| 2.6 Stop | **Stop tracking** | RA motor stops | ✅ |
+| 2.7 Response time | In the log, time between `mount_track` / button and `tracks at the … rate` | Under 1 s.  A 5 s wait followed by a timeout error means R4 | ✅ |
+| 2.8 Park / unpark | **Park**, wait, **Track sun** | Parks at the driver's park position; unparks and tracks again (R5) | ❌ Parks and unparks, but tracks only after clicking **Track sun** three times (issue 1) |
+| 2.9 Abort | **Park**, then **Abort** after 1 s | The mount stops at once | ✅ |
+| 2.10 Find mounts | Untick **Start the INDI server** (the button is greyed out while it is ticked), start the server yourself (`indiserver indi_ioptronv3_telescope`), empty **Mount**, then **Find mounts** | The mount is listed (R6) | ⏳ Button not found: it was greyed out because **Start the INDI server** was ticked.  To redo |
+| 2.11 Guide pulses | `sew_hardware`: `mount connect`, `mount guide N 2000`, `mount guide E 2000` | No error.  The movement is too small to see by eye (2 s at 0.5× sidereal is about 15″): check it in the live view, or with the calibration (H.7) | ✅ No error ("Guide pulse N 2000 ms sent"); no movement seen (as expected, issue 3) |
+| 2.N1 Nudge directions | At the slowest speed, hold each button for 2 s; watch the axes | N/S moves the Dec axis, E/W the RA axis, each both ways | ✅ N goes down, S up, E left, W right (issue 4) |
+| 2.N2 Speeds | Hold **▲ N** for 2 s at each speed | Clearly faster at each step.  Note the speeds the driver offers | ✅ 1x, 2x, 8x, 16x, 64x, 128x, 256x, 512x, Max |
+| 2.N3 Stop latency | Hold at the fastest speed, release | The motor stops within half a second of the release (the laptop) | ✅ |
+| 2.N4 Lost release | As 1.N3 and 1.N5 with the real mount | The motor stops within a second | ✅ |
+| 2.12 Script | Simulation mode (`sew --sim`), a script with `mount_track` and `mount_park` a minute apart, mount connected | Both commands run at their time (log: `mount_track`, `mount_park`); `Mount: track the sun` in the job list | ✅ |
+| 2.13 Script without mount | The same script, mount not connected when `mount_track` fires | The job fails in the log; the run goes on | ✅ |
+| 2.14 Close sew | Close `sew` while tracking | The mount keeps tracking | ✅ |
 
 ### Windows (WSL) only
 
@@ -138,26 +124,42 @@ iOptron says the HAZ mounts work with a third-party INDI driver on Linux and mac
 (`indi_ioptronv3_telescope`) first; the newer INDI of the PPA (`ppa:mutlaqja/ppa`, package
 `indi-full`) may list the HAZ mounts by name (`sew_hardware`, `mount drivers ioptron`).
 
-| Check | How | Expected / to note |
-|-------|-----|--------------------|
-| H.1 Driver | `mount drivers ioptron`; then `mount start indi_ioptronv3_telescope /dev/ttyUSB0` (USB on the 8409 hand controller; `ls /dev/ttyUSB* /dev/ttyACM*`) | Connects.  If not: note the last lines of the server output (shown with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) |
--> Connects fine.
-| H.2 Wi-Fi | The mount's Wi-Fi: **Mount port** `address:port` from the HAZ manual | Connects without a cable |
--> No idea how I can test this.  The manual says that the standard address is 10.10.100.154:8899.  I connected the laptop to the correct wifi network HBX8409_494352, but starting indi_ioptronv3_telescope does nothing and starting it from Solar Eclipse Workbench gives me an error that the mount has been shut down... This is the error:
-iOptronV3 refused the change of CONNECTION
+| Check | How | Expected / to note | Result |
+|-------|-----|--------------------|--------|
+| H.1 Driver | `mount drivers ioptron`; then `mount start indi_ioptronv3_telescope /dev/ttyUSB0` (USB on the 8409 hand controller; `ls /dev/ttyUSB* /dev/ttyACM*`) | Connects.  If not: note the last lines of the server output (shown with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) | ✅ Connects with iOptron v3 |
+| H.2 Wi-Fi | The mount's Wi-Fi: **Mount port** `address:port` from the HAZ manual | Connects without a cable | ⏳ To test |
+| H.3 Location and time | As 1.2, and on the hand controller | Same location and time on the mount | ✅ |
+| H.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning.  Note which | ❌ Tracks at the solar rate.  After **Stop tracking**, **Track sun** starts tracking only at the third click (issue 1) |
+| H.4b Track sun once | **Stop tracking**, then **Track sun** once; repeat three times, and once after a **Park** | Tracks after one click each time (it may take up to a few seconds).  The log shows "switched tracking off again … (try 1 of 4)" when the driver dropped it.  Note how many tries it took | ⏳ |
+| H.5 Directions | At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec?**  Note it, and whether "N" goes up or down | N goes down, S up, E left, W right (issue 4) |
+| H.5b Reverse | Tick **Reverse N/S** in the `Mount` window; hold **▲ N**, then **▼ S**.  Disconnect, connect again, and on the phone | N goes up now, S down; still ticked after connecting again, and the phone's buttons move the same way | ⏳ |
+| H.6 Guide pulses | `sew_hardware`: `mount guide N 2000`, `mount guide E 2000` | Do they move the mount at all in alt-az mode?  Which axis?  (Without guide pulses there is no centring.)  Too small to see by eye: check in the live view | ⏳ Accepted by the driver; whether they move the mount: with the camera (H.7) |
+| H.7 Calibrate | On the sun (filter!), roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate | ⏳ |
+| H.8 Field rotation | **Keep the sun centred** for at least an hour (C.F1); then **Calibrate** again | **Compare the direction with H.7.**  If it turned by several degrees, the guide pulses move in RA/Dec while the sky turns in the frame: tell me, and the calibration will be turned with the sky (from the location, the time and the sun's position).  If it did not turn, alt-az corrections need nothing more | ⏳ |
+| H.9 After 1-2 hours | Leave the centring on | "centred" most of the time; or after a while "… did not move the sun the way they should: calibrate again" (field rotation, see H.8) | ⏳ |
 
-The INDI server said: 2026-11-07T15:08:46: Client 9: read EOF / 2026-11-07T15:08:46: Client 9: shut down complete - bye! / 2026-11-07T15:08:46: Client 9: new arrival from 127.0.0.1:37850 - welcome! / 2026-11-07T15:08:46: Client 9: read EOF / 2026-11-07T15:08:46: Client 9: shut down complete - bye!
-| H.3 Location and time | As 1.2, and on the hand controller | Same location and time on the mount |
--> Works fine.
-| H.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning.  Note which |
--> Tracks.  When I click Stop tracking the mount stops.  When I click Track sun again the mount does not start tracking again.  I need to click three times. 
-| H.5 Directions | At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec?**  Note it, and whether "N" goes up or down |
--> N goes down, S goes up, E goes left, W goes right.
-| H.6 Guide pulses | `sew_hardware`: `mount guide N 2000`, `mount guide E 2000` | Do they move the mount at all in alt-az mode?  Which axis?  (Without guide pulses there is no centring.) |
--> No error, but I don't know if the mount moved.  I need to check with the camera.
-| H.7 Calibrate | On the sun (filter!), roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate |
-| H.8 Field rotation | **Keep the sun centred** for at least an hour (C.F1); then **Calibrate** again | **Compare the direction with H.7.**  If it turned by several degrees, the guide pulses move in RA/Dec while the sky turns in the frame: tell me, and the calibration will be turned with the sky (from the location, the time and the sun's position).  If it did not turn, alt-az corrections need nothing more |
-| H.9 After 1-2 hours | Leave the centring on | "centred" most of the time; or after a while "… did not move the sun the way they should: calibrate again" (field rotation, see H.8) |
+### Results so far
+
+From the tests above and the sew log of 2026-11-07 (`sew-20261107-143421Z.log`):
+
+1. **Track sun needs three clicks** (2.8, H.4).  Each click sends the solar rate and `TRACK_ON`.  The
+   driver answers `TRACK_ON` (Busy), then 60 ms later falls back to `TRACK_OFF` (Idle).  The third
+   time it stays on, with "Slew complete, tracking..." from the driver.  That happened twice in a row
+   (14:41:01 → 14:41:08 and 14:41:18 → 14:41:24).  sew logged "tracks at the solar rate" after every
+   click, so it reported success while the mount did not track.  Without any command the driver
+   also switches `TRACK_STATE` on and off every few seconds, which suggests the iOptron v3 driver
+   misreads the HAZ31's status.  **Fixed:** **Track sun** now checks for 1.5 s that tracking stays
+   on, switches it on again (up to four times), and reports an error when it still does not hold.
+   To retest: H.4b.  Also try the newer INDI of the PPA for a driver made for the HAZ mounts.
+2. **Find mounts** (2.10): not a bug.  The button only works with a server you start yourself; with
+   **Start the INDI server** sew knows the mount already.  The check is now explicit about it.
+3. **Guide pulses** (2.11, H.6): the driver accepted them (`TIMED_GUIDE_NS` Ok).  At the guide rate
+   of 0.5× sidereal, 2 s is about 15″ and 5 s about 38″: too little to see on the mount.  The
+   calibration (H.7) shows whether they move the sun.
+4. **N moves down** (2.N1, H.5): E/W (left/right) is the azimuth and is the right way round for a
+   mount facing south; N/S is the altitude, the wrong way round.  For the centring this does not
+   matter (the calibration measures it).  **Fixed:** **Reverse N/S** and **Reverse E/W** in the
+   `Mount` window swap the nudge buttons, kept for each mount.  To retest: H.5b.
 
 ## Your mount: SkyWatcher AZ-GTi
 
@@ -167,11 +169,7 @@ questions of the HAZ31 apply too.  What is known before testing, from INDI 1.9.9
 - **Driver**: `indi_skywatcherAltAzMount`.  In the **Mount model** list: *SkyWatcher AZ-GTi Alt-Az
   WiFi* and *SkyWatcher AZ-GTi Alt-Az Wired* (the same driver).  INDI calls the mount
   `Skywatcher Alt-Az`.  It has a solar tracking rate and takes guide pulses.
--> Same problem as with the iOptron using Wifi:
-Skywatcher Alt-Az refused the change of CONNECTION
-
-The INDI server said: 2026-11-07T15:23:48: Client 9: read EOF / 2026-11-07T15:23:48: Client 9: shut down complete - bye! / 2026-11-07T15:23:48: Client 9: new arrival from 127.0.0.1:60192 - welcome! / 2026-11-07T15:23:48: Client 9: read EOF / 2026-11-07T15:23:48: Client 9: shut down complete - bye!
--> Works fine in EKOS / KStars.
+  -> Still needs to test
 - **Wi-Fi**: the driver talks to the mount over **UDP at 192.168.4.1, port 11880**: the address of
   the mount's own Wi-Fi network (`SynScan_xxxx`).  Join that network with the computer (it then has
   no internet), or put the mount on your own Wi-Fi with the SynScan app (station mode) and use the

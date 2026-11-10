@@ -115,7 +115,10 @@ is changed later, it is sent again.
 
 **Track sun** unparks the mount when it is parked, and lets it track at the solar rate.  Not every
 driver has a solar rate; the mount then tracks at the sidereal rate, and the sun drifts about 2.5′
-an hour across the field of view.  **Stop tracking** stops it, **Park** parks it (after a
+an hour across the field of view.  Some drivers answer that the mount tracks and switch tracking
+off again a moment later, when the mount did not take the command (the iOptron v3 driver with a
+HAZ31 does it twice).  **Track sun** therefore checks that tracking stays on, switches it on again
+up to four times, and says so when it still does not hold.  **Stop tracking** stops it, **Park** parks it (after a
 confirmation) and **Abort** stops every motion at once.
 
 **Disconnect** and closing Solar Eclipse Workbench only close the connection to the INDI server: the
@@ -134,6 +137,12 @@ as well); tracking goes on.  The position of the mount is shown next to the butt
 The directions are those of the sky.  The picture in live view can be turned or mirrored by the
 optics, so a button can move the sun another way in the picture: try each button once while
 framing.
+
+Some mounts move the other way than the button says (an alt-azimuth mount often has N/S, the
+altitude, the wrong way round).  **Reverse N/S** and **Reverse E/W** in the `Mount` window swap
+those buttons, here, in the live view and on the phone.  They are kept for each mount.  They do not
+change the guide pulses: the calibration for keeping the sun centred measures which way the mount
+moves.
 
 The phone dashboard has the same buttons, the speed and the position in its `Mount` panel.
 

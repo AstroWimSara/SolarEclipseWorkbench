@@ -110,12 +110,23 @@ class Mount:
     their property changes.
     """
 
+    #: How long tracking must stay on after it was switched on, before it counts (see _tracking_holds)
+    TRACK_SETTLE_S = 1.5
+
+    #: How often tracking is switched on before giving up, when the driver switches it off again each time
+    TRACK_ATTEMPTS = 4
+
     def __init__(self, client: IndiClient, device: str, simulator=None):
         self.client = client
         self.device = device
         self._simulator = simulator
         self._lock = threading.RLock()
         self._nudger: Optional["Nudger"] = None
+        #: Swap N and S, or E and W, for the nudge buttons, when the mount moves the other way than
+        #: the button says.  Guide pulses and the centring are not swapped: the calibration measures
+        #: which way they move the sun.
+        self.reverse_ns = False
+        self.reverse_we = False
 
     @property
     def identity(self) -> str:
@@ -344,22 +355,51 @@ class Mount:
 
         Returns: The rate the mount tracks at: "solar", or "sidereal" when the
                  driver has no solar rate (the sun then drifts about 2.5′ an hour).
+
+        Raises MountError when the driver refuses, or keeps switching tracking off
+        again right after it was switched on (it is tried TRACK_ATTEMPTS times).
         """
         with self._lock:
             if self.parked:
                 self.unpark()
-            rate = "sidereal"
+            rate, mode = "sidereal", None
             if self.has_solar_rate:
-                self._change("TELESCOPE_TRACK_MODE", {"TRACK_SOLAR": True})
-                rate = "solar"
+                rate, mode = "solar", "TRACK_SOLAR"
             elif self._has("TELESCOPE_TRACK_MODE") and "TRACK_SIDEREAL" in \
                     self.client.property(self.device, "TELESCOPE_TRACK_MODE").values:
-                self._change("TELESCOPE_TRACK_MODE", {"TRACK_SIDEREAL": True})
-            if self._has("TELESCOPE_TRACK_STATE"):
-                # INDI drivers keep this Busy for as long as the mount tracks: the first answer is the answer
-                self._change("TELESCOPE_TRACK_STATE", {"TRACK_ON": True}, wait_done=False)
+                mode = "TRACK_SIDEREAL"
+            if not self._has("TELESCOPE_TRACK_STATE"):
+                if mode:
+                    self._change("TELESCOPE_TRACK_MODE", {mode: True})
+            else:
+                for attempt in range(1, self.TRACK_ATTEMPTS + 1):
+                    if mode:
+                        self._change("TELESCOPE_TRACK_MODE", {mode: True})
+                    # INDI drivers keep this Busy for as long as the mount tracks: the first answer is the answer
+                    self._change("TELESCOPE_TRACK_STATE", {"TRACK_ON": True}, wait_done=False)
+                    if self._tracking_holds():
+                        break
+                    logger.warning("%s switched tracking off again right after it was switched on "
+                                   "(try %d of %d)", self.device, attempt, self.TRACK_ATTEMPTS)
+                else:
+                    raise MountError(f"{self.device} does not keep tracking: the driver switched tracking off "
+                                     f"again each of the {self.TRACK_ATTEMPTS} times it was switched on")
         logger.info("%s tracks at the %s rate", self.device, rate)
         return rate
+
+    def _tracking_holds(self) -> bool:
+        """Whether tracking, just switched on, stays on.
+
+        Some drivers answer "tracking" and switch it off again a moment later, when
+        the mount did not take the command: the iOptron v3 driver with a HAZ31 does
+        it twice before tracking.  Tracking that goes off and comes back by itself
+        within TRACK_SETTLE_S counts as holding: the same driver switches it off
+        for a second now and then while the mount tracks.
+        """
+        went_off = self.client.wait_for(lambda: not self.tracking, self.TRACK_SETTLE_S)
+        if not self.client.connected:
+            raise MountError(f"the connection to the INDI server at {self.client.describe()} was lost")
+        return not went_off or self.client.wait_for(lambda: self.tracking, self.TRACK_SETTLE_S)
 
     def stop_tracking(self) -> None:
         with self._lock:
@@ -509,12 +549,17 @@ class Nudger:
         self._thread = threading.Thread(target=self._run, name=f"nudge-{mount.device}", daemon=True)
         self._thread.start()
 
-    @classmethod
-    def _axis(cls, direction: str) -> tuple:
+    _OPPOSITE = {"N": "S", "S": "N", "E": "W", "W": "E"}
+
+    def _axis(self, direction: str) -> tuple:
+        """(direction to move the mount in, axis) for a button, swapped when the mount reverses that axis."""
         key = (direction or "").strip().upper()[:1]
-        if key not in cls._AXES:
+        if key not in self._AXES:
             raise MountError(f"not a direction: {direction!r}; use N, S, E or W")
-        return key, cls._AXES[key]
+        axis = self._AXES[key]
+        if getattr(self.mount, "reverse_ns" if axis == "NS" else "reverse_we", False):
+            key = self._OPPOSITE[key]
+        return key, axis
 
     def hold(self, direction: str, rate: Optional[str] = None, hold_s: Optional[float] = None) -> None:
         """Move towards ``direction`` (N, S, E or W) for ``hold_s`` more, at ``rate`` when given."""

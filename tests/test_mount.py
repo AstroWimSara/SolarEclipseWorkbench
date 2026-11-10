@@ -225,6 +225,39 @@ def test_a_parked_mount_is_unparked_to_track(server, mount):
     assert not mount.parked and mount.tracking
 
 
+def test_tracking_that_the_driver_drops_is_switched_on_again():
+    # As the iOptron v3 driver with a HAZ31: "tracking", then off again 60 ms later, twice
+    server = SimulatedIndiServer(track_drops=2)
+    try:
+        mount = Mount.open(f"127.0.0.1:{server.port}")
+        assert mount.track_solar() == "solar"
+        assert mount.tracking and server.values("TELESCOPE_TRACK_STATE")["TRACK_ON"]
+        assert [values for name, values in server.received
+                if name == "TELESCOPE_TRACK_STATE"] == [{"TRACK_ON": True}] * 3
+        assert server.received.count(("TELESCOPE_TRACK_MODE", {"TRACK_SOLAR": True})) == 3
+        mount.close()
+    finally:
+        server.close()
+
+
+def test_tracking_that_never_holds_is_an_error_not_a_success():
+    server = SimulatedIndiServer(track_drops=10)
+    try:
+        mount = Mount.open(f"127.0.0.1:{server.port}")
+        with pytest.raises(MountError, match="does not keep tracking"):
+            mount.track_solar()
+        assert not mount.tracking
+        assert [name for name, _ in server.received].count("TELESCOPE_TRACK_STATE") == Mount.TRACK_ATTEMPTS
+        mount.close()
+    finally:
+        server.close()
+
+
+def test_tracking_that_holds_is_switched_on_once(server, mount):
+    mount.track_solar()
+    assert [name for name, _ in server.received].count("TELESCOPE_TRACK_STATE") == 1
+
+
 def test_a_refused_change_is_a_mount_error():
     server = SimulatedIndiServer(refuse={"TELESCOPE_TRACK_STATE"})
     try:

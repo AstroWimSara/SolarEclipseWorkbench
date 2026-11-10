@@ -78,12 +78,15 @@ class SimulatedIndiServer:
         - device: Name of the mount
         - guide_rate: Speed of the guide pulses, as a multiple of the sidereal rate
                       (tests use a fast one, so a calibration takes seconds, not minutes)
+        - track_drops: How many times switching tracking on is answered "tracking" and switched
+                       off again 50 ms later, as the iOptron v3 driver does with a HAZ31
     """
 
     def __init__(self, port: int = 0, solar: bool = True, refuse=(), silent=(), device: str = DEVICE,
-                 guide_rate: float = GUIDE_RATE):
+                 guide_rate: float = GUIDE_RATE, track_drops: int = 0):
         self.device = device
         self.guide_rate = guide_rate
+        self.track_drops = track_drops
         self.refuse, self.silent = set(refuse), set(silent)
         #: Every change received, as (property name, {element: value})
         self.received: list = []
@@ -232,6 +235,15 @@ class SimulatedIndiServer:
             except OSError:
                 pass
 
+    def _drop_tracking(self) -> None:
+        """Switch tracking off again, as a driver does when the mount did not take the command."""
+        with self._lock:
+            prop = self.props["TELESCOPE_TRACK_STATE"]
+            prop.values.update(TRACK_ON=False, TRACK_OFF=True)
+            prop.state = IDLE
+            xml = self._vector(prop, "set")
+        self._broadcast(xml)
+
     def _broadcast(self, xml: str) -> None:
         with self._lock:
             clients = list(self._clients)
@@ -338,7 +350,14 @@ class SimulatedIndiServer:
                 xml += self._vector(self.props["TELESCOPE_TRACK_STATE"], "set")
             if long_change:
                 xml += self._vector(self.props["EQUATORIAL_EOD_COORD"], "set")
+            drop = name == "TELESCOPE_TRACK_STATE" and prop.values["TRACK_ON"] and self.track_drops > 0
+            if drop:
+                self.track_drops -= 1
         self._broadcast(xml)
+        if drop:
+            timer = threading.Timer(0.05, self._drop_tracking)
+            timer.daemon = True
+            timer.start()
 
         if name == "CONNECTION" and self.connected != was_connected:
             with self._lock:

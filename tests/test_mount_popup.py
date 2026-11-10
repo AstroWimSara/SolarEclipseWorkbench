@@ -111,3 +111,35 @@ def test_a_mount_without_solar_rate_says_so(popup):
         popup.controller.mount.close()
         popup.controller.mount = None
         server.close()
+
+
+def test_reversed_axes_are_kept_for_the_mount(popup, server):
+    assert not popup.reverse_ns_checkbox.isEnabled()
+    popup.address.setText(f"127.0.0.1:{server.port}")
+    popup.connect_or_disconnect()
+    mount = popup.controller.mount
+    assert popup.reverse_ns_checkbox.isEnabled() and not popup.reverse_ns_checkbox.isChecked()
+    assert not mount.reverse_ns and not mount.reverse_we
+
+    popup.reverse_ns_checkbox.setChecked(True)
+    assert mount.reverse_ns and not mount.reverse_we
+
+    popup.connect_or_disconnect()
+    popup.reverse_ns_checkbox.setChecked(False)     # disconnected: changes nothing that is kept
+    popup.connect_or_disconnect()
+    assert popup.controller.mount.reverse_ns and not popup.controller.mount.reverse_we
+    assert popup.reverse_ns_checkbox.isChecked()
+
+
+def test_a_mount_that_does_not_keep_tracking_says_so(popup):
+    server = SimulatedIndiServer(track_drops=10)
+    try:
+        popup.address.setText(f"127.0.0.1:{server.port}")
+        popup.connect_or_disconnect()
+        popup.track()
+        assert "does not keep tracking" in popup.messages[-1]
+        assert "not tracking" in popup.status_label.text()
+    finally:
+        popup.controller.mount.close()
+        popup.controller.mount = None
+        server.close()
