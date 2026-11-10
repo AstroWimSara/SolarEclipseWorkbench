@@ -265,9 +265,10 @@ if [ "$1" = "root" ]; then
     # gphoto2 (and its udev rules) for the cameras, gstreamer for the voice
     # prompts (gst-play-1.0, which plays them, is in gstreamer1.0-plugins-base-apps,
     # not in gstreamer1.0-tools), usbutils for lsusb, the libraries the Qt windows
-    # need, and an emoji font for the symbols on some buttons.
+    # need, an emoji font for the symbols on some buttons, and exiftool, which
+    # reads the capture time of every raw format for sew_sort.
     apt-get install -y \
-        ca-certificates curl usbutils gphoto2 \
+        ca-certificates curl usbutils gphoto2 libimage-exiftool-perl \
         gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps \
         gstreamer1.0-plugins-good \
         gstreamer1.0-pulseaudio alsa-utils pulseaudio-utils \

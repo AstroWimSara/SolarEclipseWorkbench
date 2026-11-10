@@ -11,7 +11,7 @@ Solar Eclipse Workbench (SEW) takes the pictures of a solar eclipse for you, so 
 - **Contact times for your location.**  For the eclipse date and your observing location (typed in, picked on a map, or read from a USB GPS receiver or your phone), SEW calculates the times of first contact (C1), second contact (C2), maximum eclipse, third contact (C3) and fourth contact (C4), with the altitude and azimuth of the Sun.  C2 and C3 are corrected for the profile of the lunar limb, and the Baily's beads windows around them are shown.
 - **A script with what to do when.**  A photography script is a text file with one line per action, timed relative to the contact times, for example *take a bracket of 7 exposures 5 seconds after C2*.  Actions are taking a picture, a burst, a bracket or an HDR sequence, playing a voice prompt, or running a shell command.  The [Configuration Wizard](#running-the-configuration-wizard) writes a script for you from your cameras, lenses and the eclipse circumstances, with exposures that follow the Sun's altitude and the phase of the eclipse.  Scripts from Solar Eclipse Maestro can be used as well.
 - **Running the script.**  SEW schedules every command at its exact time and fires the cameras.  Several cameras can be used at once.  The computer clock can be corrected with GPS time.  A simulation mode runs the script ahead of the eclipse, with real or virtual cameras, so you can rehearse it.
-- **Checking before and after.**  The `Timeline` window shows per camera whether commands follow each other too closely to be taken in time, the `Run report` reads the log of a run back and tells what became of every command, and `Compare sites` puts candidate observing sites side by side (duration of totality, altitude of the Sun, cloud forecast).
+- **Checking before and after.**  The `Timeline` window shows per camera whether commands follow each other too closely to be taken in time, the `Run report` reads the log of a run back and tells what became of every command, `sew_sort` sorts the images by the script line that took them and `sew_align` aligns a timelapse on the sun, and `Compare sites` puts candidate observing sites side by side (duration of totality, altitude of the Sun, cloud forecast).
 
 More background, eclipse reports and the story behind SEW are on the [Deep Sky Wim blog](https://deepskywim.blogspot.com/search/label/Solar%20Eclipse%20Workbench).
 
@@ -62,6 +62,14 @@ More background, eclipse reports and the story behind SEW are on the [Deep Sky W
     - [GPS time correction](#gps-time-correction)
   - [USB relay shutter trigger](#usb-relay-shutter-trigger)
   - [Telescope mount (INDI)](#telescope-mount-indi)
+  - [Hardware bench console (sew_hardware)](#hardware-bench-console-sew_hardware)
+    - [Starting the console](#starting-the-console)
+    - [General commands](#general-commands)
+    - [Relay commands](#relay-commands)
+    - [Mount commands](#mount-commands)
+  - [After the eclipse: sorting and aligning the images](#after-the-eclipse-sorting-and-aligning-the-images)
+    - [Sorting the images (sew_sort)](#sorting-the-images-sew_sort)
+    - [Aligning a timelapse (sew_align)](#aligning-a-timelapse-sew_align)
   - [Using two cameras of the same model, or one camera with multiple setups](#using-two-cameras-of-the-same-model-or-one-camera-with-multiple-setups)
     - [Step-by-step setup](#step-by-step-setup)
   - [Script file format](#script-file-format)
@@ -660,6 +668,7 @@ The functionality of the toolbar buttons is as follows (from left to right):
 - From the command line: `sew --report` prints the report of the last run in the newest log, `sew --report <log file>` of a given log.
 - Use it after rehearsing a script in simulation mode with the cameras you will use (see [Timing shots around C2 and C3](#timing-shots-around-c2-and-c3)).  With the virtual camera every shot is reported as `shot` straight away; the real delays and busy times only show with a real camera.
 - Logs written by version 2.0.0 or older have no planned commands: the report then only lists what those logs have.
+- After the eclipse, `Sort images...` sorts the images of the run that is shown by the script line that took them, and `Align timelapse...` aligns a timelapse on the sun (see [After the eclipse](#after-the-eclipse-sorting-and-aligning-the-images)).
 
 #### Compare sites
 
@@ -795,7 +804,8 @@ shoot slowly over USB or cannot shoot a burst over USB at all.
 - Connect the relay with the **Relay** button in the toolbar.  **Test fire** takes one frame.
 - In a script, use `relay_shoot`, `relay_burst`, `relay_bulb`, `relay_arm` and `relay_release`
   (see [Commands](#commands)).
-- `sew_hardware` is a bench console to wire and test a trigger without the GUI.
+- `sew_hardware` is a bench console to wire and test a trigger without the GUI (see
+  [Hardware bench console](#hardware-bench-console-sew_hardware)).
 
 [USB relay shutter trigger](docs/RELAY.md) explains how to identify the wires of a release cable,
 how to wire the board, and what was measured on a Fujifilm X-T4: latency, pulse length, burst rate
@@ -820,9 +830,234 @@ point it at the sun by hand, behind the solar filter.
 - **Simulated mount** in the `Mount` window tries it all without a mount (ticked in simulation mode).
 - In a script, use `mount_track`, `mount_stop` and `mount_park` (see [Commands](#commands)).
 - Closing Solar Eclipse Workbench leaves the mount tracking.
+- `sew_hardware` is a bench console to test a mount without the GUI (see
+  [Hardware bench console](#hardware-bench-console-sew_hardware)).
 
 [Telescope mount](docs/MOUNT.md) explains how to start the INDI server on Linux, macOS and Windows (WSL),
 and how to share the mount's USB cable with WSL.
+
+## Hardware bench console (sew_hardware)
+
+`sew_hardware` is a command-line console to build and test the USB relay shutter trigger and the
+telescope mount without the GUI.  It is for the bench, not for running an eclipse: every command does
+one step, so a fault can be traced to one wire, one contact or one command.
+
+### Starting the console
+
+```bash
+sew_hardware                              # start the sew> prompt
+sew_hardware --simulate                   # simulated relay and simulated mount, nothing connected
+sew_hardware --relay-port /dev/ttyUSB0    # connect the relay on this port at startup
+sew_hardware relay backends               # run one command and exit, instead of the prompt
+```
+
+| Parameter           | Description                                                                              |
+|---------------------|------------------------------------------------------------------------------------------|
+| `-h`, `--help`      | Show the help message and exit                                                           |
+| `--simulate`        | Use a simulated relay, and the built-in simulated mount for `mount connect` without an address |
+| `--relay-port PORT` | Connect the relay on this port at startup                                                |
+| `--relay-kind KIND` | With `--relay-port`: the relay backend (`auto`, `lcus`, `dsd`, `numato`, `hid`, `simulated`; default `auto`) |
+| `--debug`           | Log every contact change, and every INDI message sent to and received from the mount     |
+| `command ...`       | Run this single command (e.g. `scan`) and exit                                           |
+
+At the `sew>` prompt, the up and down arrows go back through earlier commands, also those of earlier
+sessions (kept in `~/.sew_hardware_history`; on Windows only with `pyreadline3`, WSL has it).
+Arguments with spaces can be quoted, e.g. `mount connect localhost "EQMod Mount"`.  When the console
+ends (`quit`, Ctrl-D or Ctrl-C), the relay contacts are opened, the live view is stopped and an INDI
+server that the console started is stopped.  The mount keeps tracking.
+
+### General commands
+
+| Command          | Description                                                                 |
+|------------------|-----------------------------------------------------------------------------|
+| `help` or `?`    | List all commands                                                           |
+| `scan`           | List the USB serial ports and the likely relay boards the computer can see  |
+| `status`         | Show what is connected: the mount, and the relay with its wiring and closed channels |
+| `quit` or `exit` | Open the relay contacts and leave                                           |
+
+### Relay commands
+
+Connect the board **without the camera** first, and check that every contact stays open before the
+camera is wired to it.  Channels are numbered from 1.
+
+| Command                              | Description                                                                 |
+|--------------------------------------|-----------------------------------------------------------------------------|
+| `relay backends`                     | List the installed relay backends (board types)                             |
+| `relay connect [port] [kind]`        | Open the relay board.  Without a port, the port is searched; `kind` is `auto` (default) or one of `relay backends` (`simulated` with `--simulate`).  All contacts are opened on connecting |
+| `relay wiring <s2> [s1]`             | Set which channel drives S2 (shutter release) and, for dual-channel wiring, which drives S1 (half-press/focus).  Omit `s1` for single-channel wiring |
+| `relay idle`                         | Command all contacts open and watch for 3 s: measure across NO and COM, it must read open the whole time |
+| `relay close <ch>`                   | Close one channel and leave it closed                                       |
+| `relay open <ch>`                    | Open one channel                                                            |
+| `relay pulse <ch> [seconds]`         | Close one channel briefly (default 0.25 s): listen for the click            |
+| `relay walk [seconds]`               | Pulse channels 1 to 4 in turn (default 0.4 s each), to find which channel is which wire |
+| `relay shoot`                        | Take one frame, with the wiring set by `relay wiring`                       |
+| `relay burst <seconds> [interval]`   | Hold the contact for `seconds` (the camera shoots at the rate of its drive mode), or pulse it every `interval` seconds.  Count the frames to find the real frame rate |
+| `relay bulb <seconds>`               | Hold a bulb exposure for `seconds` (shutter dial at B)                      |
+| `relay timing [samples]`             | Measure the latency and spread from the computer to the contact over `samples` close/open cycles (default 20).  Shutter lag of the camera is not included |
+| `relay events [n]`                   | Show the last `n` contact transitions (default 20), with their timing and errors |
+
+A typical first session with a new trigger:
+
+```
+sew> scan                 what the computer can see
+sew> relay connect        open the board
+sew> relay idle           every contact must stay open
+sew> relay pulse 1 0.5    listen for the click of channel 1
+sew> relay walk           find which channel is which wire
+sew> relay wiring 2 1     S2 on channel 2, S1 on channel 1
+sew> relay timing         latency from the computer to the contact
+```
+
+Then connect the camera, lens cap on, and try `relay shoot` and `relay burst 2`.
+[USB relay shutter trigger](docs/RELAY.md) explains the wiring.
+
+### Mount commands
+
+The mount is reached through an INDI server.  `mount connect`, `mount start` and `mount drivers`
+work without a connected mount; all the other mount commands need one.
+
+| Command                                          | Description                                                     |
+|--------------------------------------------------|-----------------------------------------------------------------|
+| `mount drivers [text]`                           | List the mount drivers INDI has installed, filtered by `text` (e.g. `ioptron`); drivers that are not installed are marked |
+| `mount start <driver> [port]`                    | Start `indiserver` with this driver (e.g. `indi_simulator_telescope`) and connect.  `port` is the serial port or the `host:port` of a mount on Wi-Fi; without it, the driver searches.  A server that already runs is used |
+| `mount connect [host[:port]] [device] [serial port]` | Connect to a running INDI server (default `localhost`; `simulated` for the built-in simulated mount, the default with `--simulate`), and show the mount's status.  Name the `device` when the server has several, and give the serial port when the driver needs it |
+| `mount status`                                   | Show what the mount reports: device, position (RA/Dec), track mode, and whether it has a solar rate |
+| `mount site <lat> <lon> [elev]`                  | Send a location (north and east positive, elevation in metres, default 0) and the computer time |
+| `mount track`                                    | Track at the solar rate (unparks first); sidereal when the driver has no solar rate |
+| `mount stop`                                     | Stop tracking                                                   |
+| `mount park`                                     | Park the mount (**it moves!**)                                   |
+| `mount unpark`                                   | Unpark the mount                                                |
+| `mount abort`                                    | Stop every motion                                               |
+| `mount guide <N\|S\|E\|W> <ms>`                  | Send one guide pulse in that direction, for `ms` milliseconds   |
+| `mount sun [goto]`                               | Show where the sun is now (RA/Dec of date).  With `goto`, point a simulator there and track (INDI's telescope simulator starts at the pole).  Refused for a real mount: point that at the sun by hand, with the filter on |
+| `mount calibrate [camera]`                       | Guide east, west, north and south and measure how each moves the sun in the camera's live view (the first camera when not named; a simulated camera with a simulated mount).  About 1.5 minutes; Ctrl-C stops it |
+| `mount centre`                                   | Find the sun in the live view and guide it to the middle of the frame, once (needs `mount calibrate`).  A correction of more than 20 s is refused: move the sun closer first |
+| `mount follow [seconds]`                         | Keep the sun in the middle: a look every `seconds` (default 30), a correction when it is more than 2 px off, until Ctrl-C (needs `mount calibrate`) |
+| `mount disconnect`                               | Close the connection; the mount keeps tracking                  |
+
+A typical test of a mount:
+
+```
+sew> mount drivers ioptron                              the drivers with "ioptron" in the name
+sew> mount start indi_ioptronv3_telescope /dev/ttyUSB0  start indiserver and connect
+sew> mount site 40.42 -3.70 650                         send a location and the time
+sew> mount track                                        track at the solar rate
+sew> mount guide N 1000                                 a one-second guide pulse to the north
+sew> mount calibrate                                    with the sun in the live view
+sew> mount centre                                       guide the sun to the middle, once
+sew> mount follow                                       keep it there, until Ctrl-C
+sew> mount stop
+sew> mount disconnect
+```
+
+Without a mount, try it with `sew_hardware --simulate` and `mount connect`, or with INDI's simulator:
+`mount start indi_simulator_telescope` followed by `mount sun goto`.
+[Telescope mount](docs/MOUNT.md) and [Testing the mount control](docs/MOUNT_TESTING.md) have more.
+
+## After the eclipse: sorting and aligning the images
+
+### Sorting the images (sew_sort)
+
+In the GUI: open the **"Run report"**, choose the log and the run, and press **Sort images...**.  Choose the folder with the images, press `Preview` to see where they would go, and `Sort`.  **Align timelapse...** next to it opens the [aligner](#aligning-a-timelapse-sew_align) on the folder sorted into.  From the command line it is `sew_sort`:
+
+After the eclipse the card holds hundreds of frames called `IMG_1234.CR3`.  `sew_sort` puts each
+one in a folder named after the script line that took it, so every bracket and HDR series is ready
+for a stacking or HDR program, and the partial phase is ready for a timelapse:
+
+```
+sorted/
+  1_C1-C2/
+    Partial phase/                                  one take_picture line in a for loop
+      174100.0_C1+00h10m00.0s_IMG_0101.CR3
+      175100.0_C1+00h20m00.0s_IMG_0102.CR3
+    Diamond ring/
+      182918.0_C2-00h00m04.0s_take_bracket/          one folder per bracket, HDR series or burst
+        001_IMG_0230.CR3
+        002_IMG_0231.CR3
+  2_C2-C3/
+    Corona HDR/
+      182952.0_C2+00h00m30.0s_take_hdr/
+  3_C3-C4/
+  unmatched/                                        test shots, and frames of no command
+  sorting.csv                                       where every image went, and why
+```
+
+The phases are `0_before_C1`, `1_C1-C2`, `2_C2-C3`, `3_C3-C4` and `4_after_C4` (`1_C1-C4` for a
+partial eclipse), the folders below them the descriptions of the script lines.  File names start
+with the time of the command (HHMMSS.s, UTC) and its reference moment, so they sort in the order
+they were taken; the original name is kept at the end.
+
+```bash
+sew_sort /media/card/DCIM ~/eclipse/sorted          # copy, using the last run of the newest log
+sew_sort /media/card/DCIM --dry-run                 # only say what would go where
+sew_sort images/ sorted/ --log ~/.SolarEclipseWorkbench/logs/sew-20270802-060114Z.log --list-runs
+sew_sort images/ sorted/ --run 3 --move             # the third run of that log, and move the images
+```
+
+How it works: the log of the run has, for every command, the time it was planned and the time the
+shutter was released (see [Run report](#run-report)).  `sew_sort` reads the capture time of every
+image and puts it with the command that kept the camera busy at that moment.  The camera clock does
+not have to be right: the offset to the computer clock (a camera on local time, or a few seconds
+fast) is found from the images, and printed.  Check it, and give it with `--clock-offset` (seconds,
+or `[-]hh:mm:ss`, camera minus computer) when `sew_sort` warns that another offset fits nearly as
+well, which can happen with a script of evenly spaced single shots only.
+
+| Parameter              | Description                                                                          |
+|------------------------|--------------------------------------------------------------------------------------|
+| `images`               | Folder with the images, subfolders included (copy them from the card first, or use the card itself) |
+| `output`               | Folder to sort into (default `<images>/sorted`)                                      |
+| `--log FILE`           | Log file of the run (default: the newest log in `~/.SolarEclipseWorkbench/logs` with a run) |
+| `--run N`              | Which run of the log, 1 for the first (default: the last).  `--list-runs` lists them |
+| `--camera NAME`        | Camera name in the script the images are from; repeat for several (default: found from the camera model in the images) |
+| `--clock-offset S`     | Camera clock minus computer clock (default: found from the images)                   |
+| `--tolerance S`        | Seconds an image may be outside the busy time of its command (default 1)             |
+| `--move` / `--link`    | Move or hard-link the images instead of copying them                                 |
+| `--skip-unmatched`     | Leave the images that match no command out                                           |
+| `-n`, `--dry-run`      | Only print what would be done                                                        |
+
+- Images of several cameras can be sorted in one go: each body is matched to the cameras of the run
+  with its model in the name (so two aliases of one body, see
+  [Using two cameras of the same model](#using-two-cameras-of-the-same-model-or-one-camera-with-multiple-setups),
+  share its images), and gets a folder of its own.  Two bodies of the same model can only be told
+  apart with `--camera`: sort the card of each body on its own.
+- The capture time is read with [exiftool](https://exiftool.org) when it is installed (every raw
+  format), otherwise with a reader built in for JPEG, CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2 and PEF.
+  The installers install exiftool on Linux and in WSL; on macOS the built-in reader is used, unless
+  exiftool is installed by hand (e.g. `brew install exiftool`).
+  Frames of a burst are told apart by the sub-seconds of the capture time; most cameras write them.
+- Frames of the USB relay commands (`relay_shoot`, `relay_burst`, `relay_bulb`) are sorted too.
+- A run in simulation mode is sorted by the phase the commands were written for, not by the date
+  they ran.  Logs of version 2.0.0 or older only know when the shutter was released: their images
+  are sorted by command, under `phase_unknown` for a simulation.
+
+### Aligning a timelapse (sew_align)
+
+In the GUI: **Align timelapse...** in the **"Run report"** window, with the same options as below and a `Play video` button.  From the command line it is `sew_align`.
+
+`sew_align` puts the centre of the sun in the middle of every frame and crops the frames to the
+same size, so the moon moves over a sun that stands still, even when the mount drifted (Issue #70,
+after the idea of [solar-eclipse-timelapse-aligner](https://github.com/hotdogee/solar-eclipse-timelapse-aligner)).
+
+```bash
+sew_align sorted/1_C1-C2/"Partial phase" aligned/ --video partial.mp4
+sew_align sorted/ aligned/ --size 1200 --format jpg --video eclipse.mp4 --fps 24
+```
+
+- The sun is found by fitting a circle to its own limb (the method that keeps the sun centred in
+  the live view, see [Telescope mount](docs/MOUNT.md)), so a crescent is centred on the sun and not
+  on its bright part.  During totality there is no limb: those frames are centred by interpolating
+  in time between the last frame before C2 and the first after C3.  Frames at the start or end in
+  which the sun is not found (clouds, the horizon) get the centre of the nearest frame that has one.
+- The frames are put in the order they were taken (capture time), numbered `frame_00001.png`, ...,
+  and `alignment.csv` lists the centre found or interpolated for every one.
+- `--size` is the side of the frames in pixels (default five diameters of the sun, room for the
+  inner corona), `--format` `png` (default), `jpg` or `tif`.  `--video` makes an H.264 video with
+  [ffmpeg](https://ffmpeg.org), at `--fps` frames per second (default 12).  An ffmpeg installed on
+  the system is used first; otherwise the one that comes with Solar Eclipse Workbench (the
+  `imageio-ffmpeg` package).
+- JPEG, PNG and TIFF are read directly, raw files with `rawpy`, which is installed with Solar
+  Eclipse Workbench.  There is no `rawpy` for Intel Macs: there, convert the raw files to TIFF first.  The aligned frames have 8 bits per channel: for processing the corona, use
+  the alignment as a quick look, and stack the raw files of the sorted folders.
 
 ## Using two cameras of the same model, or one camera with multiple setups
 
