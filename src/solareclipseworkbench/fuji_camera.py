@@ -26,6 +26,7 @@ import logging
 import math
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -1349,6 +1350,70 @@ def maybe_reexec_for_fuji_sdk() -> None:
 # Detection
 # ======================================================================
 
+#: The USB vendor id of Fujifilm.
+FUJIFILM_USB_VENDOR_ID = 0x04CB
+
+#: When no Fujifilm device is on the USB bus, the bus is looked at again for
+#: this long.  A body that was just switched on can take this long to appear.
+USB_APPEAR_WAIT_S = 1.5
+USB_POLL_S = 0.25
+
+#: The Linux sysfs folder with one entry per USB device.
+SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
+
+
+def _usb_vendor_ids() -> Optional[set[int]]:
+    """The vendor ids of the devices on the USB bus, or None when they cannot be read.
+
+    Linux reads sysfs and macOS reads the IOUSB plane of ioreg.  Neither opens a
+    device.  On other systems the result is None.
+    """
+    system = platform.system()
+    if system == "Linux":
+        ids = set()
+        for entry in SYSFS_USB_DEVICES.glob("*/idVendor"):
+            try:
+                ids.add(int(entry.read_text().strip(), 16))
+            except (OSError, ValueError):
+                continue
+        # Every Linux bus has at least its root hubs.  No entry at all means
+        # that sysfs cannot be read here, not that the bus is empty.
+        return ids or None
+    if system == "Darwin":
+        try:
+            result = subprocess.run(["ioreg", "-p", "IOUSB", "-l", "-w", "0"],
+                                    capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            logging.debug("Could not read the USB bus with ioreg", exc_info=True)
+            return None
+        if result.returncode != 0:
+            return None
+        found = re.findall(r'"idVendor" = (0x[0-9a-fA-F]+|\d+)', result.stdout)
+        # No vendor id at all means that the output has another format, not
+        # that the bus is empty.  The retries then stay.
+        return {int(value, 0) for value in found} or None
+    return None
+
+
+def _fujifilm_on_usb(wait_s: float = USB_APPEAR_WAIT_S) -> Optional[bool]:
+    """Whether a Fujifilm device is on the USB bus.
+
+    When there is none, the bus is looked at again for wait_s.  Returns None
+    when the bus cannot be read on this system.
+    """
+    deadline = time.monotonic() + wait_s
+    while True:
+        ids = _usb_vendor_ids()
+        if ids is None:
+            return None
+        if FUJIFILM_USB_VENDOR_ID in ids:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(USB_POLL_S, remaining))
+
+
 def _reset_mac_camera_stack() -> None:
     """Stop the macOS camera daemons, so that they start again with a clean state.
 
@@ -1430,6 +1495,9 @@ def detect_fuji(sdk_path: str) -> FujiDetection:
     Detection is tried three times.  A body that was just switched on often
     needs a few seconds before the SDK sees it, so the second try only waits.
     The third try first resets the macOS camera daemons.
+
+    When no Fujifilm device is on the USB bus, the SDK looks only once, so that
+    a computer without a Fuji body does not wait for the retries.
     """
     if not FUJIXSDK_AVAILABLE:
         logging.error("The fujixsdk bindings cannot be imported (%s); no Fuji camera is detected",
@@ -1438,9 +1506,14 @@ def detect_fuji(sdk_path: str) -> FujiDetection:
 
     _preload_mac_transport(sdk_path)
 
+    attempts = 3
+    if _fujifilm_on_usb() is False:
+        logging.info('No Fujifilm device on the USB bus, the Fuji SDK looks once')
+        attempts = 1
+
     cameras = []
     reset_at = None
-    for attempt in range(3):
+    for attempt in range(attempts):
         if attempt == 1:
             time.sleep(4.0)
         elif attempt == 2:
@@ -1460,7 +1533,8 @@ def detect_fuji(sdk_path: str) -> FujiDetection:
             _reexec_process()
         except Exception as e:
             logging.debug('Fuji SDK detect attempt %d failed: %s', attempt + 1, e)
-        time.sleep(2)
+        if attempt + 1 < attempts:
+            time.sleep(2)
 
     if not cameras:
         logging.info('The Fuji SDK found no cameras')
