@@ -23,6 +23,9 @@ DEFAULT_AREAS = {
     "plot_dock": LEFT,
 }
 
+# Hidden in the default layout (see tests/test_error_log_dock.py)
+HIDDEN_DOCKS = {"error_log_dock"}
+
 
 @pytest.fixture(scope="module")
 def app():
@@ -65,7 +68,7 @@ def _assert_default_layout(view):
 
 
 def test_every_dock_has_an_object_name(view):
-    assert set(_docks(view)) == set(DEFAULT_AREAS)
+    assert set(_docks(view)) == set(DEFAULT_AREAS) | HIDDEN_DOCKS
 
 
 def test_the_default_layout_is_the_window_without_docks(view):
@@ -84,8 +87,9 @@ def test_the_panels_menu_has_one_checkable_action_per_dock(view, app):
     menu = view.panels_button.menu()
     checkable = [action for action in menu.actions() if action.isCheckable()]
     assert checkable == [dock.toggleViewAction() for dock in
-                         (view.time_place_dock, view.moments_dock, view.camera_dock, view.plot_dock)]
-    assert all(action.isChecked() for action in checkable)
+                         (view.time_place_dock, view.moments_dock, view.camera_dock, view.plot_dock,
+                          view.error_log_dock)]
+    assert [action.isChecked() for action in checkable] == [True, True, True, True, False]
     assert view.reset_layout_action in menu.actions()
 
     view.camera_dock.toggleViewAction().trigger()
@@ -117,8 +121,9 @@ def test_no_dock_can_be_made_so_small_that_it_disappears(view, app):
     view.resizeDocks([view.plot_dock], [1], Qt.Orientation.Horizontal)
     view.resizeDocks([view.moments_dock], [1], Qt.Orientation.Vertical)
     app.processEvents()
-    for dock in _docks(view).values():
-        assert dock.width() > 100 and dock.height() > 100, dock.objectName()
+    for name in DEFAULT_AREAS:
+        dock = getattr(view, name)
+        assert dock.width() > 100 and dock.height() > 100, name
 
 
 def test_a_hidden_dock_stays_hidden_after_a_restart(app, view, settings_file):

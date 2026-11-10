@@ -142,6 +142,8 @@ def file_handlers_only(handlers: list) -> list:
 
     Code that silences the console while a noisy library runs should keep these:
     removing every handler would also drop whatever the camera and scheduler
-    threads log in the meantime.
+    threads log in the meantime.  A handler with a true `keep_when_quiet`
+    attribute (the Error Log dock) is kept too.
     """
-    return [h for h in handlers if isinstance(h, logging.FileHandler)]
+    return [h for h in handlers
+            if isinstance(h, logging.FileHandler) or getattr(h, "keep_when_quiet", False)]
