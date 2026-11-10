@@ -24,7 +24,7 @@ import pytz
 from PyQt6.QtCore import (QTimer, QRect, QPointF, Qt, QAbstractTableModel, QModelIndex,
                          QSettings, QSignalBlocker, pyqtSignal, QBuffer, QIODevice)
 from PyQt6.QtGui import QIcon, QAction, QIntValidator, QCloseEvent, QPixmap, QImage, \
-    QFontMetrics
+    QFontMetrics, QFontDatabase
 from PyQt6.QtWidgets import QMainWindow, QApplication, QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout, \
 QGridLayout, QGroupBox, QComboBox, QPushButton, QLineEdit, QFileDialog, QScrollArea, QSlider, QTableView, \
 QMessageBox, QDialog, QPlainTextEdit, QProgressBar, QToolButton, QSplitter, QCheckBox, QSizePolicy, QStyle, \
@@ -106,6 +106,11 @@ SOLAR_RADIUS_LOCKED_TOOLTIP = (
 LIMB_CORRECTION_LOCKED_TOOLTIP = (
     "The lunar limb correction cannot be changed while a script has pending "
     "jobs. Stop the scheduler first, then change the correction and reload the script."
+)
+CAMERA_TOOLTIP = "Detect the connected cameras"
+CAMERA_LOCKED_TOOLTIP = (
+    "Camera detection is off while a script is loaded, because it can interrupt "
+    "the scheduled commands. Click Stop to turn it on again."
 )
 
 DATE_FORMATS = {
@@ -708,6 +713,25 @@ class SolarEclipseView(QMainWindow, Observable):
         self.statusBar().showMessage(message, SAVE_MESSAGE_TIMEOUT)
         return True
 
+    def number_labels(self) -> tuple:
+        """ Return the labels that show dates, times, countdowns and angles. """
+
+        return (self.date_label_local, self.date_label_utc, self.time_label_local, self.time_label_utc,
+                self.c1_time_local_label, self.c2_time_local_label, self.max_time_local_label,
+                self.c3_time_local_label, self.c4_time_local_label, self.sunrise_time_local_label,
+                self.sunset_time_local_label,
+                self.c1_time_utc_label, self.c2_time_utc_label, self.max_time_utc_label,
+                self.c3_time_utc_label, self.c4_time_utc_label, self.sunrise_time_utc_label,
+                self.sunset_time_utc_label,
+                self.c1_countdown_label, self.c2_countdown_label, self.max_countdown_label,
+                self.c3_countdown_label, self.c4_countdown_label, self.sunrise_countdown_label,
+                self.sunset_countdown_label,
+                self.c1_azimuth_label, self.c2_azimuth_label, self.max_azimuth_label,
+                self.c3_azimuth_label, self.c4_azimuth_label,
+                self.c1_altitude_label, self.c2_altitude_label, self.max_altitude_label,
+                self.c3_altitude_label, self.c4_altitude_label,
+                self.beads_c2_label, self.beads_c3_label)
+
     def save_layout_settings(self):
         """ Save the position of the splitter between the eclipse plot and the jobs table, and how the jobs
         table shows the commands. """
@@ -842,6 +866,12 @@ class SolarEclipseView(QMainWindow, Observable):
         reference_moments_grid_layout.addWidget(self.solar_radius_combo, 11, 1, 1, 4)
         reference_moments_grid_layout.addWidget(self.solar_radius_spinbox, 11, 5)
         reference_moments_group_box.setLayout(reference_moments_grid_layout)
+        # The dates, times, countdowns and angles use the fixed-width system font.  In a proportional font each
+        # digit has its own width, so a countdown moves sideways when it changes and the times in a column do
+        # not line up.
+        fixed_width_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        for label in self.number_labels():
+            label.setFont(fixed_width_font)
         # At least 600 pixels, but wider when a larger font needs it, so the row
         # titles are never cut off.  The countdown column is sized for its widest
         # value, so the box does not change width while counting down.
@@ -933,6 +963,7 @@ class SolarEclipseView(QMainWindow, Observable):
         add(self.date_action, "Date", "calendar.png")
         add(self.reference_moments_action, "Reference moments", "clock.png")
         add(self.camera_action, "Camera(s)", "camera.png")
+        self.camera_action.setToolTip(CAMERA_TOOLTIP)
         if self.is_simulator:
             add(self.simulator_action, "Configure simulator", "simulator.png")
         add(self.file_action, "File", "folder.png")
@@ -1689,6 +1720,7 @@ class SolarEclipseController(Observer):
             self.sim_reference_moment = changed_object.reference_moment_combobox.currentText()
             self.sim_offset_minutes = (int(changed_object.offset_minutes.text())
                                        * BEFORE_AFTER[changed_object.before_after_combobox.currentText()])
+            self._apply_simulation_offset()
             return
 
         elif isinstance(changed_object, SettingsPopup):
@@ -1889,6 +1921,7 @@ class SolarEclipseController(Observer):
                 self.view.jobs_table.resizeColumnsToContents()
 
                 self.view.camera_action.setDisabled(True)
+                self.view.camera_action.setToolTip(CAMERA_LOCKED_TOOLTIP)
 
                 n_jobs = len(self.scheduler.get_jobs())
                 self._set_limb_correction_locked(n_jobs > 0)
@@ -2207,8 +2240,10 @@ class SolarEclipseController(Observer):
                 self.view,
                 "No Camera Connected",
                 "Live view requires a connected camera.\n\n"
-                "Click the Camera(s) button first to detect connected cameras.\n"
-                "In simulator mode the VirtualCamera is also supported."
+                "Click the Camera(s) button first to detect connected cameras.\n\n"
+                "To use live view without a camera, start the application with\n"
+                "    sew --sim --virtual-camera\n"
+                "and click the Camera(s) button. The VirtualCamera is then shown."
             )
             return
 
@@ -2679,6 +2714,27 @@ class SolarEclipseController(Observer):
             "mount": self._phone_mount_state(),
         }
 
+    def _apply_simulation_offset(self):
+        """ Move the countdowns and the eclipse visualization to the simulated time.
+
+        The contact times do not change: they depend on the location and the date, not on the simulation.  Only
+        the current time changes.  While a loaded script has jobs, the offset stays as it is: the jobs keep the
+        times they were scheduled at, and the countdowns must agree with them.  The new simulation is then used
+        when the next script is loaded.
+        """
+
+        # Imported here, because the utils module imports this module
+        from solareclipseworkbench.utils import simulation_offset
+
+        if self.scheduler is not None and self.scheduler.running and self.scheduler.get_jobs():
+            LOGGER.info("The loaded script keeps its times; the new simulation starts with the next script")
+            return
+
+        offset = simulation_offset(self.model.reference_moments, self.sim_reference_moment, self.sim_offset_minutes)
+        self.view.eclipse_visualization.set_offset(offset)
+        LOGGER.info("Simulation: %s in %s minutes", self.sim_reference_moment, self.sim_offset_minutes)
+        self.update_time()
+
     def _phone_mount_state(self) -> Optional[dict]:
         """The mount as the phone dashboard shows it, or None when no mount is connected."""
 
@@ -2724,6 +2780,7 @@ class SolarEclipseController(Observer):
                 if self.jobs_model:
                     self.jobs_model.clear_jobs_overview()
                 self.view.camera_action.setEnabled(True)
+                self.view.camera_action.setToolTip(CAMERA_TOOLTIP)
                 LOGGER.info("Scheduler stopped by user")
                 self.model.camera_overview.set_continuous_mode_commands(None)
         except SchedulerNotRunningError:

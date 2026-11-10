@@ -18,6 +18,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from astropy.time import Time
+from PyQt6.QtGui import QFontDatabase, QFontInfo
 from PyQt6.QtWidgets import QApplication
 
 from solareclipseworkbench import limb_correction
@@ -124,3 +125,17 @@ def test_pending_jobs_reject_a_programmatic_correction_change(view):
 
     assert limb_correction.is_enabled()
     assert view.limb_correction_checkbox.isChecked()
+
+
+def test_the_numbers_use_the_fixed_width_font(view):
+    # In a proportional font a countdown moves sideways when it changes, and the times in a column do not line up
+    fixed_width_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    labels = view.number_labels()
+
+    for label in (view.date_label_local, view.date_label_utc, view.time_label_local, view.time_label_utc,
+                  view.c2_time_local_label, view.c2_time_utc_label, view.c2_countdown_label,
+                  view.c2_azimuth_label, view.c2_altitude_label, view.beads_c2_label):
+        assert label in labels
+    for label in labels:
+        assert label.font().family() == fixed_width_font.family()
+        assert QFontInfo(label.font()).fixedPitch() == QFontInfo(fixed_width_font).fixedPitch()

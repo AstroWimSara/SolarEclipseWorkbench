@@ -309,7 +309,7 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
         now = datetime.now(pytz.utc)
         simulated_start = now + timedelta(minutes=minutes_to_reference_moment)
 
-        offset = ref_moments[reference_moment].time_utc - timedelta(minutes=minutes_to_reference_moment) - now
+        offset = simulation_offset(ref_moments, reference_moment, minutes_to_reference_moment, now)
     else:
         simulated_start = None
         offset = timedelta(minutes=0)
@@ -324,6 +324,31 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
                                 simulated_start, gps_time_offset=gps_time_offset)
 
     return scheduler, unknown
+
+
+def simulation_offset(ref_moments: dict, reference_moment: str, minutes_to_reference_moment: float,
+                      now: datetime = None) -> timedelta:
+    """ Return how far the simulated clock is ahead of the real clock.
+
+    The real time plus this offset gives the simulated time.  The scheduler and the countdowns both use this
+    function, so they always agree.
+
+    Args:
+        - ref_moments: ReferenceMomentInfo per reference moment
+        - reference_moment: Reference moment to use for the simulation.  None or an empty string if no simulation
+                            should be used
+        - minutes_to_reference_moment: Minutes from now to the reference moment in the simulation
+        - now: Real time (UTC).  Default: the current time
+
+    Returns: Offset between the simulated time and the real time.  Zero when there is no simulation, or when the
+             reference moment does not exist for this eclipse.
+    """
+
+    if not reference_moment or not ref_moments or reference_moment not in ref_moments:
+        return timedelta(0)
+    if now is None:
+        now = datetime.now(pytz.utc)
+    return ref_moments[reference_moment].time_utc - timedelta(minutes=minutes_to_reference_moment or 0) - now
 
 
 def start_scheduler():
