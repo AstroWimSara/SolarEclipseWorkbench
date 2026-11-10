@@ -18,7 +18,8 @@ from astropy.time import Time
 
 from solareclipseworkbench import hardware_problems, limb_correction
 from solareclipseworkbench.camera_check import CameraProfile
-from solareclipseworkbench.command_timing import CONTACT_BURST_S, burst_lead_s, burst_shooting_s, vendor_from_name
+from solareclipseworkbench.command_timing import (BEADS_WINDOW_MARGIN_S, CONTACT_BURST_S, burst_lead_s,
+                                                  burst_shooting_s, vendor_from_name)
 from solareclipseworkbench.reference_moments import calculate_reference_moments
 from solareclipseworkbench.utils import schedule_commands
 from solareclipseworkbench.wizard import SummaryPage
@@ -70,17 +71,24 @@ def _command(script, description):
 
 @needs_limb_profile
 @pytest.mark.parametrize("camera_name", ["Canon EOS R5", "Nikon Z8", "Sony ILCE-7RM3A"])
-def test_the_beads_bursts_are_centred_on_the_bead_windows(moments, camera_name):
+def test_the_beads_bursts_hold_the_last_and_the_first_bead(moments, camera_name):
+    """The C2 burst ends just after BEADS_C2_END, the C3 burst starts just before BEADS_C3_START."""
     script = _script(camera_name)
     vendor = vendor_from_name(camera_name)
+    margin = timedelta(seconds=BEADS_WINDOW_MARGIN_S)
+
+    at, reference, fields = _command(script, "C2 beads")
+    assert reference == "C2"
+    shooting = burst_shooting_s(vendor, float(fields[-2]))
+    shooting_end = moments["C2"].time_utc + timedelta(seconds=at + burst_lead_s(vendor) + shooting)
+    assert abs((shooting_end - (moments["BEADS_C2_END"].time_utc + margin)).total_seconds()) <= 0.1, script
+
+    at, reference, fields = _command(script, "C3 beads")
+    assert reference == "C3"
+    shooting_start = moments["C3"].time_utc + timedelta(seconds=at + burst_lead_s(vendor))
+    assert abs((shooting_start - (moments["BEADS_C3_START"].time_utc - margin)).total_seconds()) <= 0.1, script
 
     for contact in ("C2", "C3"):
-        at, reference, fields = _command(script, f"{contact} beads")
-        assert reference == contact
-        shooting = burst_shooting_s(vendor, float(fields[-2]))
-        shooting_centre = moments[contact].time_utc + timedelta(seconds=at + burst_lead_s(vendor) + shooting / 2)
-        window_centre = moments[f"BEADS_{contact}"].time_utc
-        assert abs((shooting_centre - window_centre).total_seconds()) <= 0.1, script
         assert f"# Baily's beads window ({contact}): " in script
 
 

@@ -81,10 +81,10 @@ def test_a_speed_that_is_not_a_number_is_shown_as_written():
 
 
 def test_unknown_commands_and_unreadable_jobs_have_no_words():
-    def mount_park():
+    def dome_open():
         pass
 
-    for job in (_job(mount_park),                       # a command without words
+    for job in (_job(dome_open),                        # a command without words
                 _job(take_picture),                     # no arguments
                 _job(take_hdr, object(), _settings(), "many"),
                 SimpleNamespace(func=None, args=()),

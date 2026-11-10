@@ -263,11 +263,14 @@ if [ "$1" = "root" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     # gphoto2 (and its udev rules) for the cameras, gstreamer for the voice
-    # prompts, usbutils for lsusb, the libraries the Qt windows need, and an
-    # emoji font for the symbols on some buttons.
+    # prompts (gst-play-1.0, which plays them, is in gstreamer1.0-plugins-base-apps,
+    # not in gstreamer1.0-tools), usbutils for lsusb, the libraries the Qt windows
+    # need, an emoji font for the symbols on some buttons, and exiftool, which
+    # reads the capture time of every raw format for sew_sort.
     apt-get install -y \
-        ca-certificates curl usbutils gphoto2 \
-        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        ca-certificates curl usbutils gphoto2 libimage-exiftool-perl \
+        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps \
+        gstreamer1.0-plugins-good \
         gstreamer1.0-pulseaudio alsa-utils pulseaudio-utils \
         libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
         libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \

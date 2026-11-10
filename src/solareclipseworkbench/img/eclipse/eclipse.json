@@ -1,0 +1,622 @@
+{
+ "source": "Total solar eclipse of 2026-08-12 in Spain, Canon EOS R, by Wim De Meester",
+ "radius": 60.0,
+ "frames": [
+  {
+   "file": "001.jpg",
+   "from_c2": -3299.6,
+   "from_c3": -3407.6,
+   "phase": "partial",
+   "x": 99.81,
+   "y": 99.97
+  },
+  {
+   "file": "008.jpg",
+   "from_c2": -3205.9,
+   "from_c3": -3313.9,
+   "phase": "partial",
+   "x": 100.01,
+   "y": 99.93
+  },
+  {
+   "file": "018.jpg",
+   "from_c2": -3105.9,
+   "from_c3": -3213.9,
+   "phase": "partial",
+   "x": 99.96,
+   "y": 100.47
+  },
+  {
+   "file": "027.jpg",
+   "from_c2": -3015.9,
+   "from_c3": -3123.9,
+   "phase": "partial",
+   "x": 100.06,
+   "y": 99.54
+  },
+  {
+   "file": "037.jpg",
+   "from_c2": -2916.1,
+   "from_c3": -3024.1,
+   "phase": "partial",
+   "x": 100.19,
+   "y": 100.18
+  },
+  {
+   "file": "047.jpg",
+   "from_c2": -2816.1,
+   "from_c3": -2924.1,
+   "phase": "partial",
+   "x": 100.17,
+   "y": 100.38
+  },
+  {
+   "file": "057.jpg",
+   "from_c2": -2716.1,
+   "from_c3": -2824.1,
+   "phase": "partial",
+   "x": 100.43,
+   "y": 100.31
+  },
+  {
+   "file": "066.jpg",
+   "from_c2": -2626.1,
+   "from_c3": -2734.1,
+   "phase": "partial",
+   "x": 99.71,
+   "y": 100.05
+  },
+  {
+   "file": "076.jpg",
+   "from_c2": -2526.2,
+   "from_c3": -2634.2,
+   "phase": "partial",
+   "x": 99.83,
+   "y": 99.82
+  },
+  {
+   "file": "086.jpg",
+   "from_c2": -2426.2,
+   "from_c3": -2534.2,
+   "phase": "partial",
+   "x": 100.03,
+   "y": 100.44
+  },
+  {
+   "file": "096.jpg",
+   "from_c2": -2326.3,
+   "from_c3": -2434.3,
+   "phase": "partial",
+   "x": 100.44,
+   "y": 100.26
+  },
+  {
+   "file": "105.jpg",
+   "from_c2": -2236.3,
+   "from_c3": -2344.3,
+   "phase": "partial",
+   "x": 100.38,
+   "y": 100.13
+  },
+  {
+   "file": "115.jpg",
+   "from_c2": -2136.3,
+   "from_c3": -2244.3,
+   "phase": "partial",
+   "x": 100.37,
+   "y": 100.18
+  },
+  {
+   "file": "125.jpg",
+   "from_c2": -2036.4,
+   "from_c3": -2144.4,
+   "phase": "partial",
+   "x": 99.97,
+   "y": 99.67
+  },
+  {
+   "file": "135.jpg",
+   "from_c2": -1936.4,
+   "from_c3": -2044.4,
+   "phase": "partial",
+   "x": 100.44,
+   "y": 100.46
+  },
+  {
+   "file": "145.jpg",
+   "from_c2": -1836.4,
+   "from_c3": -1944.4,
+   "phase": "partial",
+   "x": 100.33,
+   "y": 100.38
+  },
+  {
+   "file": "155.jpg",
+   "from_c2": -1736.4,
+   "from_c3": -1844.4,
+   "phase": "partial",
+   "x": 99.5,
+   "y": 100.45
+  },
+  {
+   "file": "165.jpg",
+   "from_c2": -1636.4,
+   "from_c3": -1744.4,
+   "phase": "partial",
+   "x": 100.33,
+   "y": 99.75
+  },
+  {
+   "file": "175.jpg",
+   "from_c2": -1536.5,
+   "from_c3": -1644.5,
+   "phase": "partial",
+   "x": 99.67,
+   "y": 100.09
+  },
+  {
+   "file": "184.jpg",
+   "from_c2": -1446.5,
+   "from_c3": -1554.5,
+   "phase": "partial",
+   "x": 100.02,
+   "y": 100.39
+  },
+  {
+   "file": "194.jpg",
+   "from_c2": -1346.6,
+   "from_c3": -1454.6,
+   "phase": "partial",
+   "x": 99.51,
+   "y": 100.24
+  },
+  {
+   "file": "204.jpg",
+   "from_c2": -1246.6,
+   "from_c3": -1354.6,
+   "phase": "partial",
+   "x": 99.85,
+   "y": 100.24
+  },
+  {
+   "file": "214.jpg",
+   "from_c2": -1146.6,
+   "from_c3": -1254.6,
+   "phase": "partial",
+   "x": 100.13,
+   "y": 100.46
+  },
+  {
+   "file": "224.jpg",
+   "from_c2": -1046.7,
+   "from_c3": -1154.7,
+   "phase": "partial",
+   "x": 99.82,
+   "y": 100.38
+  },
+  {
+   "file": "234.jpg",
+   "from_c2": -946.7,
+   "from_c3": -1054.7,
+   "phase": "partial",
+   "x": 100.39,
+   "y": 100.36
+  },
+  {
+   "file": "244.jpg",
+   "from_c2": -846.7,
+   "from_c3": -954.7,
+   "phase": "partial",
+   "x": 100.1,
+   "y": 99.76
+  },
+  {
+   "file": "254.jpg",
+   "from_c2": -746.7,
+   "from_c3": -854.7,
+   "phase": "partial",
+   "x": 99.55,
+   "y": 99.99
+  },
+  {
+   "file": "264.jpg",
+   "from_c2": -646.8,
+   "from_c3": -754.8,
+   "phase": "partial",
+   "x": 99.92,
+   "y": 100.13
+  },
+  {
+   "file": "274.jpg",
+   "from_c2": -546.8,
+   "from_c3": -654.8,
+   "phase": "partial",
+   "x": 100.4,
+   "y": 99.96
+  },
+  {
+   "file": "284.jpg",
+   "from_c2": -446.9,
+   "from_c3": -554.9,
+   "phase": "partial",
+   "x": 100.46,
+   "y": 100.39
+  },
+  {
+   "file": "294.jpg",
+   "from_c2": -346.9,
+   "from_c3": -454.9,
+   "phase": "partial",
+   "x": 99.65,
+   "y": 99.63
+  },
+  {
+   "file": "303.jpg",
+   "from_c2": -256.9,
+   "from_c3": -364.9,
+   "phase": "partial",
+   "x": 100.36,
+   "y": 99.58
+  },
+  {
+   "file": "311.jpg",
+   "from_c2": -176.9,
+   "from_c3": -284.9,
+   "phase": "partial",
+   "x": 99.94,
+   "y": 100.06
+  },
+  {
+   "file": "313.jpg",
+   "from_c2": -156.9,
+   "from_c3": -264.9,
+   "phase": "partial",
+   "x": 100.1,
+   "y": 99.55
+  },
+  {
+   "file": "315.jpg",
+   "from_c2": -137.0,
+   "from_c3": -245.0,
+   "phase": "partial",
+   "x": 99.65,
+   "y": 100.08
+  },
+  {
+   "file": "316.jpg",
+   "from_c2": -126.9,
+   "from_c3": -234.9,
+   "phase": "partial",
+   "x": 99.72,
+   "y": 100.33
+  },
+  {
+   "file": "318.jpg",
+   "from_c2": -107.0,
+   "from_c3": -214.9,
+   "phase": "partial",
+   "x": 99.94,
+   "y": 99.51
+  },
+  {
+   "file": "320.jpg",
+   "from_c2": -87.0,
+   "from_c3": -195.0,
+   "phase": "partial",
+   "x": 99.52,
+   "y": 99.82
+  },
+  {
+   "file": "322.jpg",
+   "from_c2": -67.0,
+   "from_c3": -175.0,
+   "phase": "partial",
+   "x": 99.93,
+   "y": 99.81
+  },
+  {
+   "file": "324.jpg",
+   "from_c2": -47.0,
+   "from_c3": -155.0,
+   "phase": "partial",
+   "x": 100.3,
+   "y": 99.84
+  },
+  {
+   "file": "326.jpg",
+   "from_c2": -27.0,
+   "from_c3": -135.0,
+   "phase": "partial",
+   "x": 99.5,
+   "y": 100.03
+  },
+  {
+   "file": "327.jpg",
+   "from_c2": -17.0,
+   "from_c3": -125.0,
+   "phase": "partial",
+   "x": 99.68,
+   "y": 99.65
+  },
+  {
+   "file": "344.jpg",
+   "from_c2": 4.2,
+   "from_c3": -103.8,
+   "phase": "totality",
+   "x": 99.64,
+   "y": 99.71
+  },
+  {
+   "file": "350.jpg",
+   "from_c2": 5.2,
+   "from_c3": -102.8,
+   "phase": "totality",
+   "x": 99.96,
+   "y": 99.79
+  },
+  {
+   "file": "358.jpg",
+   "from_c2": 6.3,
+   "from_c3": -101.7,
+   "phase": "totality",
+   "x": 100.2,
+   "y": 100.21
+  },
+  {
+   "file": "380.jpg",
+   "from_c2": 63.8,
+   "from_c3": -44.2,
+   "phase": "totality",
+   "x": 99.98,
+   "y": 100.01
+  },
+  {
+   "file": "424.jpg",
+   "from_c2": 136.9,
+   "from_c3": 28.9,
+   "phase": "partial",
+   "x": 99.56,
+   "y": 100.37
+  },
+  {
+   "file": "426.jpg",
+   "from_c2": 156.8,
+   "from_c3": 48.9,
+   "phase": "partial",
+   "x": 99.52,
+   "y": 100.09
+  },
+  {
+   "file": "427.jpg",
+   "from_c2": 166.9,
+   "from_c3": 58.9,
+   "phase": "partial",
+   "x": 99.68,
+   "y": 100.23
+  },
+  {
+   "file": "429.jpg",
+   "from_c2": 186.8,
+   "from_c3": 78.8,
+   "phase": "partial",
+   "x": 99.78,
+   "y": 99.52
+  },
+  {
+   "file": "430.jpg",
+   "from_c2": 196.8,
+   "from_c3": 88.8,
+   "phase": "partial",
+   "x": 99.97,
+   "y": 99.59
+  },
+  {
+   "file": "432.jpg",
+   "from_c2": 216.9,
+   "from_c3": 108.9,
+   "phase": "partial",
+   "x": 100.33,
+   "y": 99.9
+  },
+  {
+   "file": "434.jpg",
+   "from_c2": 236.8,
+   "from_c3": 128.8,
+   "phase": "partial",
+   "x": 99.58,
+   "y": 100.17
+  },
+  {
+   "file": "435.jpg",
+   "from_c2": 246.9,
+   "from_c3": 138.9,
+   "phase": "partial",
+   "x": 99.68,
+   "y": 100.48
+  },
+  {
+   "file": "437.jpg",
+   "from_c2": 266.8,
+   "from_c3": 158.8,
+   "phase": "partial",
+   "x": 99.89,
+   "y": 99.73
+  },
+  {
+   "file": "439.jpg",
+   "from_c2": 286.8,
+   "from_c3": 178.8,
+   "phase": "partial",
+   "x": 100.45,
+   "y": 100.12
+  },
+  {
+   "file": "449.jpg",
+   "from_c2": 386.8,
+   "from_c3": 278.8,
+   "phase": "partial",
+   "x": 100.16,
+   "y": 100.48
+  },
+  {
+   "file": "459.jpg",
+   "from_c2": 486.7,
+   "from_c3": 378.7,
+   "phase": "partial",
+   "x": 99.8,
+   "y": 99.66
+  },
+  {
+   "file": "469.jpg",
+   "from_c2": 586.7,
+   "from_c3": 478.7,
+   "phase": "partial",
+   "x": 100.45,
+   "y": 99.63
+  },
+  {
+   "file": "479.jpg",
+   "from_c2": 686.7,
+   "from_c3": 578.7,
+   "phase": "partial",
+   "x": 99.54,
+   "y": 99.94
+  },
+  {
+   "file": "486.jpg",
+   "from_c2": 852.7,
+   "from_c3": 744.7,
+   "phase": "partial",
+   "x": 99.93,
+   "y": 100.11
+  },
+  {
+   "file": "495.jpg",
+   "from_c2": 946.9,
+   "from_c3": 838.9,
+   "phase": "partial",
+   "x": 100.19,
+   "y": 100.4
+  },
+  {
+   "file": "504.jpg",
+   "from_c2": 1036.9,
+   "from_c3": 928.9,
+   "phase": "partial",
+   "x": 100.49,
+   "y": 99.8
+  },
+  {
+   "file": "512.jpg",
+   "from_c2": 1127.3,
+   "from_c3": 1019.3,
+   "phase": "partial",
+   "x": 99.74,
+   "y": 99.85
+  },
+  {
+   "file": "522.jpg",
+   "from_c2": 1227.1,
+   "from_c3": 1119.1,
+   "phase": "partial",
+   "x": 100.21,
+   "y": 100.11
+  },
+  {
+   "file": "532.jpg",
+   "from_c2": 1326.7,
+   "from_c3": 1218.7,
+   "phase": "partial",
+   "x": 100.04,
+   "y": 100.44
+  },
+  {
+   "file": "541.jpg",
+   "from_c2": 1416.9,
+   "from_c3": 1308.9,
+   "phase": "partial",
+   "x": 99.52,
+   "y": 99.82
+  },
+  {
+   "file": "551.jpg",
+   "from_c2": 1516.7,
+   "from_c3": 1408.7,
+   "phase": "partial",
+   "x": 99.75,
+   "y": 100.41
+  },
+  {
+   "file": "560.jpg",
+   "from_c2": 1606.7,
+   "from_c3": 1498.7,
+   "phase": "partial",
+   "x": 99.91,
+   "y": 100.34
+  },
+  {
+   "file": "570.jpg",
+   "from_c2": 1706.8,
+   "from_c3": 1598.8,
+   "phase": "partial",
+   "x": 99.88,
+   "y": 100.21
+  },
+  {
+   "file": "580.jpg",
+   "from_c2": 1806.8,
+   "from_c3": 1698.8,
+   "phase": "partial",
+   "x": 100.0,
+   "y": 100.36
+  },
+  {
+   "file": "589.jpg",
+   "from_c2": 1897.3,
+   "from_c3": 1789.3,
+   "phase": "partial",
+   "x": 100.47,
+   "y": 99.59
+  },
+  {
+   "file": "599.jpg",
+   "from_c2": 1996.7,
+   "from_c3": 1888.7,
+   "phase": "partial",
+   "x": 100.23,
+   "y": 99.84
+  },
+  {
+   "file": "608.jpg",
+   "from_c2": 2088.4,
+   "from_c3": 1980.4,
+   "phase": "partial",
+   "x": 99.88,
+   "y": 100.06
+  },
+  {
+   "file": "618.jpg",
+   "from_c2": 2186.4,
+   "from_c3": 2078.4,
+   "phase": "partial",
+   "x": 100.14,
+   "y": 99.88
+  },
+  {
+   "file": "627.jpg",
+   "from_c2": 2276.6,
+   "from_c3": 2168.6,
+   "phase": "partial",
+   "x": 100.36,
+   "y": 100.34
+  },
+  {
+   "file": "636.jpg",
+   "from_c2": 2376.5,
+   "from_c3": 2268.5,
+   "phase": "partial",
+   "x": 99.61,
+   "y": 100.13
+  }
+ ]
+}

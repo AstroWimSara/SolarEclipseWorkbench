@@ -1,0 +1,41 @@
+# Test script for the telescope mount: check 1.S2 of docs/MOUNT_TESTING.md.
+#
+# Run it as a simulation that starts 3 minutes before C1 (sew --sim, Simulator: C1, 3 minutes),
+# with the mount connected in the Mount window and the virtual camera (the camera name is
+# VirtualCamera).  It runs for about 5 minutes and tests:
+#
+#   - mount_track, mount_park and mount_track from parked (it unparks first),
+#   - camera commands while the mount is tracking: pictures and brackets,
+#   - with "Keep the sun centred" on: the centring waits for a gap between the shots
+#     ("waiting for a gap of … s between the shots"), most clearly during the run of
+#     pictures every 2 s, and corrects in the gaps.
+#
+# Parking moves the mount away from the sun: after the park the live view shows no sun
+# ("the sun is not found").  With INDI's telescope simulator, point it at the sun again
+# after the second mount_track: sew_hardware, mount connect localhost, mount sun goto.
+
+# Start tracking, then a few single pictures and a bracket
+mount_track, C1, -, 0:02:50.0, "Track the sun"
+take_picture, C1, -, 0:02:40.0, VirtualCamera, 1/1000, 8, 200, "Tracking (1)"
+take_picture, C1, -, 0:02:30.0, VirtualCamera, 1/1000, 8, 200, "Tracking (2)"
+take_bracket, C1, -, 0:02:20.0, VirtualCamera, 1/1000, 8, 200, "1 3", "Bracket of 3 frames, 1 EV apart"
+take_picture, C1, -, 0:02:05.0, VirtualCamera, 1/1000, 8, 200, "Tracking (3)"
+
+# A run of pictures every 2 s: no room for a correction until it ends
+for,C1,C1,2,-110.0,-92.0
+take_picture,(VAR), +, 0:00:00.0, VirtualCamera, 1/1000, 8, 200, "Tight series"
+endfor
+
+# A quiet half minute: room for corrections
+take_bracket, C1, -, 0:01:00.0, VirtualCamera, 1/500, 8, 200, "1 5", "Bracket of 5 frames, 1 EV apart"
+
+# Park, and track again from parked
+mount_park, C1, -, 0:00:40.0, "Park the mount"
+take_picture, C1, -, 0:00:30.0, VirtualCamera, 1/1000, 8, 200, "While parked"
+mount_track, C1, -, 0:00:10.0, "Track again (unparks first)"
+take_picture, C1, +, 0:00:05.0, VirtualCamera, 1/1000, 8, 200, "After C1 (1)"
+take_bracket, C1, +, 0:00:20.0, VirtualCamera, 1/1000, 8, 200, "1 3", "After C1, bracket"
+take_picture, C1, +, 0:00:40.0, VirtualCamera, 1/1000, 8, 200, "After C1 (2)"
+
+# The end: stop tracking, as at the end of a run
+mount_stop, C1, +, 0:01:30.0, "Stop tracking"

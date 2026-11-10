@@ -3,6 +3,8 @@
 Both are opened from the toolbar of the main window: "Timeline" draws a script
 per camera against the reference moments (see script_timeline), "Run report"
 reads a log file back and shows what became of every command (see run_report).
+From the run report, "Sort images..." and "Align timelapse..." open the dialogs
+of images_ui for after the eclipse.
 """
 
 import logging
@@ -18,7 +20,8 @@ from PyQt6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QHeaderView, Q
                              QVBoxLayout, QWidget)
 
 from solareclipseworkbench import run_report
-from solareclipseworkbench.script_timeline import build_timeline, command_at, describe, draw_timeline, format_timeline
+from solareclipseworkbench.script_timeline import (build_timeline, command_at, describe, draw_timeline, format_timeline,
+                                                   frames_text)
 
 
 class TimelineWindow(QWidget):
@@ -122,7 +125,10 @@ class TimelineWindow(QWidget):
             parts.append("no command has to wait for its camera")
         for name, count in timeline.unknown_moments.items():
             parts.append(f"<b style='color:#d62728'>{count} line(s) against {name}, which does not exist here</b>")
-        self.summary.setText("; ".join(parts) + ".  Hover over a bar for its command.")
+        frames = [f"{camera}: {frames_text(timeline, camera)}." for camera in timeline.cameras]
+        if cameras > 1:
+            frames.append(f"All cameras: {frames_text(timeline)}.")
+        self.summary.setText("<br>".join(["; ".join(parts) + ".  Hover over a bar for its command."] + frames))
 
     def _on_hover(self, event):
         if self.timeline is None or event.inaxes is None:
@@ -171,6 +177,10 @@ class RunReportWindow(QWidget):
         self.resize(1150, 650)
         self.log_path: Optional[Path] = None
         self.runs = []
+        self._sort_dialog = None
+        self._align_dialog = None
+        self._images_dir = ""        # the folder last sorted from, and the one sorted into
+        self._sorted_dir = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
@@ -197,6 +207,16 @@ class RunReportWindow(QWidget):
         self.text_button = QPushButton("Save as text...")
         self.text_button.clicked.connect(self.save_text)
         controls.addWidget(self.text_button)
+        self.sort_button = QPushButton("Sort images...")
+        self.sort_button.setToolTip("Sort the images of this run into folders by the script line that took them: "
+                                    "per phase, per description, and every bracket, HDR series or burst on its own")
+        self.sort_button.clicked.connect(self.sort_images)
+        controls.addWidget(self.sort_button)
+        self.align_button = QPushButton("Align timelapse...")
+        self.align_button.setToolTip("Align the frames in a folder on the sun, crop them to the same size and "
+                                     "make a video")
+        self.align_button.clicked.connect(self.align_timelapse)
+        controls.addWidget(self.align_button)
         layout.addLayout(controls)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -302,6 +322,41 @@ class RunReportWindow(QWidget):
         filename, _ = QFileDialog.getSaveFileName(self, "Save run report", default, "Text Files (*.txt)")
         if filename:
             _write_text(self, filename, run_report.format_report(run, self.log_path))
+
+
+    def sort_images(self):
+        """Open the Sort images dialog for the run that is shown."""
+        from solareclipseworkbench.images_ui import SortImagesDialog
+        run = self.run
+        if run is None:
+            QMessageBox.information(self, "Sort images", "Choose a log with a run first: the images are sorted by "
+                                                         "the commands of that run.")
+            return
+        if self._sort_dialog is not None and (self._sort_dialog.busy() or self._sort_dialog.run is run):
+            self._sort_dialog.show()
+            self._sort_dialog.raise_()
+            self._sort_dialog.activateWindow()
+            return
+        if self._sort_dialog is not None:
+            self._images_dir = self._sort_dialog.images_edit.text()
+            self._sort_dialog.deleteLater()
+        self._sort_dialog = SortImagesDialog(run, self.log_path, self._images_dir, self)
+        self._sort_dialog.sorted_into.connect(self._remember_sorted)
+        self._sort_dialog.show()
+
+    def _remember_sorted(self, folder: str):
+        self._sorted_dir = folder
+
+    def align_timelapse(self):
+        """Open the Align timelapse dialog, on the folder sorted into last."""
+        from solareclipseworkbench.images_ui import AlignTimelapseDialog
+        if self._align_dialog is None:
+            self._align_dialog = AlignTimelapseDialog(self._sorted_dir, self)
+        elif not self._align_dialog.busy() and self._sorted_dir and not self._align_dialog.frames_edit.text():
+            self._align_dialog.frames_edit.setText(self._sorted_dir)
+        self._align_dialog.show()
+        self._align_dialog.raise_()
+        self._align_dialog.activateWindow()
 
 
 def _problems_text(run) -> str:
