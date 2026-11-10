@@ -140,6 +140,30 @@ def test_the_focus_graph_keeps_the_peak_and_a_limited_history(qapp):
     assert graph.scores == [] and graph.peak == 0.0
 
 
+def test_the_frame_rate_of_frames_at_known_times():
+    rate = tools.FrameRate(window_s=5.0)
+    assert rate.rate(0.0) is None
+    rate.add(0.0)
+    assert rate.rate(0.0) is None, "one frame has no rate"
+    for t in (0.5, 1.0, 1.5, 2.0):
+        rate.add(t)
+    assert rate.rate(2.0) == pytest.approx(2.0)
+
+
+def test_the_frame_rate_follows_a_change_and_stops_with_the_frames():
+    rate = tools.FrameRate(window_s=5.0)
+    for i in range(20):
+        rate.add(i * 0.1)
+    assert rate.rate(1.9) == pytest.approx(10.0)
+    # One frame per second from t = 2 s: the frames of the first two seconds leave the window
+    for t in range(2, 12):
+        rate.add(float(t))
+    assert rate.rate(11.0) == pytest.approx(1.0)
+    # No frames after t = 11 s: the last frames leave the window, and the rate goes away
+    assert rate.rate(14.5) == pytest.approx(1.0)
+    assert rate.rate(15.5) is None
+
+
 def test_the_crosshair_leaves_the_centre_open(qapp):
     pixmap = QPixmap(200, 200)
     pixmap.fill(QColor(0, 0, 0))

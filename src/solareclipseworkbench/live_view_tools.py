@@ -13,6 +13,7 @@ gphoto2 camera, a camera driven through a vendor SDK, or the virtual camera.
   part that is black.
 - Crosshair: lines with a gap and a ring at the centre of the frame, so the
   Sun can be centred in the ring.
+- Frame rate: the number of frames per second that the window shows.
 
 The calculations are functions without Qt widgets, so a test can check them on
 a synthetic image.
@@ -20,6 +21,7 @@ a synthetic image.
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -420,6 +422,34 @@ def draw_crosshair(pixmap: QPixmap) -> None:
         painter.drawLine(cx, cy + CROSSHAIR_GAP_PX, cx, height)
         painter.drawEllipse(QPoint(cx, cy), CROSSHAIR_RING_PX, CROSSHAIR_RING_PX)
     painter.end()
+
+
+# ----------------------------------------------------------------------
+# Frame rate
+# ----------------------------------------------------------------------
+
+class FrameRate:
+    """The frames per second of the last frames, from the times they arrived.
+
+    The rate uses the frames of the last `window_s` seconds.  Thus it follows a
+    change of rate, and it goes to None some seconds after the frames stop.
+    """
+
+    def __init__(self, window_s: float = 5.0):
+        self._window_s = window_s
+        self._times: deque = deque()
+
+    def add(self, t: float) -> None:
+        """Count a frame that arrived at time t [s]."""
+        self._times.append(t)
+
+    def rate(self, now: float) -> Optional[float]:
+        """Frames per second at time now [s], or None with fewer than two frames in the window."""
+        while self._times and now - self._times[0] > self._window_s:
+            self._times.popleft()
+        if len(self._times) < 2 or self._times[-1] <= self._times[0]:
+            return None
+        return (len(self._times) - 1) / (self._times[-1] - self._times[0])
 
 
 # ----------------------------------------------------------------------

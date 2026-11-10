@@ -4249,6 +4249,9 @@ class LiveViewWindow(QWidget):
     The focus tools (peaking, focus score, loupe, histogram) and the crosshair
     work on the frames of every camera.  A click on the preview sets the zoom
     centre and the part of the frame that the loupe shows.
+
+    Keys: F puts the window in full screen and back, Esc leaves full screen, C
+    shows or hides the crosshair and L the loupe.
     """
 
     def __init__(self, camera, parent=None):
@@ -4298,6 +4301,9 @@ class LiveViewWindow(QWidget):
         self._toggle_btn.clicked.connect(self._on_toggle)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
+        self._fullscreen_btn = QPushButton("Full screen")
+        self._fullscreen_btn.setToolTip("Fill the screen with the preview (F).  Esc leaves full screen.")
+        self._fullscreen_btn.clicked.connect(self.toggle_fullscreen)
 
         # Zoom control: Fit / 5x / 10x
         self._zoom_combo = QComboBox()
@@ -4367,6 +4373,11 @@ class LiveViewWindow(QWidget):
         self._histogram = live_view_tools.HistogramWidget()
         self._histogram.setVisible(False)
 
+        # Frames per second that the window shows
+        self._frame_rate = live_view_tools.FrameRate()
+        self._fps_label = QLabel("FPS: --")
+        self._fps_label.setStyleSheet("color: gray; font-size: 11px;")
+
         # Pan controls (hidden until a zoom > 1 is selected)
         self._last_image: Union[QImage, None] = None
         self._last_ts: Union[datetime.datetime, None] = None
@@ -4384,6 +4395,7 @@ class LiveViewWindow(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self._toggle_btn)
         btn_layout.addWidget(close_btn)
+        btn_layout.addWidget(self._fullscreen_btn)
         btn_layout.addStretch(1)
         btn_layout.addWidget(QLabel("Preview size:"))
         btn_layout.addWidget(self._size_combo)
@@ -4398,6 +4410,7 @@ class LiveViewWindow(QWidget):
         tools_layout.addWidget(self._histogram_box)
         tools_layout.addWidget(self._crosshair_box)
         tools_layout.addStretch(1)
+        tools_layout.addWidget(self._fps_label)
 
         # Image area with optional vertical pan slider and the loupe
         layout = QVBoxLayout()
@@ -4453,10 +4466,11 @@ class LiveViewWindow(QWidget):
             pass  # drop the frame; the previous one hasn't been displayed yet
 
     def _poll_frame(self):
-        """Called on the Qt main thread by the poll timer; updates the image."""
+        """Called on the Qt main thread by the poll timer; updates the image and the frame rate."""
         try:
             jpeg_bytes, ts = self._frame_queue.get_nowait()
         except queue.Empty:
+            self._show_frame_rate()
             return
         if isinstance(jpeg_bytes, memoryview):
             jpeg_bytes = jpeg_bytes.tobytes()
@@ -4472,6 +4486,12 @@ class LiveViewWindow(QWidget):
         # Store and render using the centralized renderer so pan/zoom UI
         # remains in sync with the latest frame.
         self._render_image(image, ts, new_frame=True)
+        self._frame_rate.add(time.monotonic())
+        self._show_frame_rate()
+
+    def _show_frame_rate(self):
+        rate = self._frame_rate.rate(time.monotonic())
+        self._fps_label.setText("FPS: --" if rate is None else f"FPS: {rate:.1f}")
 
     def _apply_state(self):
         """Push the user+totality state into the thread and refresh the button."""
@@ -4520,6 +4540,37 @@ class LiveViewWindow(QWidget):
     def _on_toggle(self):
         self._user_enabled = not self._user_enabled
         self._apply_state()
+
+    def toggle_fullscreen(self):
+        """Fill the screen with the window, or bring it back to its normal size."""
+        if self.isFullScreen():
+            self.showNormal()
+            self._fullscreen_btn.setText("Full screen")
+        else:
+            self.showFullScreen()
+            self._fullscreen_btn.setText("Leave full screen")
+
+    def keyPressEvent(self, event):
+        """F, Esc, C and L, without Ctrl, Alt or Meta.
+
+        A combo box with the focus uses the letter keys to select an item.  It
+        keeps them, so they do not come here and do not change a tool.
+        """
+        modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier \
+            | Qt.KeyboardModifier.MetaModifier
+        key = event.key()
+        if event.modifiers() & modifiers:
+            super().keyPressEvent(event)
+        elif key == Qt.Key.Key_F:
+            self.toggle_fullscreen()
+        elif key == Qt.Key.Key_Escape and self.isFullScreen():
+            self.toggle_fullscreen()
+        elif key == Qt.Key.Key_C:
+            self._crosshair_box.toggle()
+        elif key == Qt.Key.Key_L:
+            self._loupe_box.toggle()
+        else:
+            super().keyPressEvent(event)
 
     def _on_size_changed(self, size: str):
         """Slot for preview size combo box changes."""
