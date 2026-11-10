@@ -1,4 +1,4 @@
-"""The Error Log dock lists each warning and error of the run, and the toolbar button counts the new ones
+"""The Error Log dock lists each warning and error of the run, and the Panels menu counts the new ones
 (Issue #211)."""
 
 import logging
@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6 import sip
 from PyQt6.QtCore import QSettings, Qt
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QToolButton
 
 from solareclipseworkbench.gui import (DOCK_STATE_VERSION, ERROR_LOG_MAX_ROWS, ErrorLogDock, ErrorLogHandler,
                                        SolarEclipseView)
@@ -110,27 +110,40 @@ def test_clear_empties_the_dock(view, app):
     view.error_log_dock.clear_button.click()
 
     assert view.error_log_dock.table.rowCount() == 0
-    assert view.error_log_action.text() == "Error Log"
+    assert view.error_log_dock.toggleViewAction().text() == "Error Log"
 
 
-def test_the_button_counts_new_problems_until_the_dock_is_shown(view, app):
-    assert view.error_log_action.text() == "Error Log"
+def test_the_panels_menu_counts_new_problems_until_the_dock_is_shown(view, app):
+    entry = view.error_log_dock.toggleViewAction()
+    assert entry.text() == "Error Log"
+    assert view.panels_button.text() == "Panels"
+    width = view.panels_button.width()
     for index in range(3):
         logging.warning("Problem %d", index)
     app.processEvents()
-    assert view.error_log_action.text() == "Error Log (3)"
+    assert entry.text() == "Error Log (3)"
+    assert view.panels_button.text() == "Panels (3)"
+    # The text fits: the button is as wide as before
+    assert view.panels_button.width() == width
+    assert view.panels_button.width() >= view.panels_button.sizeHint().width()
 
-    view.error_log_action.trigger()
+    entry.trigger()
     app.processEvents()
 
     assert view.error_log_dock.isVisible()
-    assert view.error_log_action.text() == "Error Log"
+    assert entry.text() == "Error Log"
+    assert view.panels_button.text() == "Panels"
 
     # A problem that comes in while the dock is visible is not new
     logging.warning("Another problem")
     app.processEvents()
     assert view.error_log_dock.table.rowCount() == 4
-    assert view.error_log_action.text() == "Error Log"
+    assert entry.text() == "Error Log"
+
+
+def test_there_is_no_separate_error_log_button(view, app):
+    texts = [widget.text() for widget in view.toolbar.findChildren(QToolButton) if widget.isVisible()]
+    assert not [text for text in texts if text.startswith("Error Log")]
 
 
 def test_the_dock_is_hidden_by_default_and_in_the_panels_menu(view, app):

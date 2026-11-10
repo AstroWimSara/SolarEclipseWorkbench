@@ -607,7 +607,6 @@ class SolarEclipseView(QMainWindow, Observable):
         self.run_report_action = QAction("Run report", self)
         self.compare_sites_action = QAction("Compare sites", self)
         self.phone_dashboard_action = QAction("Phone", self)
-        self.error_log_action = QAction("Error Log", self)
 
         self.place_time_frame = QFrame()
 
@@ -878,7 +877,7 @@ class SolarEclipseView(QMainWindow, Observable):
 
         The default layout is the window without docks: the date, time and place, the reference moments and the
         cameras in a row at the top, the eclipse plot at the left, and the jobs table in the rest.  The Error Log is
-        at the bottom and hidden: the Error Log button in the toolbar shows it.
+        at the bottom and hidden: the Error Log entry of the Panels menu shows it.
         """
 
         for dock in (self.time_place_dock, self.moments_dock, self.camera_dock):
@@ -1093,7 +1092,6 @@ class SolarEclipseView(QMainWindow, Observable):
 
         self.arrange_docks()
         self.add_panels_menu()
-        self.add_error_log_button()
 
     def add_panels_menu(self):
         """ Add the Panels button to the toolbar: show or hide each dock, or put all docks back in their default
@@ -1112,16 +1110,11 @@ class SolarEclipseView(QMainWindow, Observable):
         self.panels_button.setToolTip("Show or hide the panels, or reset the layout")
         self.panels_button.setMenu(menu)
         self.panels_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        # The toolbar does not make the button wider when the count of new problems is added to its text, so it is
+        # wide enough for "Panels (999)" from the start
+        self.panels_button.setFixedWidth(self.panels_button.fontMetrics().horizontalAdvance("Panels (999)") + 16)
         self.toolbar.addWidget(self.panels_button)
-
-    def add_error_log_button(self):
-        """ Add the Error Log button to the toolbar: it shows the Error Log dock, and the number of new warnings and
-        errors in its text. """
-
-        self.error_log_action.setStatusTip("Show each warning and error of this run")
-        self.error_log_action.triggered.connect(self.show_error_log)
         self.error_log_dock.new_count_changed.connect(self.show_error_log_count)
-        self.toolbar.addAction(self.error_log_action)
 
     def show_error_log(self):
         """ Show the Error Log dock, in front of a dock that it shares a tab bar with. """
@@ -1130,9 +1123,11 @@ class SolarEclipseView(QMainWindow, Observable):
         self.error_log_dock.raise_()
 
     def show_error_log_count(self, count: int):
-        """ Show the number of new warnings and errors in the text of the Error Log button. """
+        """ Show the number of new warnings and errors in the Error Log entry of the Panels menu, and in the text of
+        the Panels button, so that they are seen while the menu is closed. """
 
-        self.error_log_action.setText(f"Error Log ({count})" if count else "Error Log")
+        self.error_log_dock.toggleViewAction().setText(f"Error Log ({count})" if count else "Error Log")
+        self.panels_button.setText(f"Panels ({count})" if count else "Panels")
 
     def add_error_log_handler(self):
         """ Send each warning and error from any logger to the Error Log dock. """
