@@ -6,6 +6,7 @@
 """
 import argparse
 import datetime
+import faulthandler
 import logging
 import math
 import os.path
@@ -52,6 +53,7 @@ from solareclipseworkbench import hardware_problems, job_text, live_view_tools
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
+from solareclipseworkbench.logging_setup import LOG_DIR, setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.mount import (IOPTRON_WIFI, SKYWATCHER_WIFI, Mount, MountError, SIMULATED_HOST,
                                          find_mounts, parse_address)
 from solareclipseworkbench.indi_client import IndiClient, IndiError
@@ -61,7 +63,6 @@ from solareclipseworkbench.live_frames import LiveFrames
 from solareclipseworkbench import sun_simulator
 from solareclipseworkbench.centring import (Calibration, CalibrationError, Calibrator, Centrer, CentringStatus,
                                             OFF as CENTRING_OFF, STOPPED as CENTRING_STOPPED)
-from solareclipseworkbench.logging_setup import setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.limb_correction import (is_enabled as limb_correction_is_enabled,
                                                    set_enabled as set_limb_correction_enabled,
                                                    ensure_limb_profile)
@@ -72,7 +73,8 @@ from solareclipseworkbench.phone_dashboard import (DashboardServer, ACTION_ABORT
 from solareclipseworkbench.qt_utils import apply_system_color_scheme
 from solareclipseworkbench.reference_moments import calculate_reference_moments, ReferenceMomentInfo
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
-                                                 discover_relays, list_backends, make_backend)
+                                                 discover_relays, list_backends, make_backend,
+                                                 _release_all_contacts)
 from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget, make_qr_pixmap
 from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
 from solareclipseworkbench.constants import MOON_RADIUS
@@ -2839,7 +2841,9 @@ class SolarEclipseController(Observer):
         """Safely shut down the scheduler and update UI."""
         try:
             if self.scheduler:
-                self.scheduler.shutdown()
+                # Do not wait for the job in flight: it finishes in its worker
+                # thread, and the window stays responsive.
+                self.scheduler.shutdown(wait=False)
                 if self.jobs_model:
                     self.jobs_model.clear_jobs_overview()
                 self.view.camera_action.setEnabled(True)
@@ -5754,6 +5758,81 @@ class QJobsTableView(QTableView):
         pass
 
 
+#: Where a native crash writes the stack of every thread.  The crash happens
+#: when logging can no longer write, so it has its own file.
+CRASH_LOG = LOG_DIR / "solareclipseworkbench-crash.log"
+
+
+def _catch_native_crashes():
+    """ Write the stack of every thread to CRASH_LOG when the process crashes.
+
+    A fault in a C library (a camera SDK, libgphoto2, Qt) ends the process with no Python traceback.
+    faulthandler writes the stack of every thread on SIGSEGV, SIGBUS, SIGFPE and SIGABRT, so the crash file
+    gives the thread and the line that caused it.
+    """
+
+    try:
+        CRASH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        faulthandler.enable(file=CRASH_LOG.open("a"), all_threads=True)
+        LOGGER.debug("Native crash handler writes to %s", CRASH_LOG)
+    except Exception:
+        LOGGER.debug("Could not install the native crash handler", exc_info=True)
+
+
+def _stop_and_exit(controller, code: int):
+    """ Stop the scheduler, open the relay contacts and end the process at once.
+
+    This is for an interrupt only.  The scheduler stops without waiting for the job in flight.  os._exit then
+    ends the process, so the interpreter does not wait for the worker thread of that job, and a modal dialog with
+    its own event loop does not keep the process alive.  os._exit skips atexit, so the relay contacts are opened
+    here.  A normal close of the window returns from main() instead, so the atexit handlers run.
+
+    Args:
+        - controller: Controller of the main window, or None
+        - code: Exit code of the process
+    """
+
+    scheduler = getattr(controller, "scheduler", None)
+    if scheduler is not None:
+        try:
+            scheduler.shutdown(wait=False)
+        except SchedulerNotRunningError:
+            pass
+        except Exception:
+            LOGGER.debug("Could not stop the scheduler", exc_info=True)
+    _release_all_contacts()
+    logging.shutdown()
+    os._exit(code)
+
+
+def _keep_running_on_unhandled_errors(controller=None):
+    """ Log an unhandled exception in the interface instead of ending the application.
+
+    PyQt6 calls qFatal() when an exception escapes a slot, so one bug in a button aborts the process, and the
+    schedule with it.  With this hook, the error and its traceback go to the log, and the schedule keeps running.
+
+    KeyboardInterrupt (Ctrl-C) and SystemExit still end the process, through _stop_and_exit.
+
+    Args:
+        - controller: Controller of the main window, of which the scheduler is stopped on an interrupt
+    """
+
+    def _hook(kind, value, traceback_object):
+        if issubclass(kind, (KeyboardInterrupt, SystemExit)):
+            if issubclass(kind, KeyboardInterrupt):
+                code = 130
+            else:
+                code = value.code if isinstance(value.code, int) else (0 if value.code is None else 1)
+            LOGGER.info("Interrupted, closing down")
+            _stop_and_exit(controller, code)
+            return
+
+        LOGGER.error("Unhandled %s in the interface, the schedule keeps running", kind.__name__,
+                     exc_info=(kind, value, traceback_object))
+
+    sys.excepthook = _hook
+
+
 def main():
     # Before anything else: when the Fujifilm SDK libraries are not on the
     # library path yet, the process restarts here, before a log file is made.
@@ -5864,6 +5943,7 @@ def main():
     # --check prints its own result; the log file still gets everything
     setup_logging("sew", console_level=logging.WARNING if args.check or args.compare is not None else logging.INFO)
     LOGGER.info("Starting up Solar Eclipse Workbench")
+    _catch_native_crashes()
     # Before any contact time is computed, also for --check and --compare
     solar_radius.load_saved()
     LOGGER.info("Solar radius: %s", solar_radius.describe())
@@ -5911,6 +5991,8 @@ def main():
     if is_location_given and args.date:
         # Schedule after the event loop starts so the main window is painted.
         QTimer.singleShot(0, controller.set_reference_moments)
+
+    _keep_running_on_unhandled_errors(controller)
 
     return app.exec()
 

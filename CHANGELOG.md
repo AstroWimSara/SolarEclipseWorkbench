@@ -63,6 +63,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - In simulation mode, the countdowns and the eclipse drawing did not follow the `Starting time` window.  They showed the real time until a script was loaded, and kept the previous simulation when it was changed.  They now change when `OK` is clicked.  While a loaded script has jobs, they keep the times of those jobs, and the new simulation starts with the next script - by @mrosseel
 - The `Camera(s)` button is off while a script is loaded, but did not say why.  Its tooltip now says why and that `Stop` turns it on again - by @mrosseel
 - When no camera is connected, the `Live View` warning now gives the command to use the VirtualCamera: `sew --sim --virtual-camera` - by @mrosseel
+- An error in a button or another part of the interface no longer ends the application: PyQt6 aborted the process, and the schedule with it.  The error and its traceback now go to the log, and the schedule keeps running.  One Ctrl-C now ends the application, also with a dialog open or a command in progress, and the relay contacts are opened first.  `Stop` no longer waits for the command in progress, so the window does not freeze.  A native crash writes the stack of every thread to `solareclipseworkbench-crash.log` in the log directory - by @mrosseel
 
 ## [2.0.0] - 2026-11-03
 
