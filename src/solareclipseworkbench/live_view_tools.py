@@ -426,6 +426,43 @@ def draw_crosshair(pixmap: QPixmap) -> None:
 # Click to set the zoom centre
 # ----------------------------------------------------------------------
 
+def draw_centring(pixmap: QPixmap, shown: QRect, overlay: dict) -> None:
+    """Draw what the centring of the mount sees on a displayed frame.
+
+    The sun found (a green circle, orange when the centring is waiting or
+    paused) and the target (a small cross), mapped from frame pixels through the
+    part of the frame shown (``shown``) to the pixmap.
+    """
+    sx = pixmap.width() / shown.width()
+    sy = pixmap.height() / shown.height()
+
+    def to_pixmap(x, y):
+        return QPointF((x - shown.x() + 0.5) * sx, (y - shown.y() + 0.5) * sy)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    target = overlay.get("target")
+    if target is not None:
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        centre = to_pixmap(*target)
+        for dx, dy in ((-8, 0), (8, 0), (0, -8), (0, 8)):
+            painter.drawLine(centre, centre + QPointF(dx, dy))
+    sun = overlay.get("sun")
+    if sun is not None and overlay.get("radius"):
+        state = overlay.get("state", "")
+        colour = QColor(60, 220, 90) if state in ("centred", "correcting") else QColor(255, 160, 40)
+        painter.setPen(QPen(colour, 1))
+        centre = to_pixmap(*sun)
+        painter.drawEllipse(centre, overlay["radius"] * sx, overlay["radius"] * sy)
+        painter.drawLine(centre + QPointF(-4, -4), centre + QPointF(4, 4))
+        painter.drawLine(centre + QPointF(-4, 4), centre + QPointF(4, -4))
+    message = overlay.get("message")
+    if message:
+        painter.setPen(QPen(QColor(230, 230, 230)))
+        painter.drawText(QPointF(6, pixmap.height() - 6), f"Centring: {message}")
+    painter.end()
+
+
 def click_to_source(nx: float, ny: float, shown: QRect, source_w: int, source_h: int) -> QPointF:
     """A click on the shown part of a frame, as a normalised point of the full frame.
 

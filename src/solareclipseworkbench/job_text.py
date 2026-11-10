@@ -138,6 +138,13 @@ def _relay_command(name: str, values: list) -> Optional[str]:
     return None
 
 
+MOUNT_COMMANDS = {
+    "mount_track": "Mount: track the sun",
+    "mount_stop": "Mount: stop tracking",
+    "mount_park": "Mount: park",
+}
+
+
 def _describe_job(job, ev: int) -> Optional[str]:
     name = job.func.__name__
     args = list(job.args or ())
@@ -148,6 +155,9 @@ def _describe_job(job, ev: int) -> Optional[str]:
     if name.startswith("relay_"):
         # The first argument is the relay itself, the others are the values from the script
         return _relay_command(name, [str(arg).strip() for arg in args[1:]])
+
+    if name in MOUNT_COMMANDS:
+        return MOUNT_COMMANDS[name]
 
     if name == "sync_cameras":
         return "Check the cameras and set their clocks"

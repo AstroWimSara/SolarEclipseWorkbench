@@ -19,6 +19,9 @@ HARDWARE_COMMANDS = {
     'relay_bulb': 'relay',
     'relay_arm': 'relay',
     'relay_release': 'relay',
+    'mount_track': 'mount',
+    'mount_stop': 'mount',
+    'mount_park': 'mount',
 }
 
 #: The kind under which a camera registers when it keeps a USB session open
