@@ -71,7 +71,7 @@ def _burst(monkeypatch, nikon, frames=30):
     monkeypatch.setattr(cam, "gp", fake_gp)
     camera = types.SimpleNamespace(vendor="Nikon", name="Nikon Z 8", _camera=object(),
                                    _usb_lock=threading.RLock(), capture=nikon.capture)
-    monkeypatch.setattr(cam, "__adapt_camera_settings", lambda c, s: (object(), nikon.config()))
+    monkeypatch.setattr(cam, "__adapt_camera_settings", lambda c, s, **kw: (object(), nikon.config()))
     monkeypatch.setattr(cam, "_set_gp_config", lambda c, config, ctx: nikon.set_config(config))
     monkeypatch.setattr(cam, "_drain_camera_events", lambda *a, **k: None)
     cam.take_burst(camera, object(), frames)

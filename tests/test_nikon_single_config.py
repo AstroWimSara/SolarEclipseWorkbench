@@ -1,8 +1,8 @@
-"""Nikon take_picture reads only the settings it needs.
+"""Nikon take_picture, take_burst and prepare_camera read only the settings they need.
 
 gp_camera_get_config reads every setting of the camera; on a Nikon Z6 III that
 took about a second before every shot, so pictures were released 1.3 s after
-their scheduled time.  take_picture and prepare_camera now read each setting
+their scheduled time.  take_picture, take_burst and prepare_camera now read each setting
 with gp_camera_get_single_config and write back only the changed ones.
 """
 from contextlib import ExitStack
@@ -12,7 +12,7 @@ import gphoto2
 import pytest
 
 import solareclipseworkbench.camera as cam
-from solareclipseworkbench.camera import CameraSettings, prepare_camera, take_picture
+from solareclipseworkbench.camera import CameraSettings, prepare_camera, take_burst, take_picture
 
 adapt_camera_settings = getattr(cam, '__adapt_camera_settings')
 
@@ -37,6 +37,10 @@ class _Camera:
         self.name = f"{vendor} Test"
         self._camera = object()
         self._usb_lock = _DummyLock()
+        self.captures = 0
+
+    def capture(self, *args):
+        self.captures += 1
 
 
 def _nikon_settings(shutter="1/13", iso="100", f_number="f/8", capture_mode="Single Shot"):
@@ -72,12 +76,19 @@ class _FakeNikon:
         return gphoto2.GP_OK
 
 
+def _check_result(value):
+    """Like gphoto2.check_result: a negative error code raises."""
+    if isinstance(value, int) and not isinstance(value, bool) and value < gphoto2.GP_OK:
+        raise gphoto2.GPhoto2Error(value)
+    return value
+
+
 def _fake_gphoto(stack, nikon):
     """Patch gphoto2 so settings come from *nikon*; return the full get_config mock."""
     def set_value(widget, value):
         widget.value = value
 
-    stack.enter_context(patch.object(cam.gp, 'check_result', side_effect=lambda v: v))
+    stack.enter_context(patch.object(cam.gp, 'check_result', side_effect=_check_result))
     stack.enter_context(patch.object(cam.gp, 'gp_context_new', return_value=object()))
     stack.enter_context(patch.object(cam.gp, 'gp_camera_get_single_config', side_effect=nikon.get_single_config))
     stack.enter_context(patch.object(cam.gp, 'gp_camera_set_single_config', side_effect=nikon.set_single_config))
@@ -85,6 +96,8 @@ def _fake_gphoto(stack, nikon):
     stack.enter_context(patch.object(cam.gp, 'gp_widget_set_value', side_effect=set_value))
     stack.enter_context(patch.object(cam.gp, 'gp_widget_count_choices', side_effect=lambda w: len(w.choices)))
     stack.enter_context(patch.object(cam.gp, 'gp_widget_get_choice', side_effect=lambda w, i: w.choices[i]))
+    stack.enter_context(patch.object(cam.gp, 'gp_widget_get_range',
+                                     side_effect=gphoto2.GPhoto2Error(gphoto2.GP_ERROR_BAD_PARAMETERS)))
     stack.enter_context(patch.object(cam.gp, 'gp_camera_trigger_capture', return_value=gphoto2.GP_OK))
     stack.enter_context(patch.object(cam, '_aperture_verified', {"Nikon Test": {"f/8"}}))
     stack.enter_context(patch.object(cam, '_drain_camera_events'))
@@ -200,3 +213,47 @@ def test_other_brands_still_read_the_whole_configuration(vendor):
         adapt_camera_settings(_Camera(vendor), CameraSettings(f"{vendor} Test", "1/6", "8", 100),
                               single_config=True)
     get_config.assert_called_once()
+
+
+def _burst_settings(**kwargs):
+    settings = _nikon_settings(**kwargs)
+    settings['capturemode'] = _Widget("Single Shot", ["Single Shot", "Burst", "Continuous Low Speed"])
+    settings['burstnumber'] = _Widget(1)
+    return settings
+
+
+def test_burst_does_not_read_the_whole_configuration():
+    nikon = _FakeNikon(_burst_settings())
+    camera = _Camera()
+    with ExitStack() as stack:
+        get_config = _fake_gphoto(stack, nikon)
+        take_burst(camera, CameraSettings("Nikon Test", "1/13", "8", 100), 20)
+    get_config.assert_not_called()
+    assert camera.captures == 1
+    assert nikon.writes == [('capturemode', "Burst"), ('burstnumber', 20), ('burstnumber', 1)]
+
+
+def test_burst_with_refused_release_mode_needs_no_new_read():
+    """A Z 8 refuses the release mode over USB; the number of frames is still set."""
+    settings = _burst_settings()
+    settings['stillcapturemode'] = _Widget(1)
+    nikon = _FakeNikon(settings)
+    accept = nikon.set_single_config
+
+    def set_single_config(target, name, widget, context):
+        if name in ('capturemode', 'stillcapturemode'):
+            nikon.writes.append((name, widget.value))
+            return gphoto2.GP_ERROR_NOT_SUPPORTED
+        return accept(target, name, widget, context)
+
+    nikon.set_single_config = set_single_config
+    camera = _Camera()
+    with ExitStack() as stack:
+        get_config = _fake_gphoto(stack, nikon)
+        take_burst(camera, CameraSettings("Nikon Test", "1/13", "8", 100), 20)
+    get_config.assert_not_called()
+    names = [name for name, _ in nikon.writes]
+    assert names.count('capturemode') == 1 and names.count('stillcapturemode') == 1
+    assert ('burstnumber', 20) in nikon.writes
+    assert nikon.settings['burstnumber'].value == 1
+    assert camera.captures == 1

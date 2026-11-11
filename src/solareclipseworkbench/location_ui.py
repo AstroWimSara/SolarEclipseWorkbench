@@ -23,7 +23,7 @@ from PyQt6.QtGui import QDoubleValidator, QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QComboBox, QPushButton, QMessageBox,
-    QDialog, QDialogButtonBox, QSlider,
+    QDialog, QDialogButtonBox, QSlider, QApplication,
 )
 from solareclipseworkbench.qt_utils import dark_lineedit_style, apply_dark_to_lineedit
 from solareclipseworkbench.tile_map import TileMap, distance_metres, MIN_ZOOM, MAX_ZOOM
@@ -77,6 +77,24 @@ def make_qr_pixmap(text: str, module_pixels: int = 6, quiet_zone: int = 3) -> Op
 # ConfigManager
 # ---------------------------------------------------------------------------
 
+def _report_save_failure(config_file: Path, error: OSError) -> None:
+    """Tell the user in a message box that the configuration cannot be saved.
+
+    Shown from the event loop, after the change that triggered the save has been
+    handled.  Without a running application, or off the GUI thread, the warning
+    in the log is all there is.
+    """
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() is not app.thread():
+        return
+    text = (f"The settings cannot be saved to\n{config_file}\n\n{error}\n\n"
+            "Camera test results, saved cameras and saved locations are lost when the program "
+            "closes.  Check that this file belongs to you and that you can write to it: it may "
+            "have been created by running the program with sudo.")
+    QTimer.singleShot(0, lambda: QMessageBox.warning(QApplication.activeWindow(),
+                                                     "Settings not saved", text))
+
+
 class ConfigManager:
     """Manages saving and loading of camera and location configurations."""
 
@@ -111,13 +129,26 @@ class ConfigManager:
             "camera_aliases": {},
         }
 
+    # Set once the user has been told that the configuration cannot be saved,
+    # so a session with many saves shows the message only once.
+    _save_failure_reported = False
+
     def save_config(self):
-        """Persist the in-memory configuration to disk."""
+        """Persist the in-memory configuration to disk.
+
+        A failure is logged every time, and reported once per session in a
+        message box: the camera test results, saved cameras and locations only
+        last until the program closes.  It used to be printed to the terminal
+        only, where it was easy to miss.
+        """
         try:
             with open(self.config_file, 'w') as f:
                 json.dump(self.config, f, indent=2)
-        except IOError as e:
-            print(f"Warning: Could not save configuration: {e}")
+        except OSError as e:
+            logging.warning('Could not save the configuration to %s: %s', self.config_file, e)
+            if not ConfigManager._save_failure_reported:
+                ConfigManager._save_failure_reported = True
+                _report_save_failure(self.config_file, e)
 
     # ------------------------------------------------------------------
     # Camera helpers

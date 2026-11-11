@@ -165,8 +165,8 @@ class _SingleConfig:
 
     gp_camera_get_config reads every setting the camera has.  On a Nikon Z that
     takes about a second: a Z6 III released the shutter 1.3 s after its
-    scheduled time, 0.95 s of which was reading the configuration.  take_picture
-    and prepare_camera need only a handful of settings, so on a Nikon they read
+    scheduled time, 0.95 s of which was reading the configuration.  take_picture,
+    take_burst and prepare_camera need only a handful of settings, so on a Nikon they read
     each one with gp_camera_get_single_config and write back only those whose
     value changed, with gp_camera_set_single_config, in the order they were read
     (the exposure mode before the shutter speed).
@@ -2111,7 +2111,7 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             and getattr(camera, '_capture_preview_was_called', False)):
         _reset_canon_eos_ptp_session(camera)
 
-    context, config = __adapt_camera_settings(camera, camera_settings)
+    context, config = __adapt_camera_settings(camera, camera_settings, single_config=True)
 
     # A camera driven through a vendor SDK shoots the burst itself, for `duration` seconds
     if context is None and hasattr(camera, 'shoot_burst'):
@@ -2197,33 +2197,34 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         # set with a dial or button refuses the change, so the burst would
         # otherwise silently be taken in single-frame mode.
         # The widget name differs between DSLR and mirrorless models.
-        # A refused value stays queued on its widget and would make every later
-        # set_config with this config fail too, so after a refusal the config is
-        # read again.
+        # With a full configuration tree, a refused value stays queued on its
+        # widget and would make every later set_config with this config fail
+        # too, so after a refusal the config is read again.  The settings read
+        # one by one (see _SingleConfig) do not send a refused value again.
         refused = False
         try:
             # 'capturemode' first (older DSLRs)
-            capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'capturemode'))
+            capture_mode = _config_child(config, 'capturemode')
             gp.gp_widget_set_value(capture_mode, "Burst")
             refused = True
             gp.check_result(_set_gp_config(camera, config, context))
             refused = False
             log.debug('Set capturemode to Burst')
         except gphoto2.GPhoto2Error:
-            if refused:
+            if refused and not isinstance(config, _SingleConfig):
                 config = gp.check_result(gp.gp_camera_get_config(target, context))
                 refused = False
             try:
                 # 'stillcapturemode' (newer mirrorless like Z8/Z9)
                 # Value 2 is typically Continuous Low, higher values for High Speed
-                capture_mode = gp.check_result(gp.gp_widget_get_child_by_name(config, 'stillcapturemode'))
+                capture_mode = _config_child(config, 'stillcapturemode')
                 gp.gp_widget_set_value(capture_mode, 2)  # Continuous shooting mode
                 refused = True
                 gp.check_result(_set_gp_config(camera, config, context))
                 refused = False
                 log.debug('Set stillcapturemode to Continuous (2)')
             except gphoto2.GPhoto2Error as e:
-                if refused:
+                if refused and not isinstance(config, _SingleConfig):
                     config = gp.check_result(gp.gp_camera_get_config(target, context))
                 log.warning('could not set a continuous release mode (%s); take_burst may take a single '
                             'frame. Set the release mode to continuous on the camera.', e)
@@ -2232,7 +2233,7 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
         frames = max(1, round(duration))
         burst_number = None
         try:
-            burst_number = gp.check_result(gp.gp_widget_get_child_by_name(config, 'burstnumber'))
+            burst_number = _config_child(config, 'burstnumber')
             try:
                 _, highest, _ = gp.check_result(gp.gp_widget_get_range(burst_number))
                 if highest >= 1 and frames > highest:

@@ -67,7 +67,7 @@ def fake_gp(monkeypatch):
 def _run_burst(monkeypatch, canon, duration=2):
     camera = types.SimpleNamespace(vendor="Canon", name="Canon EOS R10", _camera=object(),
                                    _usb_lock=threading.RLock())
-    monkeypatch.setattr(cam, "__adapt_camera_settings", lambda c, s: (object(), canon))
+    monkeypatch.setattr(cam, "__adapt_camera_settings", lambda c, s, **kw: (object(), canon))
     monkeypatch.setattr(cam, "_set_gp_config", lambda c, config, ctx: config.set_config())
     monkeypatch.setattr(cam, "_wait_for_capture_complete", lambda *a, **k: None)
     monkeypatch.setattr(cam, "_drain_camera_events", lambda *a, **k: None)
