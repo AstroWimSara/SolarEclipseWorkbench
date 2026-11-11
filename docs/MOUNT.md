@@ -113,18 +113,27 @@ On connecting, the observing location and the time are sent to the mount.  The t
 clock, corrected with the USB GPS when a GPS was used in the `Location` window.  When the location
 is changed later, it is sent again.
 
+The location sent is the one of the `Location` window, which may be the eclipse site rather than
+where the mount stands now.  An alt-azimuth mount (an AZ-GTi, a HAZ mount) computes its tracking from
+it, so with a wrong location the sun drifts away.  When the mount had a location more than 50 km
+from the one sent (from its GPS, its hand controller or an earlier session), a warning says so on
+connecting: set the `Location` window to where the mount stands.
+
 **Track sun** unparks the mount when it is parked, and lets it track at the solar rate.  Not every
 driver has a solar rate; the mount then tracks at the sidereal rate, and the sun drifts about 2.5′
 an hour across the field of view.  Some drivers answer that the mount tracks and switch tracking
 off again a moment later, when the mount did not take the command (the iOptron v3 driver with a
 HAZ31 does it twice).  **Track sun** therefore checks that tracking stays on, switches it on again
 up to four times, and says so when it still does not hold.  **Stop tracking** stops it, **Park** parks it (after a
-confirmation) and **Abort** stops every motion at once.
+confirmation) and **Abort** stops every motion at once.  A tracking mount stops tracking before it
+parks, and the park waits until the motors stand still (up to 10 s): the AZ-GTi driver refuses to
+park while they run, and then does not answer for a minute.
 
 **Disconnect** and closing Solar Eclipse Workbench only close the connection to the INDI server: the
 driver stays connected and the mount keeps tracking.
 
-The window saves the address, the mount and the port for the next start.
+The window saves the address, the mount and the port for the next start.  The **Mount port** is
+kept for each mount model: choosing another model shows the port that model was last connected with.
 
 ## Nudge the mount
 

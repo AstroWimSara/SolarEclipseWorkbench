@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
+from types import SimpleNamespace
+
+from PyQt6.QtCore import QSettings
+
 from solareclipseworkbench import gui
+from solareclipseworkbench.indi_server import MountDriver
 from solareclipseworkbench.hardware_registry import HARDWARE, register_hardware
 from solareclipseworkbench.indi_simulator import DEVICE, SimulatedIndiServer
 from solareclipseworkbench.observer import Observer
@@ -17,6 +22,7 @@ class FakeController(Observer):
         self.mount_calibration = None
         self.centrer = None
         self._live_view_window = None
+        self.model = SimpleNamespace(latitude=40.4, longitude=-3.7)
 
     def stop_centring(self):
         self.centrer = None
@@ -143,3 +149,60 @@ def test_a_mount_that_does_not_keep_tracking_says_so(popup):
         popup.controller.mount.close()
         popup.controller.mount = None
         server.close()
+
+
+def test_a_mount_that_had_another_location_gets_a_warning(popup):
+    server = SimulatedIndiServer(location=(50.83, 4.86))
+    try:
+        popup.address.setText(f"127.0.0.1:{server.port}")
+        popup.connect_or_disconnect()
+        assert "50.83° N, 4.86° E" in popup.messages[-1] and "40.40° N, 3.70° W" in popup.messages[-1]
+        assert "alt-azimuth" in popup.messages[-1]
+        assert server.values("GEOGRAPHIC_COORD")["LAT"] == pytest.approx(40.4)     # sent all the same
+        popup.connect_or_disconnect()
+        popup.connect_or_disconnect()                   # it has the location now: no warning
+        assert len(popup.messages) == 1
+    finally:
+        popup.controller.mount.close()
+        popup.controller.mount = None
+        server.close()
+
+
+def test_a_mount_near_its_location_or_without_one_gets_no_warning(popup):
+    server = SimulatedIndiServer(location=(40.5, -3.6))
+    try:
+        popup.address.setText(f"127.0.0.1:{server.port}")
+        popup.connect_or_disconnect()
+        assert popup.messages == []
+    finally:
+        popup.controller.mount.close()
+        popup.controller.mount = None
+        server.close()
+
+
+def test_each_mount_model_keeps_its_port(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    haz = MountDriver("iOptron", "HAZ31", "indi_ioptronv3_telescope")
+    azgti = MountDriver("SkyWatcher", "AZ-GTi Alt-Az WiFi", "indi_skywatcherAltAzMount")
+    monkeypatch.setattr(gui, "mount_drivers", lambda: [haz, azgti])
+    settings = QSettings(str(tmp_path / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+    settings.setValue("mount/start_server", True)
+    settings.setValue("mount/driver", haz.executable)
+    settings.setValue("mount/model", haz.label)
+    settings.setValue("mount/device_port", "10.10.100.254:8899")         # saved before ports were per model
+    settings.setValue(f"mount/device_port/{azgti.label}", "192.168.4.1:11880")
+    settings.sync()
+
+    widget = gui.MountPopup(FakeController())
+    try:
+        assert widget.selected_driver() == haz
+        assert widget.device_port.text() == "10.10.100.254:8899"
+        widget.model_combobox.setCurrentIndex(1)
+        assert widget.device_port.text() == "192.168.4.1:11880"
+        assert widget._device_port_key() == f"mount/device_port/{azgti.label}"
+        widget.model_combobox.setCurrentIndex(0)
+        assert widget.device_port.text() == ""          # the HAZ31 never connected with a port of its own
+        widget.start_server_checkbox.setChecked(False)
+        assert widget.device_port.text() == "10.10.100.254:8899"     # the server started elsewhere
+    finally:
+        widget.close()

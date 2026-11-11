@@ -1,6 +1,7 @@
 """Telescope mount control through INDI, against the built-in simulated INDI server."""
 import datetime
 import socket
+import time
 from datetime import timedelta, timezone
 from types import SimpleNamespace
 
@@ -14,8 +15,8 @@ from solareclipseworkbench.hardware_registry import HARDWARE_COMMANDS, register_
 from solareclipseworkbench.indi_client import IndiClient, IndiError, XmlStream, parse_number
 from solareclipseworkbench.indi_simulator import DEVICE, SimulatedIndiServer
 from solareclipseworkbench.job_text import describe_job
-from solareclipseworkbench.mount import (Mount, MountError, find_mounts, mount_park, mount_stop, mount_track,
-                                         parse_address)
+from solareclipseworkbench.mount import (Mount, MountError, distance_km, find_mounts, format_site, mount_park,
+                                         mount_stop, mount_track, parse_address)
 from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 from solareclipseworkbench.script_timeline import build_timeline
 from solareclipseworkbench.utils import COMMANDS, DeviceAtRuntime, schedule_commands
@@ -187,6 +188,33 @@ def test_location_and_time_are_sent(server, mount):
     assert server.values("TIME_UTC")["UTC"] == "2026-08-12T18:00:05"
 
 
+def test_the_location_the_mount_had_is_kept_with_its_distance():
+    server = SimulatedIndiServer(location=(50.83, 4.86))
+    try:
+        mount = Mount.open(f"127.0.0.1:{server.port}")
+        mount.send_site(35.02, 11.00, 0)
+        assert mount.previous_site == pytest.approx((50.83, 4.86))
+        assert mount.site_moved_km == pytest.approx(distance_km((50.83, 4.86), (35.02, 11.00)))
+        assert 1700 < mount.site_moved_km < 1900
+        mount.send_site(35.02, -3.0, 0)
+        assert mount.previous_site == pytest.approx((35.02, 11.00))     # sent the first time
+        mount.close()
+    finally:
+        server.close()
+
+
+def test_a_mount_without_location_has_no_distance(server, mount):
+    mount.send_site(35.02, 11.00, 0)
+    assert mount.previous_site is None and mount.site_moved_km is None
+
+
+def test_distances_and_locations_as_text():
+    assert distance_km((50.0, 4.0), (51.0, 4.0)) == pytest.approx(111.2, abs=0.1)
+    assert distance_km((10.0, 179.5), (10.0, -179.5)) == pytest.approx(109.5, abs=0.5)
+    assert format_site(50.831, 355.14) == "50.83° N, 4.86° W"
+    assert format_site(-33.9, 18.4) == "33.90° S, 18.40° E"
+
+
 def test_a_naive_time_is_taken_as_utc(server, mount):
     mount.send_site(0, 0, 0, datetime.datetime(2026, 8, 12, 18, 0, 5))
     assert server.values("TIME_UTC")["UTC"] == "2026-08-12T18:00:05"
@@ -256,6 +284,42 @@ def test_tracking_that_never_holds_is_an_error_not_a_success():
 def test_tracking_that_holds_is_switched_on_once(server, mount):
     mount.track_solar()
     assert [name for name, _ in server.received].count("TELESCOPE_TRACK_STATE") == 1
+
+
+def test_parking_a_tracking_mount_stops_it_first():
+    # As the AZ-GTi driver: a park while the motors run is refused ("Motor not stopped")
+    server = SimulatedIndiServer(axes=True)
+    try:
+        mount = Mount.open(f"127.0.0.1:{server.port}")
+        mount.track_solar()
+        assert not server.values("AXIS_ONE_STATE")["FULL_STOP"]
+        mount.park()
+        assert mount.client.wait_for(lambda: mount.parked, 2.0)
+        names = [name for name, _ in server.received]
+        assert names.index("TELESCOPE_PARK") > len(names) - 1 - names[::-1].index("TELESCOPE_TRACK_STATE")
+        assert ("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}) in server.received
+        mount.close()
+    finally:
+        server.close()
+
+
+def test_the_simulated_azgti_refuses_a_park_while_its_motors_run():
+    server = SimulatedIndiServer(axes=True)
+    try:
+        mount = Mount.open(f"127.0.0.1:{server.port}")
+        mount.track_solar()
+        with pytest.raises(IndiError, match="Motor not stopped"):
+            mount.client.change(mount.device, "TELESCOPE_PARK", {"PARK": True}, wait_done=False)
+        mount.close()
+    finally:
+        server.close()
+
+
+def test_a_mount_that_stands_still_parks_at_once(server, mount):
+    start = time.monotonic()
+    mount.park()
+    assert time.monotonic() - start < Mount.STILL_S
+    assert ("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}) not in server.received
 
 
 def test_a_refused_change_is_a_mount_error():

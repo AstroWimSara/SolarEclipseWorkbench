@@ -57,6 +57,10 @@ def sun_position() -> tuple:
 
 
 #: Labels of the slew rates, as the INDI telescope base class names them
+#: Axis states of the SkyWatcher drivers (with axes=True), and how long the motors take to stop
+AXIS_STATES = ("AXIS_ONE_STATE", "AXIS_TWO_STATE")
+AXIS_STOP_S = 0.3
+
 SLEW_RATE_LABELS = {"1x": "Guide", "2x": "Centering", "3x": "Find", "4x": "Max"}
 
 
@@ -80,13 +84,19 @@ class SimulatedIndiServer:
                       (tests use a fast one, so a calibration takes seconds, not minutes)
         - track_drops: How many times switching tracking on is answered "tracking" and switched
                        off again 50 ms later, as the iOptron v3 driver does with a HAZ31
+        - axes: Report AXIS_ONE_STATE and AXIS_TWO_STATE, have the motors stop AXIS_STOP_S after
+                tracking is switched off, and refuse a park while they run ("Motor not stopped"), as
+                the SkyWatcher AZ-GTi driver does
+        - location: (latitude, longitude) the mount has before one is sent; (0, 0) is none
     """
 
     def __init__(self, port: int = 0, solar: bool = True, refuse=(), silent=(), device: str = DEVICE,
-                 guide_rate: float = GUIDE_RATE, track_drops: int = 0):
+                 guide_rate: float = GUIDE_RATE, track_drops: int = 0, axes: bool = False,
+                 location: tuple = (0.0, 0.0)):
         self.device = device
         self.guide_rate = guide_rate
         self.track_drops = track_drops
+        self.axes = axes
         self.refuse, self.silent = set(refuse), set(silent)
         #: Every change received, as (property name, {element: value})
         self.received: list = []
@@ -108,7 +118,8 @@ class SimulatedIndiServer:
             _Prop("CONNECTION_MODE", SWITCH, {"CONNECTION_SERIAL": True, "CONNECTION_TCP": False},
                   rule="OneOfMany", needs_connection=False),
             _Prop("DEVICE_ADDRESS", TEXT, {"ADDRESS": "", "PORT": ""}, needs_connection=False),
-            _Prop("GEOGRAPHIC_COORD", NUMBER, {"LAT": 0.0, "LONG": 0.0, "ELEV": 0.0}),
+            _Prop("GEOGRAPHIC_COORD", NUMBER, {"LAT": float(location[0]), "LONG": float(location[1]) % 360.0,
+                                               "ELEV": 0.0}),
             _Prop("TIME_UTC", TEXT, {"UTC": "", "OFFSET": "0"}),
             _Prop("EQUATORIAL_EOD_COORD", NUMBER, dict(zip(("RA", "DEC"), sun_position())), perm="ro"),
             _Prop("TELESCOPE_TRACK_MODE", SWITCH, modes, rule="OneOfMany"),
@@ -122,6 +133,9 @@ class SimulatedIndiServer:
             _Prop("TELESCOPE_MOTION_NS", SWITCH, {"MOTION_NORTH": False, "MOTION_SOUTH": False}, rule="AtMostOne"),
             _Prop("TELESCOPE_MOTION_WE", SWITCH, {"MOTION_WEST": False, "MOTION_EAST": False}, rule="AtMostOne"),
         ]
+        if axes:
+            props += [_Prop(name, SWITCH, {"FULL_STOP": True, "SLEWING": False}, rule="AnyOfMany", perm="ro")
+                      for name in AXIS_STATES]
         self.props = {p.name: p for p in props}
         self._server = socket.create_server(("127.0.0.1", port))
         self.port = self._server.getsockname()[1]
@@ -235,6 +249,26 @@ class SimulatedIndiServer:
             except OSError:
                 pass
 
+    def _motors_stopped(self) -> bool:
+        with self._lock:
+            return all(self.props[name].values["FULL_STOP"] for name in AXIS_STATES)
+
+    def _set_axes(self, stopped: bool) -> str:
+        """Set both axis states (with the lock held); the XML to send."""
+        xml = ""
+        for name in AXIS_STATES:
+            self.props[name].values.update(FULL_STOP=stopped, SLEWING=not stopped)
+            xml += self._vector(self.props[name], "set")
+        return xml
+
+    def _stop_axes(self) -> None:
+        """The motors have come to a stop, unless tracking was switched on again meanwhile."""
+        with self._lock:
+            if self.props["TELESCOPE_TRACK_STATE"].values["TRACK_ON"]:
+                return
+            xml = self._set_axes(stopped=True)
+        self._broadcast(xml)
+
     def _drop_tracking(self) -> None:
         """Switch tracking off again, as a driver does when the mount did not take the command."""
         with self._lock:
@@ -307,6 +341,12 @@ class SimulatedIndiServer:
             self.received.append((name, changes))
         if name in self.silent:
             return
+        if name == "TELESCOPE_PARK" and changes.get("PARK") and self.axes and not self._motors_stopped():
+            with self._lock:
+                prop.state = ALERT
+                xml = self._vector(prop, "set", message="Mount error: Motor not stopped")
+            self._broadcast(xml)
+            return
         if name in self.refuse:
             with self._lock:
                 prop.state = ALERT
@@ -353,7 +393,17 @@ class SimulatedIndiServer:
             drop = name == "TELESCOPE_TRACK_STATE" and prop.values["TRACK_ON"] and self.track_drops > 0
             if drop:
                 self.track_drops -= 1
+            stopping = False
+            if self.axes and name in ("TELESCOPE_TRACK_STATE", "TELESCOPE_PARK"):
+                if self.props["TELESCOPE_TRACK_STATE"].values["TRACK_ON"]:
+                    xml += self._set_axes(stopped=False)
+                else:
+                    stopping = True
         self._broadcast(xml)
+        if stopping:
+            timer = threading.Timer(AXIS_STOP_S, self._stop_axes)
+            timer.daemon = True
+            timer.start()
         if drop:
             timer = threading.Timer(0.05, self._drop_tracking)
             timer.daemon = True

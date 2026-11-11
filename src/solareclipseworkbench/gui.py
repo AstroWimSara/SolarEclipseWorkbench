@@ -55,7 +55,7 @@ from solareclipseworkbench.hardware_registry import register_hardware
 from solareclipseworkbench.limb_ui import BeadsPanel, beads_icon
 from solareclipseworkbench.logging_setup import LOG_DIR, setup_logging, file_handlers_only, camera_log
 from solareclipseworkbench.mount import (IOPTRON_WIFI, SKYWATCHER_WIFI, Mount, MountError, SIMULATED_HOST,
-                                         find_mounts, parse_address)
+                                         SITE_WARNING_KM, find_mounts, format_site, parse_address)
 from solareclipseworkbench.indi_client import IndiClient, IndiError
 from solareclipseworkbench.indi_server import IndiServer, IndiServerError, mount_drivers
 from solareclipseworkbench.mount_ui import MountNudgePanel, format_position
@@ -3639,7 +3639,7 @@ class MountPopup(QWidget, Observable):
         connection_layout.addWidget(self.connect_button, 1, 2)
 
         connection_layout.addWidget(QLabel("Mount port"), 2, 0)
-        self.device_port = QLineEdit(settings.value("mount/device_port", "", type=str))
+        self.device_port = QLineEdit()
         self.device_port.setPlaceholderText("searched by the driver")
         self.device_port.setToolTip("How the driver reaches the mount: its serial port on the machine of the INDI "
                                     "server (e.g. /dev/ttyUSB0), or host:port of a mount on Wi-Fi (e.g. "
@@ -3665,6 +3665,12 @@ class MountPopup(QWidget, Observable):
                                        "is chosen here once.")
         self._fill_models(settings.value("mount/driver", "", type=str), settings.value("mount/model", "", type=str))
         self.model_combobox.currentTextChanged.connect(self.show_state)
+        # Each mount model keeps its own port: a Wi-Fi address of one mount is no use for the next
+        self._port_key = self._device_port_key()
+        self.device_port.setText(settings.value(self._port_key, "", type=str)
+                                 or settings.value("mount/device_port", "", type=str))
+        self.model_combobox.currentTextChanged.connect(self._show_port_of_model)
+        self.start_server_checkbox.toggled.connect(self._show_port_of_model)
         connection_layout.addWidget(self.model_combobox, 5, 1)
 
         connection_group_box.setLayout(connection_layout)
@@ -3746,6 +3752,22 @@ class MountPopup(QWidget, Observable):
         self.status_timer.start(1000)
         self._show_reversal()
         self.show_state()
+
+    def _device_port_key(self) -> str:
+        """ Settings key of the Mount port: one for each mount model, one for a server started elsewhere. """
+
+        driver = self.selected_driver() if self.start_server_checkbox.isChecked() else None
+        return "mount/device_port" if driver is None else f"mount/device_port/{driver.label.replace('/', '_')}"
+
+    def _show_port_of_model(self):
+        """ Show the Mount port saved for the mount model that is now chosen. """
+
+        key = self._device_port_key()
+        if key == self._port_key:
+            return
+        self._port_key = key
+        settings = QSettings(str(Path.home() / ".SolarEclipseWorkbench.ini"), QSettings.Format.IniFormat)
+        self.device_port.setText(settings.value(key, "", type=str))
 
     @staticmethod
     def _reverse_keys(mount) -> tuple:
@@ -4066,7 +4088,7 @@ class MountPopup(QWidget, Observable):
             else:
                 settings.setValue("mount/address", address)
                 settings.setValue("mount/device", mount.device)
-            settings.setValue("mount/device_port", device_port or "")
+            settings.setValue(self._device_port_key(), device_port or "")
 
         try:
             sent = self._busy(self.controller.send_site_to_mount)
@@ -4074,10 +4096,28 @@ class MountPopup(QWidget, Observable):
                                      "No location is set yet: it is sent to the mount once one is chosen.")
                                     + server_note)
         except (MountError, IndiError) as exc:
+            sent = []
             self.site_label.setText(f"The location and time could not be sent: {exc}")
 
         self.show_state()
         self.notify_observers(self)
+        if sent:
+            self._warn_if_site_moved(mount)
+
+    def _warn_if_site_moved(self, mount):
+        """ Warn when the location sent is far from the one the mount had: it may stand somewhere else. """
+
+        if mount.site_moved_km is None or mount.site_moved_km <= SITE_WARNING_KM:
+            return
+        model = self.controller.model
+        QMessageBox.warning(
+            self, "Mount",
+            f"The mount had the location {format_site(*mount.previous_site)}, {mount.site_moved_km:,.0f} km "
+            f"from the location of the Location window ({format_site(model.latitude, model.longitude)}), "
+            "which has now been sent to it.\n\n"
+            "An alt-azimuth mount (such as an AZ-GTi or a HAZ mount) computes its tracking from the location.  "
+            "If the mount does not stand at the location of the Location window, set that window to where "
+            "the mount stands, or the sun drifts away.")
 
     def track(self):
         """ Track at the solar rate, and say so when the mount has no solar rate. """

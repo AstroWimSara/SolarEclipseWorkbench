@@ -15,6 +15,7 @@ keeps tracking when ``sew`` is closed.
 
 import datetime
 import logging
+import math
 import threading
 import time
 from typing import Optional
@@ -46,6 +47,25 @@ DIRECTIONS = {
     "E": ("TELESCOPE_TIMED_GUIDE_WE", "TIMED_GUIDE_E", "TELESCOPE_MOTION_WE", "MOTION_EAST"),
     "W": ("TELESCOPE_TIMED_GUIDE_WE", "TIMED_GUIDE_W", "TELESCOPE_MOTION_WE", "MOTION_WEST"),
 }
+
+
+#: A location sent this far from the one the mount had is worth a warning: an alt-azimuth mount
+#: computes its tracking from it, and the `Location` window may hold the eclipse site, not this one
+SITE_WARNING_KM = 50.0
+
+
+def distance_km(a: tuple, b: tuple) -> float:
+    """Great-circle distance between two (latitude, longitude) in degrees."""
+    lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def format_site(latitude: float, longitude: float) -> str:
+    """'50.83° N, 4.86° E'."""
+    longitude = (longitude + 180.0) % 360.0 - 180.0
+    return (f"{abs(latitude):.2f}° {'N' if latitude >= 0 else 'S'}, "
+            f"{abs(longitude):.2f}° {'E' if longitude >= 0 else 'W'}")
 
 
 class MountError(Exception):
@@ -127,6 +147,10 @@ class Mount:
         #: which way they move the sun.
         self.reverse_ns = False
         self.reverse_we = False
+        #: The location the mount had before send_site replaced it (None when it had none), and how far
+        #: that is from the location sent
+        self.previous_site: Optional[tuple] = None
+        self.site_moved_km: Optional[float] = None
 
     @property
     def identity(self) -> str:
@@ -316,6 +340,13 @@ class Mount:
         sent = []
         with self._lock:
             if self._has("GEOGRAPHIC_COORD"):
+                self.previous_site = self._site()
+                self.site_moved_km = (distance_km(self.previous_site, (latitude, longitude))
+                                      if self.previous_site is not None else None)
+                if self.site_moved_km is not None and self.site_moved_km > SITE_WARNING_KM:
+                    logger.warning("%s had the location %s, %.0f km from the one sent (%s)", self.device,
+                                   format_site(*self.previous_site), self.site_moved_km,
+                                   format_site(latitude, longitude))
                 self._change("GEOGRAPHIC_COORD", {"LAT": float(latitude), "LONG": float(longitude) % 360.0,
                                                   "ELEV": float(elevation)})
                 sent.append(f"location {latitude:.5f}, {longitude:.5f}, {elevation:.0f} m")
@@ -326,6 +357,16 @@ class Mount:
                 sent.append(f"time {utc:%Y-%m-%d %H:%M:%S} UTC")
         logger.info("Sent to %s: %s", self.device, "; ".join(sent) or "nothing (the driver takes neither)")
         return sent
+
+    def _site(self) -> Optional[tuple]:
+        """(latitude, longitude) the mount has now, east positive; None when it has none (0, 0)."""
+        prop = self.client.property(self.device, "GEOGRAPHIC_COORD")
+        if prop is None:
+            return None
+        latitude, longitude = prop.values.get("LAT"), prop.values.get("LONG")
+        if latitude is None or longitude is None or (latitude == 0 and longitude == 0):
+            return None
+        return latitude, (longitude + 180.0) % 360.0 - 180.0
 
     # -------------------------------------------------------------- tracking
 
@@ -409,12 +450,49 @@ class Mount:
         logger.info("%s stopped tracking", self.device)
 
     def park(self) -> None:
-        """Start parking.  The mount moves to its park position; this returns before it gets there."""
+        """Start parking.  The mount moves to its park position; this returns before it gets there.
+
+        A tracking mount stops tracking first, and the park waits until its motors
+        stand still: the AZ-GTi driver refuses a park while they run ("Motor not
+        stopped") and then answers nothing for a minute.
+        """
         with self._lock:
             if not self._has("TELESCOPE_PARK"):
                 raise MountError(f"{self.device} cannot park")
+            if self.tracking:
+                self._change("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}, wait_done=False)
+                logger.info("%s stopped tracking, to park", self.device)
+            if not self._standing_still():
+                self._wait_until_still()
             self._change("TELESCOPE_PARK", {"PARK": True}, wait_done=False)
         logger.info("%s is parking", self.device)
+
+    #: Axis states some drivers have (the SkyWatcher drivers), with FULL_STOP on when the axis stands still
+    AXIS_STATES = ("AXIS_ONE_STATE", "AXIS_TWO_STATE")
+
+    #: How long a park waits for the motors to stop after tracking was switched off
+    STOP_TIMEOUT_S = 10.0
+
+    #: How long the motors must stand still before the park is sent (a tracking driver moves them in steps)
+    STILL_S = 0.5
+
+    def _standing_still(self) -> bool:
+        """Not tracking, and every axis the driver reports on at full stop."""
+        if self.tracking:
+            return False
+        return all(self.client.value(self.device, name, "FULL_STOP", True) for name in self.AXIS_STATES)
+
+    def _wait_until_still(self) -> None:
+        """Wait until the motors have stood still for STILL_S; give up after STOP_TIMEOUT_S."""
+        deadline = time.monotonic() + self.STOP_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if self.client.wait_for(self._standing_still, max(0.0, deadline - time.monotonic())) and \
+                    not self.client.wait_for(lambda: not self._standing_still(), self.STILL_S):
+                return
+            if not self.client.connected:
+                raise MountError(f"the connection to the INDI server at {self.client.describe()} was lost")
+        logger.warning("%s: the motors did not stop within %.0f s; parking anyway", self.device,
+                       self.STOP_TIMEOUT_S)
 
     def unpark(self) -> None:
         with self._lock:

@@ -96,7 +96,7 @@ INDI 1.9.9), see also [Your mount: iOptron HAZ31](#your-mount-ioptron-haz31) and
 | 2.5 Motors | Listen/watch the RA axis after 2.4 | The RA motor runs at tracking speed | ✅ |
 | 2.6 Stop | **Stop tracking** | RA motor stops | ✅ |
 | 2.7 Response time | In the log, time between `mount_track` / button and `tracks at the … rate` | Under 1 s.  A 5 s wait followed by a timeout error means R4 | ✅ |
-| 2.8 Park / unpark | **Park**, wait, **Track sun** | Parks at the driver's park position; unparks and tracks again (R5) | ❌ Parks and unparks, but tracks only after clicking **Track sun** three times (issue 1) |
+| 2.8 Park / unpark | **Park**, wait, **Track sun** | Parks at the driver's park position; unparks and tracks again (R5) | ✅ |
 | 2.9 Abort | **Park**, then **Abort** after 1 s | The mount stops at once | ✅ |
 | 2.10 Find mounts | Untick **Start the INDI server** (the button is greyed out while it is ticked), start the server yourself (`indiserver indi_ioptronv3_telescope`), empty **Mount**, then **Find mounts** | The mount is listed (R6) | ⏳ Button not found: it was greyed out because **Start the INDI server** was ticked.  To redo |
 | 2.11 Guide pulses | `sew_hardware`: `mount connect`, `mount guide N 2000`, `mount guide E 2000` | No error.  The movement is too small to see by eye (2 s at 0.5× sidereal is about 15″): check it in the live view, or with the calibration (H.7) | ✅ No error ("Guide pulse N 2000 ms sent"); no movement seen (as expected, issue 3) |
@@ -127,12 +127,12 @@ iOptron says the HAZ mounts work with a third-party INDI driver on Linux and mac
 | Check | How | Expected / to note | Result |
 |-------|-----|--------------------|--------|
 | H.1 Driver | `mount drivers ioptron`; then `mount start indi_ioptronv3_telescope /dev/ttyUSB0` (USB on the 8409 hand controller; `ls /dev/ttyUSB* /dev/ttyACM*`) | Connects.  If not: note the last lines of the server output (shown with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) | ✅ Connects with iOptron v3 |
-| H.2 Wi-Fi | The mount's Wi-Fi: **Mount port** `address:port` from the HAZ manual | Connects without a cable | ⏳ To test |
+| H.2 Wi-Fi | The mount's Wi-Fi: **Mount port** `address:port` from the HAZ manual | Connects without a cable | ✅ |
 | H.3 Location and time | As 1.2, and on the hand controller | Same location and time on the mount | ✅ |
-| H.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning.  Note which | ❌ Tracks at the solar rate.  After **Stop tracking**, **Track sun** starts tracking only at the third click (issue 1) |
-| H.4b Track sun once | **Stop tracking**, then **Track sun** once; repeat three times, and once after a **Park** | Tracks after one click each time (it may take up to a few seconds).  The log shows "switched tracking off again … (try 1 of 4)" when the driver dropped it.  Note how many tries it took | ⏳ |
+| H.4 Solar rate | **Track sun** | `tracking (solar)`, or the sidereal warning.  Note which | ✅ |
+| H.4b Track sun once | **Stop tracking**, then **Track sun** once; repeat three times, and once after a **Park** | Tracks after one click each time (it may take up to a few seconds).  The log shows "switched tracking off again … (try 1 of 4)" when the driver dropped it.  Note how many tries it took | ✅ Works from the first click (the log shows three tries, note 8) |
 | H.5 Directions | At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec?**  Note it, and whether "N" goes up or down | N goes down, S up, E left, W right (issue 4) |
-| H.5b Reverse | Tick **Reverse N/S** in the `Mount` window; hold **▲ N**, then **▼ S**.  Disconnect, connect again, and on the phone | N goes up now, S down; still ticked after connecting again, and the phone's buttons move the same way | ⏳ |
+| H.5b Reverse | Tick **Reverse N/S** in the `Mount` window; hold **▲ N**, then **▼ S**.  Disconnect, connect again, and on the phone | N goes up now, S down; still ticked after connecting again, and the phone's buttons move the same way | ✅ |
 | H.6 Guide pulses | `sew_hardware`: `mount guide N 2000`, `mount guide E 2000` | Do they move the mount at all in alt-az mode?  Which axis?  (Without guide pulses there is no centring.)  Too small to see by eye: check in the live view | ⏳ Accepted by the driver; whether they move the mount: with the camera (H.7) |
 | H.7 Calibrate | On the sun (filter!), roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate | ⏳ |
 | H.8 Field rotation | **Keep the sun centred** for at least an hour (C.F1); then **Calibrate** again | **Compare the direction with H.7.**  If it turned by several degrees, the guide pulses move in RA/Dec while the sky turns in the frame: tell me, and the calibration will be turned with the sky (from the location, the time and the sun's position).  If it did not turn, alt-az corrections need nothing more | ⏳ |
@@ -168,14 +168,13 @@ questions of the HAZ31 apply too.  What is known before testing, from INDI 1.9.9
 
 - **Driver**: `indi_skywatcherAltAzMount`.  In the **Mount model** list: *SkyWatcher AZ-GTi Alt-Az
   WiFi* and *SkyWatcher AZ-GTi Alt-Az Wired* (the same driver).  INDI calls the mount
-  `Skywatcher Alt-Az`.  It has a solar tracking rate and takes guide pulses.
-  -> Still needs to test
+  `Skywatcher Alt-Az`.  It has a solar tracking rate and takes guide pulses.  ✅ (2026-11-11)
 - **Wi-Fi**: the driver talks to the mount over **UDP at 192.168.4.1, port 11880**: the address of
   the mount's own Wi-Fi network (`SynScan_xxxx`).  Join that network with the computer (it then has
   no internet), or put the mount on your own Wi-Fi with the SynScan app (station mode) and use the
-  address your router gives it.  sew leaves the driver's UDP setting alone.
+  address your router gives it.  sew leaves the driver's UDP setting alone. ✅
 - **Close the SynScan app** (phone, tablet) before connecting: two programs controlling one mount
-  get in each other's way.
+  get in each other's way. ✅
 - **No alignment**: the alignment made in the SynScan app is not used by the INDI driver, and sew
   never aligns or slews the mount.  The driver works out where it points from where it started
   (the AZ-GTi's home position: level, pointing north at the horizon).  For tracking in alt-az,
@@ -190,23 +189,50 @@ Start in the home position: level, the telescope horizontal and pointing north, 
 SynScan app.  Indoors, without the sun, for A.1–A.7 and A.11; outdoors, **with the solar filter on
 before the telescope gets near the sun**, for the rest.
 
-| Check | How | Expected / to note |
-|-------|-----|--------------------|
-| A.1 Connect over Wi-Fi | Computer on the `SynScan_xxxx` network.  `Mount` window: tick **Start the INDI server**, **Mount model** *SkyWatcher AZ-GTi Alt-Az WiFi*, **Mount port** `192.168.4.1:11880` → **Connect** | `Skywatcher Alt-Az … not tracking`.  If not: the last lines of the server output (with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) |
-| A.2 Position | Read the position in the `Mount` window right after connecting, in the home position | **Note RA/Dec.**  Pointing north at the horizon, the declination should be about 90° minus your latitude (about 39° at a latitude of 51°) |
-| A.3 Location and time | `indi_getprop "Skywatcher Alt-Az.GEOGRAPHIC_COORD.*"` and `"Skywatcher Alt-Az.TIME_UTC.*"` | Your location and the time now |
-| A.4 Solar rate | **Track sun** | `tracking (solar)`, and both motors turn slowly.  Note it if it says sidereal |
-| A.5 Directions | **Stop tracking**.  At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec (both axes at once)?**  Note it, and whether "N" goes up or down |
-| A.6 Speeds | Hold **▲ N** for 2 s at each speed | Note the speeds the driver offers, and whether each is faster |
-| A.7 Guide pulses | `sew_hardware`, `mount connect localhost`, `mount track`, `mount guide N 2000`, `mount guide E 2000` | Do they move the mount?  Which axis?  (Without guide pulses there is no centring.) |
-| A.8 Tracking alone | Outdoors: point at the sun with the nudge buttons (filter!), **Track sun**, centring off.  Watch the live view for 10 minutes | **Note how far the sun drifts, and which way.**  A few pixels a minute is the mount; the sun leaving the frame within minutes means the driver does not know where it points (A.2): tell me |
-| A.9 Calibrate | On the sun, roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate.  If it says "the mount points at the celestial pole" while it is on the sun: the driver's position is wrong (A.2): tell me |
-| A.10 Field rotation | **Keep the sun centred** for at least an hour; then **Calibrate** again | As H.8: **compare the direction with A.9** |
-| A.11 Park | Indoors: **Park**, then **Track sun** | Note where it parks (the home position?), and that it unparks and tracks again |
-| A.12 Wi-Fi lost | While tracking on the sun: switch off the computer's Wi-Fi for 2 minutes, then on again | sew stays connected to the INDI server (it runs on this computer); it is the driver that loses the mount.  **Note what the `Mount` window and the log say** (an `INDI …` error, a status that no longer changes), whether the driver connects again by itself when the Wi-Fi is back, **whether the mount kept tracking**, and how far the sun drifted |
-| A.13 Disconnect | While tracking on the sun: **Disconnect** (it stops the INDI server sew started), wait 10 minutes | **Note how far the sun drifted** compared with A.8.  If it drifts away quickly, sew should not stop the server of this driver while the mount tracks: tell me |
-| A.W Wired (optional) | USB cable in the mount's hand-controller port (`ls /dev/ttyUSB*`), **Mount model** *SkyWatcher AZ-GTi Alt-Az Wired*, **Mount port** `/dev/ttyUSB0` → **Connect** | Connects.  If not: the driver starts at 9600 baud; try 115200 with `indi_setprop "Skywatcher Alt-Az.DEVICE_BAUD_RATE.115200=On"` before connecting, and note which works |
+| Check | How | Expected / to note | Result |
+|-------|-----|--------------------|--------|
+| A.1 Connect over Wi-Fi | Computer on the `SynScan_xxxx` network.  `Mount` window: tick **Start the INDI server**, **Mount model** *SkyWatcher AZ-GTi Alt-Az WiFi*, **Mount port** `192.168.4.1:11880` → **Connect** | `Skywatcher Alt-Az … not tracking`.  If not: the last lines of the server output (with the error, and in `~/.SolarEclipseWorkbench/logs/indiserver-*.log`) | ✅ |
+| A.1b Port of each model | Connect the HAZ31 (iOptron v3, its Wi-Fi address), disconnect; choose *SkyWatcher AZ-GTi Alt-Az WiFi* | **Mount port** shows `192.168.4.1:11880` (the AZ-GTi's), and the HAZ31's address again when choosing iOptron v3 | ⏳ |
+| A.2 Position | Read the position in the `Mount` window right after connecting, in the home position | **Note RA/Dec.**  Pointing north at the horizon, the declination should be about 90° minus your latitude (about 39° at a latitude of 51°) | ✅ |
+| A.3 Location and time | `indi_getprop "Skywatcher Alt-Az.GEOGRAPHIC_COORD.*"` and `"Skywatcher Alt-Az.TIME_UTC.*"` | Your location and the time now | ✅ `LAT`=35.0201, `LONG`=11.0040, `ELEV`=0; `UTC`=2026-11-11T11:06:40, `OFFSET`=1.  The location is the one in the `Location` window (in Tunisia), not where the mount stood: see note 6 |
+| A.3b Location warning | Set the `Location` window to the eclipse site, connect a mount that has your location (the HAZ31 from its GPS) | A warning with both locations and the distance.  Connecting again: no warning (it has the location now) | ⏳ |
+| A.4 Solar rate | **Track sun** | `tracking (solar)`, and both motors turn slowly.  Note it if it says sidereal | ✅ `tracking (solar)` |
+| A.5 Directions | **Stop tracking**.  At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec (both axes at once)?**  Note it, and whether "N" goes up or down | ✅ N goes up.  Only one axis moves (the altitude): no **Reverse N/S** needed |
+| A.6 Speeds | Hold **▲ N** for 2 s at each speed | Note the speeds the driver offers, and whether each is faster | ✅ |
+| A.7 Guide pulses | `sew_hardware`, `mount connect localhost`, `mount track`, `mount guide N 2000`, `mount guide E 2000` | Do they move the mount?  Which axis?  (Without guide pulses there is no centring.) | ⏳ No errors; whether they move the mount: outdoors, with the camera (A.9) |
+| A.8 Tracking alone | Outdoors: point at the sun with the nudge buttons (filter!), **Track sun**, centring off.  Watch the live view for 10 minutes | **Note how far the sun drifts, and which way.**  A few pixels a minute is the mount; the sun leaving the frame within minutes means the driver does not know where it points (A.2): tell me | ⏳ |
+| A.9 Calibrate | On the sun, roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate.  If it says "the mount points at the celestial pole" while it is on the sun: the driver's position is wrong (A.2): tell me | ⏳ |
+| A.10 Field rotation | **Keep the sun centred** for at least an hour; then **Calibrate** again | As H.8: **compare the direction with A.9** | ⏳ |
+| A.11 Park | Indoors: **Park**, then **Track sun** | Note where it parks (the home position?), and that it unparks and tracks again | ⚠️ Parks at the starting (home) position, unparks and tracks again.  But a first **Park**, while `sew_hardware` (A.7) had the mount tracking, blocked the driver for a minute (note 5) |
+| A.11b Park while tracking | **Track sun**, then **Park** at once | Parks within a few seconds ("stopped tracking, to park" in the log), no "Motor not stopped"; the buttons keep working | ⏳ |
+| A.12 Wi-Fi lost | While tracking on the sun: switch off the computer's Wi-Fi for 2 minutes, then on again | sew stays connected to the INDI server (it runs on this computer); it is the driver that loses the mount.  **Note what the `Mount` window and the log say** (an `INDI …` error, a status that no longer changes), whether the driver connects again by itself when the Wi-Fi is back, **whether the mount kept tracking**, and how far the sun drifted | ⏳ |
+| A.13 Disconnect | While tracking on the sun: **Disconnect** (it stops the INDI server sew started), wait 10 minutes | **Note how far the sun drifted** compared with A.8.  If it drifts away quickly, sew should not stop the server of this driver while the mount tracks: tell me | ⏳ |
+| A.W Wired (optional) | USB cable in the mount's hand-controller port (`ls /dev/ttyUSB*`), **Mount model** *SkyWatcher AZ-GTi Alt-Az Wired*, **Mount port** `/dev/ttyUSB0` → **Connect** | Connects.  If not: the driver starts at 9600 baud; try 115200 with `indi_setprop "Skywatcher Alt-Az.DEVICE_BAUD_RATE.115200=On"` before connecting, and note which works | — No hand controller to test with |
 
+### Results so far (AZ-GTi and Wi-Fi)
+
+From the tests above and the sew log of 2026-11-11 (`sew-20261111-105822Z.log`):
+
+5. **Park while tracking blocks the AZ-GTi driver** (A.11).  `sew_hardware` switched tracking on
+   at 11:11:02 (A.7).  The **Park** at 11:12:27 got "Mount error: Motor not stopped" from the
+   driver, which then sent nothing for a minute and answered nothing: two **Stop tracking** and the
+   nudges timed out.  At 11:13:28 it answered the park, too late.  After **Disconnect** /
+   **Connect** everything worked, and a **Park** without tracking (11:14:07) parked at once.  Not
+   caused by the two programs being connected: the driver cannot park while its motors run.
+   **Fixed:** **Park** stops tracking first and waits until the axes stand still.  To retest: A.11b.
+6. **The location sent is the one of the `Location` window** (A.3).  It was 35.02° N, 11.00° E (in
+   Tunisia), and sew sent it to both mounts.  It replaced the HAZ31's own location (50°50′ N,
+   4°52′ E, from its GPS).  An alt-azimuth mount turns both axes at rates computed from the
+   location, so outdoors (A.8–A.10, H.7–H.9) **set the `Location` window to where the mount
+   stands**, or the sun drifts away.  **Fixed:** connecting warns when the location sent is more
+   than 50 km from the one the mount had.  To retest: A.3b.
+7. **Mount port of the previous mount** (A.1).  The first two connects of the AZ-GTi used the
+   HAZ31's Wi-Fi address (`10.10.100.254:8899`, still in **Mount port**) and timed out after 15 s.
+   **Fixed:** the **Mount port** is kept for each mount model.  To retest: A.1b.
+8. **iOptron v3 on Wi-Fi** (H.4b): one click of **Track sun** was enough; the log shows that
+   sew needed three tries (10:59:09 → 10:59:16), as the HAZ31 did before the fix.  When the HAZ31's
+   Wi-Fi was gone (11:02), the driver logged "Read Command Error: Timeout error" every 10 s while the
+   `Mount` window still showed the last state: see A.12.
 
 ## Calibration (step 3) — before the GUI has it
 
