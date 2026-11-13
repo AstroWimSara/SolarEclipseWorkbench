@@ -31,6 +31,8 @@ _QUIET_LOGGERS = ("matplotlib", "PIL", "urllib3", "asyncio", "apscheduler.schedu
                   "geopandas", "fiona", "pyogrio", "shapely")
 
 _log_path: Optional[Path] = None
+# Set when no log file could be created anywhere, so a second call does not add the handlers again
+_configured_without_file = False
 
 
 def _open_new_log_file(directory: Path, prefix: str) -> logging.FileHandler:
@@ -49,7 +51,7 @@ def _open_new_log_file(directory: Path, prefix: str) -> logging.FileHandler:
 
 
 def setup_logging(prefix: str = "sew", log_dir: Optional[Path] = None,
-                  console_level: int = logging.INFO) -> Path:
+                  console_level: int = logging.INFO) -> Optional[Path]:
     """Send all logging to a new file for this run, and INFO and above to the console.
 
     Safe to call more than once: later calls return the file of the first one.
@@ -60,22 +62,28 @@ def setup_logging(prefix: str = "sew", log_dir: Optional[Path] = None,
                    temporary directory when that cannot be written.
         - console_level: Level from which messages are also printed to the terminal
 
-    Returns: Path of the log file.
+    Returns: Path of the log file, None when no log file could be created (logging goes to the console only).
     """
-    global _log_path
-    if _log_path is not None:
+    global _log_path, _configured_without_file
+    if _log_path is not None or _configured_without_file:
         return _log_path
 
     directory = log_dir if log_dir is not None else LOG_DIR
     try:
         file_handler = _open_new_log_file(directory, prefix)
     except OSError:
-        file_handler = _open_new_log_file(Path(tempfile.gettempdir()) / "SolarEclipseWorkbench", prefix)
+        try:
+            file_handler = _open_new_log_file(Path(tempfile.gettempdir()) / "SolarEclipseWorkbench", prefix)
+        except OSError as exc:
+            # A full or read-only disk must not stop the application: log to the console only
+            file_handler = None
+            print(f"WARNING: no log file could be created ({exc}); logging to the console only", file=sys.stderr)
 
-    file_formatter = logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT)
-    file_formatter.converter = time.gmtime
-    file_handler.setFormatter(file_formatter)
-    file_handler.setLevel(logging.DEBUG)
+    if file_handler is not None:
+        file_formatter = logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT)
+        file_formatter.converter = time.gmtime
+        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(logging.DEBUG)
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_formatter = logging.Formatter(_CONSOLE_FORMAT, datefmt=_DATE_FORMAT)
@@ -85,11 +93,15 @@ def setup_logging(prefix: str = "sew", log_dir: Optional[Path] = None,
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
-    root.addHandler(file_handler)
+    if file_handler is not None:
+        root.addHandler(file_handler)
     root.addHandler(console_handler)
     for name in _QUIET_LOGGERS:
         logging.getLogger(name).setLevel(logging.INFO)
 
+    if file_handler is None:
+        _configured_without_file = True
+        return None
     _log_path = Path(file_handler.baseFilename)
     logging.info("Logging to %s (timestamps in UTC)", _log_path)
     logging.info("Python %s on %s; command line: %s",

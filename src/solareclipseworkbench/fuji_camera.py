@@ -639,7 +639,11 @@ class FujiCamera(BaseCamera):
             if self._sdk_cam is not None:
                 self._sdk_cam.close()
         except Exception:
-            pass
+            logging.warning('%s: closing the SDK session failed', self.name, exc_info=True)
+        # A call into a closed handle can crash the process.  With None, every
+        # later call (a status poll, a job still scheduled) raises a CameraError.
+        self._sdk_cam = None
+        self._shooter = None
         self._connected = False
 
     def exit(self):
@@ -875,11 +879,15 @@ class FujiCamera(BaseCamera):
             speeds = _distinct(speeds)
         logging.info('%s: %d frame(s): %s', self.name, len(speeds), self.describe_speeds(speeds))
         with self._lock:
-            taken = self.shooter.bracket_no_download(speeds)
-            # The shooter writes the speeds itself, so the speed configure
-            # remembers is no longer known.  The next configure writes it again.
-            self._applied_speed = None
-            self._note_frame_fired()
+            try:
+                taken = self.shooter.bracket_no_download(speeds)
+            finally:
+                # The shooter writes the speeds itself, so the speed configure
+                # remembers is no longer known.  The next configure writes it
+                # again - also after a ladder that failed part way, which can
+                # leave the body on any speed of the ladder.
+                self._applied_speed = None
+                self._note_frame_fired()
         if taken != len(speeds):
             hardware_problems.report(
                 self.name,

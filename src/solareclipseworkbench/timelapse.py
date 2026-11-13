@@ -54,8 +54,12 @@ def load_frame(path: Path) -> np.ndarray:
             raise RuntimeError(f"{path.name}: reading raw files needs rawpy, which is not available on this "
                                "computer (there is none for Intel Macs): convert the raw files to TIFF or JPEG "
                                "first") from error
-        with rawpy.imread(str(path)) as raw:
-            return raw.postprocess(output_bps=8, use_camera_wb=True, no_auto_bright=True)
+        try:
+            with rawpy.imread(str(path)) as raw:
+                return raw.postprocess(output_bps=8, use_camera_wb=True, no_auto_bright=True)
+        except rawpy.LibRawError as error:
+            # A corrupt or unsupported raw file is skipped like an unreadable JPEG, not the end of the run
+            raise RuntimeError(f"{path.name}: not readable as a raw file ({error})") from error
     with Image.open(path) as image:
         if image.mode in ("I;16", "I;16B", "I;16L", "I"):
             data = np.asarray(image, dtype=np.float64)
@@ -180,12 +184,20 @@ def write_frames(frames: Sequence[Frame], out_dir: Path, half: int, suffix: str 
     for number, frame in enumerate(frames, start=1):
         if progress is not None:
             progress(number - 1, len(frames), "Writing the aligned frames")
-        target = out_dir / f"frame_{number:05d}{suffix}"
+        # Numbered without gaps over the frames written: ffmpeg's frame_%05d stops at the first gap
+        target = out_dir / f"frame_{len(written) + 1:05d}{suffix}"
         row = {"frame": target.name, "source": str(frame.path),
                "capture_time": frame.taken.isoformat(timespec="milliseconds") if frame.taken else "",
                "x": "", "y": "", "radius": "", "centre": "no sun in any frame"}
+        image = None
         if frame.x is not None:
-            image = loader(frame.path)
+            try:
+                image = loader(frame.path)
+            except (OSError, RuntimeError, ValueError) as error:
+                # Unreadable: _find skipped it, but _fill_gaps gave it a centre all the same
+                LOGGER.warning("%s: %s", frame.path.name, error)
+                row.update(frame="", centre=f"not readable: {error}")
+        if image is not None:
             Image.fromarray(crop_centred(image, frame.x, frame.y, half)).save(
                 target, **({"quality": 95} if suffix in (".jpg", ".jpeg") else {}))
             written.append(target)
@@ -257,10 +269,17 @@ def align_folder(folder: Path, output: Path, size: Optional[int] = None, fmt: st
     if video:
         if progress is not None:
             progress(0, 1, "Making the video")
-        if make_video(output, Path(video), fps, suffix):
-            report(f"Video: {video}")
+        try:
+            made = make_video(output, Path(video), fps, suffix)
+        except (OSError, subprocess.SubprocessError) as error:
+            # The aligned frames are there: a failing ffmpeg must not hide them
+            LOGGER.warning("ffmpeg could not make the video: %s", error)
+            report(f"ffmpeg could not make the video: {error}")
         else:
-            report("No ffmpeg found: no video made")
+            if made:
+                report(f"Video: {video}")
+            else:
+                report("No ffmpeg found: no video made")
     return written
 
 

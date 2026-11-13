@@ -11,7 +11,7 @@
 import math
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from astropy.time import Time
 from astropy.utils.iers import conf
@@ -123,7 +123,10 @@ def get_element_coeffs(date=None):
         except Exception:
             hours = 0
 
-    time_str = f"{int(coeffs['year']):04d}-{int(coeffs['month']):02d}-{int(coeffs['day']):02d} {hours:02d}:00:00"
+    # Greatest eclipse at 23:30 or later rounds up to hour 24, i.e. 00:00 of the next day; astropy rejects
+    # "24:00:00", so add the hours to midnight instead of formatting them into the string.
+    eclipse_day = datetime(int(coeffs['year']), int(coeffs['month']), int(coeffs['day']))
+    time_str = (eclipse_day + timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
 
     t = Time(time_str, scale='utc')
     # Need to take the closed hour from the besselian elements CSV file to get the correct results.
@@ -154,6 +157,12 @@ def get_element_coeffs(date=None):
                 'Y0': bess['y'][0], 'Y1': bess['y'][1], 'Y2': bess['y'][2], 'Y3': bess['y'][3], 'd0': bess['d'][0], 'd1': bess['d'][1], 'd2': bess['d'][2],
                 'L10': bess['l1'][0], 'L11': bess['l1'][1], 'L12': bess['l1'][2], 'L20': bess['l2'][0], 'L21': bess['l2'][1], 'L22': bess['l2'][2],
                 'M0': bess['mu'][0], 'M1': bess['mu'][1], 'M2': bess['mu'][2], 'tanf1': bess['tanf1'], 'tanf2': bess['tanf2'], 'type': coeffs['eclipse_type']}
+
+    # For a greatest eclipse at 23:30 or later the catalogue gives t0 = 0, meaning 00:00 of the *next* day, while
+    # all times are counted from midnight of the catalogue date.  Express T0 on the catalogue date (24), so the
+    # contact times come out on the right day instead of a day early.
+    if isinstance(elements['T0'], float) and hours - elements['T0'] >= 12:
+        elements['T0'] += 24
 
     # elements = {'jd': coeffs['julian_date'], 'Δt': coeffs['dt'], 'T0': coeffs['t0'], 'X0': coeffs['x0'], 'X1': coeffs['x1'], 'X2': coeffs['x2'], 'X3': coeffs['x3'],
     #             'Y0': coeffs['y0'], 'Y1': coeffs['y1'], 'Y2': coeffs['y2'], 'Y3': coeffs['y3'], 'd0': coeffs['d0'], 'd1': coeffs['d1'], 'd2': coeffs['d2'],
@@ -308,7 +317,8 @@ def get_local_circumstances(phi, lam, height, date = None):
     g = (o['L1p'] - m) / (o['L1p'] + o['L2p'])
 
     sinh = math.sin(o['d'] * rad) * math.sin(phi * rad) + math.cos(o['d'] * rad) * math.cos(phi * rad) * math.cos(o['H'] * rad)
-    h = math.asin(sinh) / rad
+    # Rounding can push sinh a hair beyond ±1 (Sun at the zenith or nadir), which asin rejects
+    h = math.asin(max(-1.0, min(1.0, sinh))) / rad
 
     s = (o['a'] * o['v'] - o['u'] * o['b']) / (o['n'] * o['L1p'])
     tau = o['L1p'] / o['n'] * math.sqrt(max(0, 1 - s * s))
@@ -420,7 +430,7 @@ def compute_central_lat_lon_for_time(e, utc):
     b1 = omega * math.sin(d * rad)
     b2 = 0.99664719 * omega * math.cos(d * rad)
     capital_b = math.sqrt(max(0, 1 - x * x - y1 * y1))
-    phi1 = math.asin(capital_b * b1 + y1 * b2)
+    phi1 = math.asin(max(-1.0, min(1.0, capital_b * b1 + y1 * b2)))
     sin_h = max(-1.0, min(1.0, x / math.cos(phi1)))
     cos_h = max(-1.0, min(1.0, (capital_b * b2 - y1 * b1) / math.cos(phi1)))
     h = solve_quadrant(sin_h, cos_h) / rad

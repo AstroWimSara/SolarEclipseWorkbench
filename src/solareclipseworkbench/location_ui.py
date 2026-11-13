@@ -11,6 +11,8 @@ Provides:
 """
 import json
 import logging
+import math
+import os
 import time
 import requests
 from datetime import timedelta
@@ -34,6 +36,21 @@ try:
     GEOPY_AVAILABLE = True
 except ImportError:
     GEOPY_AVAILABLE = False
+
+
+def parse_number(text) -> float:
+    """Read a coordinate or altitude typed by the user as a float.
+
+    A comma is accepted as the decimal separator: the coordinate fields use a
+    QDoubleValidator, which follows the system locale and so accepts "50,85"
+    on e.g. a Belgian or German system, where float() would refuse it.
+
+    Raises: ValueError when the text is empty, not a number, or not finite.
+    """
+    value = float(str(text).strip().replace(",", "."))
+    if not math.isfinite(value):
+        raise ValueError(f"not a finite number: {text!r}")
+    return value
 
 
 def make_qr_pixmap(text: str, module_pixels: int = 6, quiet_zone: int = 3) -> Optional[QPixmap]:
@@ -106,11 +123,53 @@ class ConfigManager:
         """Load configuration from file, or create a default one."""
         if self.config_file.exists():
             try:
-                with open(self.config_file, 'r') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return self._repair_config(json.load(f))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                # Keep the damaged file: the next save would otherwise replace every
+                # saved camera, camera test and location with an empty configuration.
+                backup = self.config_file.with_name(self.config_file.name + ".corrupt")
+                try:
+                    os.replace(self.config_file, backup)
+                    logging.warning("The configuration %s cannot be read (%s); it was moved to %s and an "
+                                    "empty configuration is used", self.config_file, e, backup)
+                except OSError as move_error:
+                    logging.warning("The configuration %s cannot be read (%s) and could not be moved aside: %s",
+                                    self.config_file, e, move_error)
+                return self._default_config()
+            except OSError as e:
+                logging.warning("Could not read the configuration %s: %s", self.config_file, e)
                 return self._default_config()
         return self._default_config()
+
+    def _repair_config(self, config) -> Dict:
+        """Fill in what an old or hand-edited configuration lacks, so it cannot fail later on a missing key.
+
+        Saved cameras and locations without a name are left out (they cannot be
+        chosen in a drop-down anyway); everything else is kept as it is.
+        """
+        default = self._default_config()
+        if not isinstance(config, dict):
+            logging.warning("The configuration %s is not a JSON object; an empty configuration is used",
+                            self.config_file)
+            return default
+        for key in ("cameras", "locations"):
+            entries = config.get(key)
+            if not isinstance(entries, list):
+                entries = []
+            kept = [entry for entry in entries
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]]
+            if len(kept) != len(entries) or not isinstance(config.get(key), list):
+                logging.warning("Left out %d unreadable %s from the configuration %s",
+                                len(entries) - len(kept), key, self.config_file)
+            config[key] = kept
+        if not isinstance(config.get("last_used"), dict):
+            config["last_used"] = default["last_used"]
+        if not isinstance(config.get("camera_aliases"), dict):
+            config["camera_aliases"] = {}
+        if not isinstance(config.get("candidate_sites", []), list):
+            config["candidate_sites"] = []
+        return config
 
     def _default_config(self) -> Dict:
         """Return the default (empty) configuration structure."""
@@ -141,10 +200,21 @@ class ConfigManager:
         last until the program closes.  It used to be printed to the terminal
         only, where it was easy to miss.
         """
+        # Written to a temporary file that then replaces the configuration, so a
+        # crash, a full disk or a flat battery halfway through cannot leave a
+        # truncated file behind (which would lose every saved camera and location).
+        target = Path(os.path.realpath(self.config_file))
+        temporary = target.with_name(target.name + ".tmp")
         try:
-            with open(self.config_file, 'w') as f:
-                json.dump(self.config, f, indent=2)
-        except OSError as e:
+            text = json.dumps(self.config, indent=2)
+            with open(temporary, 'w', encoding='utf-8') as f:
+                f.write(text)
+            os.replace(temporary, target)
+        except (OSError, TypeError, ValueError) as e:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
             logging.warning('Could not save the configuration to %s: %s', self.config_file, e)
             if not ConfigManager._save_failure_reported:
                 ConfigManager._save_failure_reported = True
@@ -577,6 +647,9 @@ class LocationWidget(QWidget):
         self._usb_gps_dialog: Optional[QDialog] = None
         self._usb_gps_status_label: Optional[QLabel] = None
         self._elevation_worker: Optional[ElevationWorker] = None
+        # Lookups that were overtaken by a newer one but have not ended yet.  They
+        # are kept referenced: a QThread released while it runs aborts the program.
+        self._retired_workers: List[QThread] = []
         # GPS–computer time offset measured by the USB GPS worker.
         # Zero (timedelta(0)) until a USB GPS fix is acquired.
         self.gps_time_offset: timedelta = timedelta(0)
@@ -594,6 +667,8 @@ class LocationWidget(QWidget):
             if worker is not None:
                 setattr(self, attr, None)
                 worker.wait(2000)
+        for worker in self._retired_workers:
+            worker.wait(2000)
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
@@ -641,9 +716,9 @@ class LocationWidget(QWidget):
         Raises ``ValueError`` if any field contains a non-numeric value or
         is empty.
         """
-        longitude = float(self.longitude_edit.text())
-        latitude = float(self.latitude_edit.text())
-        altitude = float(self.altitude_edit.text())
+        longitude = parse_number(self.longitude_edit.text())
+        latitude = parse_number(self.latitude_edit.text())
+        altitude = parse_number(self.altitude_edit.text())
         return longitude, latitude, altitude
 
     def reload_saved_locations(self) -> None:
@@ -866,6 +941,11 @@ class LocationWidget(QWidget):
         self.gps_btn.setEnabled(False)
         self._gps_dialog.exec()
 
+        # Closed with Escape or the window's close button rather than Cancel: stop the
+        # server the same way, or it keeps running and the button stays disabled.
+        if self._gps_dialog is not None and self._gps_worker is not None:
+            self._cancel_gps_capture()
+
     def _on_gps_server_started(self, lan_url: str, local_url: str) -> None:
         """Update the dialog once the server is ready."""
         if self._gps_status_label:
@@ -927,6 +1007,17 @@ class LocationWidget(QWidget):
     def _start_elevation_lookup(self, latitude: float, longitude: float) -> None:
         """Fill the altitude field from Open-Elevation, in the background."""
         self.altitude_edit.setPlaceholderText("Fetching elevation…")
+        previous = self._elevation_worker
+        if previous is not None:
+            # A second pick before the first lookup answered: the old answer is for
+            # the old spot, so it is ignored, but the thread must be left to end.
+            for signal in (previous.finished, previous.error):
+                try:
+                    signal.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            self._retired_workers.append(previous)
+        self._retired_workers = [w for w in self._retired_workers if w.isRunning()]
         self._elevation_worker = ElevationWorker(latitude, longitude)
         self._elevation_worker.finished.connect(self._on_elevation_received)
         self._elevation_worker.error.connect(self._on_elevation_error)
@@ -1145,9 +1236,10 @@ class LocationWidget(QWidget):
             if saved:
                 self._set_fields_editable(False)
                 self.location_name_edit.setText(saved["name"])
-                self.longitude_edit.setText(str(saved["longitude"]))
-                self.latitude_edit.setText(str(saved["latitude"]))
-                self.altitude_edit.setText(str(saved["altitude"]))
+                # .get: a hand-edited or old configuration may lack a value
+                self.longitude_edit.setText(str(saved.get("longitude", "")))
+                self.latitude_edit.setText(str(saved.get("latitude", "")))
+                self.altitude_edit.setText(str(saved.get("altitude", "")))
                 self._config_manager.set_last_used_location(actual_name)
         else:
             # "Custom" – let the user type freely.
@@ -1195,13 +1287,19 @@ class LocationWidget(QWidget):
             return
 
         try:
-            longitude = float(self.longitude_edit.text())
-            latitude = float(self.latitude_edit.text())
-            altitude = float(self.altitude_edit.text())
+            longitude = parse_number(self.longitude_edit.text())
+            latitude = parse_number(self.latitude_edit.text())
+            altitude = parse_number(self.altitude_edit.text())
         except ValueError:
             QMessageBox.warning(
                 self, "Invalid Coordinates",
                 "Please enter valid numeric coordinates."
+            )
+            return
+        if not (-180.0 <= longitude <= 180.0 and -90.0 <= latitude <= 90.0):
+            QMessageBox.warning(
+                self, "Invalid Coordinates",
+                "The longitude must be between -180 and 180 and the latitude between -90 and 90."
             )
             return
 
@@ -1237,6 +1335,12 @@ class LocationWidget(QWidget):
                 "Geocoding requires the 'geopy' library.\n"
                 "Install it with:  pip install geopy",
             )
+            return
+
+        if self._geocoding_worker is not None and self._geocoding_worker.isRunning():
+            # Return pressed in the search field while a search is still running
+            # (the button is disabled, the field is not).  Replacing the running
+            # worker would release a running QThread, which aborts the program.
             return
 
         address = self.address_search_edit.text().strip()
@@ -1365,9 +1469,13 @@ class SiteMapWidget(QWidget):
     def refresh(self):
         """Put the marker at the coordinates in the location widget (ignored while they are not valid numbers)."""
         try:
-            longitude = float(self.location_widget.longitude_edit.text())
-            latitude = float(self.location_widget.latitude_edit.text())
+            longitude = parse_number(self.location_widget.longitude_edit.text())
+            latitude = parse_number(self.location_widget.latitude_edit.text())
         except ValueError:
+            return
+        # The validators let out-of-range text through while it is being typed (e.g. "1e9");
+        # the map cannot draw such a position.
+        if not (-180.0 <= longitude <= 180.0 and -90.0 <= latitude <= 90.0):
             return
         self.tile_map.set_location(longitude, latitude, label=self.location_label())
 
@@ -1386,8 +1494,8 @@ class SiteMapWidget(QWidget):
         """
         moved = ""
         try:
-            here_lon = float(self.location_widget.longitude_edit.text())
-            here_lat = float(self.location_widget.latitude_edit.text())
+            here_lon = parse_number(self.location_widget.longitude_edit.text())
+            here_lat = parse_number(self.location_widget.latitude_edit.text())
         except ValueError:
             pass
         else:

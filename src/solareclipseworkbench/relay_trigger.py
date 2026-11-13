@@ -298,7 +298,9 @@ class LcusSerialBackend(Backend):
         try:
             self._serial.write(packet)
             self._serial.flush()
-        except serial.SerialException as exc:
+        except Exception as exc:
+            # Not only SerialException: an unplugged adapter can fail the flush
+            # with termios.error or OSError, which callers would not expect.
             raise RelayError(f"write failed on {self.port}: {exc}") from exc
 
     def describe(self) -> str:
@@ -345,7 +347,8 @@ class NumatoSerialBackend(Backend):
         try:
             self._serial.write(command)
             self._serial.flush()
-        except serial.SerialException as exc:
+        except Exception as exc:
+            # Not only SerialException: see LcusSerialBackend.set_channel.
             raise RelayError(f"write failed on {self.port}: {exc}") from exc
 
     def describe(self) -> str:
@@ -421,7 +424,9 @@ class DsdSerialBackend(Backend):
             # holding, so the first real command is parsed clean.
             self._serial.write(b"\r\n")
             self._serial.flush()
-        except serial.SerialException as exc:
+        except Exception as exc:
+            # Any failure: the port is open, and an exclusive lock left on it
+            # would refuse every later connect.
             self.close()
             raise RelayError(f"cannot open relay on {port}: {exc}") from exc
         # The SH-UR firmware acknowledges every command with "OK+...", so
@@ -434,7 +439,7 @@ class DsdSerialBackend(Backend):
             self._serial.write(b"AT+CH1=0\r\n")
             self._serial.flush()
             reply = self._serial.read(16)
-        except serial.SerialException as exc:
+        except Exception as exc:
             self.close()
             raise RelayError(f"cannot probe relay on {port}: {exc}") from exc
         if b"OK" not in reply:
@@ -448,7 +453,8 @@ class DsdSerialBackend(Backend):
         try:
             self._serial.write(command)
             self._serial.flush()
-        except serial.SerialException as exc:
+        except Exception as exc:
+            # Not only SerialException: see LcusSerialBackend.set_channel.
             raise RelayError(f"write failed on {self.port}: {exc}") from exc
 
     def describe(self) -> str:
@@ -869,14 +875,18 @@ class RelayTrigger:
         """
         target = channel or self.wiring.s2_channel
         timings = []
-        for _ in range(samples):
-            started = time.perf_counter()
-            self.backend.set_channel(target, True)
-            timings.append((time.perf_counter() - started) * 1000.0)
-            time.sleep(0.02)
-            self.backend.set_channel(target, False)
-            time.sleep(0.02)
-        self._closed_channels.discard(target)
+        try:
+            for _ in range(samples):
+                started = time.perf_counter()
+                self.backend.set_channel(target, True)
+                timings.append((time.perf_counter() - started) * 1000.0)
+                time.sleep(0.02)
+                self.backend.set_channel(target, False)
+                time.sleep(0.02)
+        finally:
+            # A write that fails between the close and the open must not leave
+            # the shutter held down.
+            self._release([target])
 
         ordered = sorted(timings)
         mean = sum(timings) / len(timings)
@@ -989,6 +999,16 @@ def _serialised_on_trigger(func):
             return None
         try:
             return func(trigger, *args, **kwargs)
+        except Exception as exc:
+            # A contact must never stay closed after a failure: a held S2 is a
+            # shutter held down for the rest of the eclipse.  The commands
+            # release their own contacts on the way out; this covers what they
+            # cannot, such as a half-press that failed part way.
+            trigger.release_all()
+            hardware_problems.report(
+                "Relay", f"{func.__name__} failed",
+                detail=f"{exc}; every contact was opened again")
+            raise
         finally:
             lock.release()
     return wrapper

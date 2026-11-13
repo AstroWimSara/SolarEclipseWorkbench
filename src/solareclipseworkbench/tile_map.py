@@ -6,6 +6,8 @@ looked at once stays visible without a network connection.
 
 import logging
 import math
+import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -63,6 +65,14 @@ def num2deg(x: float, y: float, zoom: int) -> Tuple[float, float]:
     return longitude, latitude
 
 
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _is_png(data: bytes) -> bool:
+    """Whether data looks like a whole PNG file: the signature at the start and the IEND chunk at the end."""
+    return data.startswith(_PNG_SIGNATURE) and b"IEND" in data[-16:]
+
+
 class _TileFetcher(QObject):
     """Downloads tiles off the GUI thread and hands them back through a signal."""
 
@@ -88,14 +98,29 @@ class _TileFetcher(QObject):
         try:
             path = CACHE_DIR / str(zoom) / str(x) / f"{y}.png"
             if path.exists():
-                self.tile_ready.emit(zoom, x, y, path.read_bytes())
-                return
+                data = path.read_bytes()
+                if _is_png(data):
+                    self.tile_ready.emit(zoom, x, y, data)
+                    return
+                # Empty or cut short (the program stopped while writing it): fetch it again
+                logger.debug(f"Cached map tile {zoom}/{x}/{y} is damaged, fetching it again")
 
             response = self._session.get(TILE_URL.format(z=zoom, x=x, y=y), timeout=10)
             response.raise_for_status()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(response.content)
-            self.tile_ready.emit(zoom, x, y, response.content)
+            data = response.content
+            if not _is_png(data):
+                # A captive portal or an error page answers with HTML and status 200: never cache that
+                raise ValueError("the answer is not a PNG image")
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # Write next to it and rename, so an interrupted write leaves no half tile in the cache
+                partial = path.with_name(f"{path.name}.{threading.get_ident()}.part")
+                partial.write_bytes(data)
+                os.replace(partial, path)
+            except OSError as exc:
+                # A full disk or a cache that cannot be written: the tile still shows, it is just not kept
+                logger.debug(f"Could not cache map tile {zoom}/{x}/{y}: {exc}")
+            self.tile_ready.emit(zoom, x, y, data)
         except Exception as exc:
             logger.debug(f"Could not load map tile {zoom}/{x}/{y}: {exc}")
             self.tile_failed.emit(zoom, x, y)
@@ -245,6 +270,9 @@ class TileMap(QWidget):
             self._unavailable.discard((zoom, x, y))
             if zoom == self._zoom:
                 self.update()
+        else:
+            # Not asked for again on every repaint, which would read the same bad bytes for ever
+            self._on_tile_failed(zoom, x, y)
 
     def _on_tile_failed(self, zoom: int, x: int, y: int) -> None:
         self._unavailable.add((zoom, x, y))

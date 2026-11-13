@@ -270,6 +270,11 @@ class RunReportWindow(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "Run report", f"Could not read {path}:\n{e}")
             return
+        except Exception as e:
+            # A log cut short or edited by hand must not keep the window from opening on the other logs
+            logging.exception("Could not parse %s", path)
+            QMessageBox.warning(self, "Run report", f"Could not make sense of {path}:\n{e}")
+            return
         self.log_path = Path(path)
         self.run_box.blockSignals(True)
         self.run_box.clear()

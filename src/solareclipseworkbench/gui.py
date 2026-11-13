@@ -5,6 +5,7 @@
     - Controller: SolarEclipseController
 """
 import argparse
+import contextlib
 import datetime
 import faulthandler
 import logging
@@ -75,7 +76,8 @@ from solareclipseworkbench.reference_moments import calculate_reference_moments,
 from solareclipseworkbench.relay_trigger import (DsdSerialBackend, RelayError, RelayTrigger, Wiring,
                                                  discover_relays, list_backends, make_backend,
                                                  _release_all_contacts)
-from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget, make_qr_pixmap
+from solareclipseworkbench.location_ui import ConfigManager, LocationWidget, SiteMapWidget, make_qr_pixmap, \
+    parse_number
 from solareclipseworkbench.path_map_ui import EclipsePathWidget, eclipse_choices
 from solareclipseworkbench.constants import MOON_RADIUS
 from solareclipseworkbench import solar_radius
@@ -147,6 +149,50 @@ DOCK_STATE_VERSION = 1
 ERROR_LOG_MAX_ROWS = 500  # The Error Log dock removes the oldest rows above this number
 
 LOGGER = logging.getLogger("Solar Eclipse Workbench UI")
+
+
+class _DevNull:
+    """ Stream that drops everything written to it. """
+
+    def write(self, s):
+        return
+
+    def flush(self):
+        return
+
+
+# The workers that load helper files (reference moments, ephemerides) silence the console while a noisy library
+# runs.  They can overlap, so the first one in saves the streams and the handlers and the last one out restores
+# them.  Each saving and restoring on its own would leave the console silenced for the rest of the run when the
+# one that started last finishes last.
+_QUIET_LOCK = threading.Lock()
+_quiet_depth = 0
+_quiet_saved = None
+
+
+@contextlib.contextmanager
+def _quiet_console():
+    """ Silence stdout, stderr and the console log handlers while helper files are loaded (thread-safe). """
+
+    global _quiet_depth, _quiet_saved
+    root_logger = logging.getLogger()
+    with _QUIET_LOCK:
+        if _quiet_depth == 0:
+            _quiet_saved = (sys.stdout, sys.stderr, list(root_logger.handlers), root_logger.level)
+            sys.stdout = _DevNull()
+            sys.stderr = _DevNull()
+            root_logger.handlers = file_handlers_only(_quiet_saved[2])
+        _quiet_depth += 1
+    try:
+        yield
+    finally:
+        with _QUIET_LOCK:
+            _quiet_depth -= 1
+            if _quiet_depth == 0:
+                sys.stdout, sys.stderr, handlers, level = _quiet_saved
+                root_logger.handlers = handlers
+                root_logger.setLevel(level)
+                _quiet_saved = None
 
 
 class BannerNotification(QFrame):
@@ -1572,7 +1618,7 @@ class SolarEclipseController(Observer):
         # reference moments onto the event loop, which has not run yet — so the
         # correction is in place before they are first computed.  Restored before
         # the signal is connected, so start-up triggers no recalculation.
-        remembered = self.view.settings.value("limb_correction", True, type=bool)
+        remembered = self._read_setting("limb_correction", True, bool)
         self.view.limb_correction_checkbox.setChecked(remembered)
         set_limb_correction_enabled(remembered)
         self.view.limb_correction_checkbox.toggled.connect(self.on_limb_correction_toggled)
@@ -1759,27 +1805,62 @@ class SolarEclipseController(Observer):
         countdown_sunrise = self.model.sunrise_info.time_utc - reference_now if self.model.sunrise_info else None
         countdown_sunset = self.model.sunset_info.time_utc - reference_now if self.model.sunset_info else None
 
-        self.view.update_time(current_time_local, current_time_utc, countdown_c1, countdown_c2, countdown_max,
-                              countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
+        self._tick_step("clock display", self.view.update_time, current_time_local, current_time_utc, countdown_c1,
+                        countdown_c2, countdown_max, countdown_c3, countdown_c4, countdown_sunrise, countdown_sunset)
 
         # Auto-pause live view 15 s before C2 until 15 s after C3 so scheduled
         # shots around second and third contact have uncontested USB access.
         self._reference_now = reference_now
-        if self._live_view_window is not None:
-            self._live_view_window.set_totality_paused(self._live_view_paused_at(reference_now))
-            self._live_view_window.centring_overlay = self._centring_overlay()
+        # Each part of the tick on its own, so one that fails cannot starve the others (the keep-alive gate, the
+        # jobs countdown, the phone dashboard) every second.  What keeps the USB bus free for the scheduled shots
+        # comes first.
+        self._tick_step("camera keep-alive", self._update_keep_alive_allowed, reference_now)
 
-        if self._beads_window is not None and self._beads_window.isVisible():
-            self._beads_window.set_current_time(reference_now)
+        def update_live_view():
+            if self._live_view_window is not None:
+                self._live_view_window.set_totality_paused(self._live_view_paused_at(reference_now))
+                self._live_view_window.centring_overlay = self._centring_overlay()
+
+        self._tick_step("live view window", update_live_view)
+
+        def update_beads():
+            if self._beads_window is not None and self._beads_window.isVisible():
+                self._beads_window.set_current_time(reference_now)
+
+        self._tick_step("Baily's beads window", update_beads)
         self._beads_clock = (reference_now, time.monotonic())
-
-        self._update_keep_alive_allowed(reference_now)
 
         # self.view.eclipse_visualization.plot(current_time_utc)    FIXME
 
-        self.update_jobs_countdown()
+        self._tick_step("jobs countdown", self.update_jobs_countdown)
 
-        self._update_phone_dashboard(reference_now)
+        self._tick_step("phone dashboard", self._update_phone_dashboard, reference_now)
+
+    def _tick_step(self, name: str, step, *args):
+        """ Run one part of the clock tick; log its error once, not every second, and keep going.
+
+        The error is logged with its traceback the first time; while the same part keeps failing with the same
+        error, only at debug level.  Once it works again, a new error is logged in full again.
+
+        Args:
+            - name: Name of the part, for the log
+            - step: Function to run
+            - args: Arguments of the function
+        """
+
+        failing = self.__dict__.setdefault("_failing_tick_steps", {})
+        try:
+            step(*args)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            if failing.get(name) != message:
+                failing[name] = message
+                LOGGER.exception("Clock tick: could not update the %s (logged once while it keeps failing)", name)
+            else:
+                LOGGER.debug("Clock tick: the %s still fails: %s", name, message)
+        else:
+            if failing.pop(name, None) is not None:
+                LOGGER.info("Clock tick: the %s works again", name)
 
     def _animate_beads(self):
         """Redraw the bead window between clock ticks when a contact is near.
@@ -1886,9 +1967,10 @@ class SolarEclipseController(Observer):
         """
 
         if isinstance(changed_object, LocationPopup):
-            longitude = float(changed_object.longitude.text())
-            latitude = float(changed_object.latitude.text())
-            altitude = float(changed_object.altitude.text())
+            # accept_location only notifies when the three fields can be read
+            longitude = parse_number(changed_object.longitude.text())
+            latitude = parse_number(changed_object.latitude.text())
+            altitude = parse_number(changed_object.altitude.text())
 
             self.model.set_position(longitude, latitude, altitude)
 
@@ -1915,16 +1997,22 @@ class SolarEclipseController(Observer):
                 self.model.set_eclipse_date(Time(eclipse_date))
                 self.view.eclipse_date.setText(eclipse_date.strftime(DATE_FORMATS[self.view.date_format]))
 
+            self._reference_moments_changed("location")
             return
 
         elif isinstance(changed_object, EclipsePopup):
             # Extract the date portion from the combobox entry (format: "<date> - <type> - ...").
             eclipse_text = changed_object.eclipse_combobox.currentText()
+            if not eclipse_text:
+                return
             eclipse_date_str = eclipse_text.split(" - ", 1)[0]
-            self.model.set_eclipse_date(
-                Time(datetime.datetime.strptime(eclipse_date_str, DATE_FORMATS[self.view.date_format])))
+            # The entries were written in the date format of when the window opened, which may have been changed
+            # since then
+            eclipse_date = datetime.datetime.strptime(eclipse_date_str, changed_object.date_format)
+            self.model.set_eclipse_date(Time(eclipse_date))
 
-            self.view.eclipse_date.setText(eclipse_date_str)
+            self.view.eclipse_date.setText(eclipse_date.strftime(DATE_FORMATS[self.view.date_format]))
+            self._reference_moments_changed("eclipse date")
             return
 
         elif isinstance(changed_object, SimulatorPopup):
@@ -1983,36 +2071,59 @@ class SolarEclipseController(Observer):
 
         elif isinstance(changed_object, QCloseEvent):
 
-            if self.relay_trigger is not None:
-                self.relay_trigger.close()
-                self.relay_trigger = None
-                register_hardware('relay', None)
+            # Each step on its own: a device that refuses to close must not keep the cameras open, nor the
+            # scheduler running
 
-            self.stop_centring()
-            if self.mount is not None:
+            def close_step(description, step):
+                try:
+                    step()
+                except Exception:
+                    LOGGER.exception("Closing down: could not %s", description)
+
+            # First, so no command fires on a camera or device that is being closed
+            close_step("stop the scheduler", self._shutdown_scheduler)
+
+            def close_relay():
+                trigger, self.relay_trigger = self.relay_trigger, None
+                register_hardware('relay', None)
+                if trigger is not None:
+                    trigger.close()
+
+            close_step("close the relay", close_relay)
+
+            close_step("stop the centring", self.stop_centring)
+
+            def close_mount():
                 # Only the connection closes: the mount keeps tracking
-                self.mount.close()
-                self.mount = None
+                mount, self.mount = self.mount, None
                 register_hardware('mount', None)
-            self.stop_indi_server()
+                if mount is not None:
+                    mount.close()
+
+            close_step("close the mount", close_mount)
+            close_step("stop the INDI server", self.stop_indi_server)
 
             if self._keep_alive_thread is not None:
-                self._keep_alive_thread.stop()
+                close_step("stop the camera keep-alive", self._keep_alive_thread.stop)
                 self._keep_alive_thread = None
 
             if self._live_view_window is not None:
-                self._live_view_window.close()
+                close_step("close the live view", self._live_view_window.close)
                 self._live_view_window = None
 
             if self._beads_window is not None:
-                self._beads_window.close()
+                close_step("close the Baily's beads window", self._beads_window.close)
                 self._beads_window = None
 
-            self._stop_phone_dashboard()
+            close_step("stop the phone dashboard", self._stop_phone_dashboard)
 
-            for window in (self._timeline_window, self._run_report_window, self._sites_window):
+            # Every window without a parent: one that stays open keeps the application running after the main
+            # window has gone (and a Mount window would keep polling a closed mount)
+            for window in (self._timeline_window, self._run_report_window, self._sites_window,
+                           self.location_popup, self.eclipse_popup, self.simulator_popup, self.settings_popup,
+                           self.relay_popup, self.mount_popup):
                 if window is not None:
-                    window.close()
+                    close_step(f"close the {type(window).__name__}", window.close)
             self._timeline_window = self._run_report_window = self._sites_window = None
 
             if self.model.camera_overview.camera_overview_dict:
@@ -2096,6 +2207,7 @@ class SolarEclipseController(Observer):
                 LOGGER.info("Replacing the previously loaded script")
                 self._shutdown_scheduler()
 
+            previous_scheduler = self.scheduler
             try:
                 from solareclipseworkbench.utils import observe_solar_eclipse, get_continuous_mode_commands
                 self.scheduler: BackgroundScheduler
@@ -2156,6 +2268,20 @@ class SolarEclipseController(Observer):
 
             except IndexError:
                 LOGGER.warning(f"File {filename} does not contain scheduled jobs")
+            except Exception as exc:
+                # E.g. a file that is not a script (binary, wrong encoding) or a line that cannot be read.  Say so,
+                # instead of leaving the window as if nothing happened.
+                LOGGER.exception("Could not load the script %s", filename)
+                if self.scheduler is not previous_scheduler:
+                    # The scheduler of this script was started before the error: a script that is reported as
+                    # not loaded must not take pictures
+                    self._shutdown_scheduler()
+                QMessageBox.critical(
+                    self.view,
+                    "Script not loaded",
+                    f"The script could not be loaded:\n{filename}\n\n{type(exc).__name__}: {exc}\n\n"
+                    f"Details are in the log file."
+                )
 
         elif text == "Stop":
             # Ask for confirmation before stopping the scheduler
@@ -2503,6 +2629,16 @@ class SolarEclipseController(Observer):
         self._run_report_window.activateWindow()
         self._run_report_window.raise_()
 
+    def config_manager(self) -> ConfigManager:
+        """ The one ConfigManager (saved locations, camera aliases) of the windows of this application.
+
+        Made when it is first needed, not at start-up.
+        """
+        manager = getattr(self, "_config_manager", None)
+        if manager is None:
+            manager = self._config_manager = ConfigManager()
+        return manager
+
     def _sites_context(self):
         """The eclipse date (YYYY-MM-DD) and the location of the main window, for the Compare sites window."""
         from solareclipseworkbench.site_comparison import Site
@@ -2527,7 +2663,10 @@ class SolarEclipseController(Observer):
         """Open (or bring to front) the Compare sites window."""
         from solareclipseworkbench.sites_ui import SiteComparisonWindow
         if self._sites_window is None:
-            self._sites_window = SiteComparisonWindow(self._sites_context, self._use_site)
+            # The same ConfigManager as the Location window: each one keeps the saved locations in memory and
+            # writes all of them back, so a second one would overwrite the locations saved through the other
+            self._sites_window = SiteComparisonWindow(self._sites_context, self._use_site,
+                                                      config_manager=self.config_manager())
         else:
             self._sites_window.fill_saved_locations()
             self._sites_window.refresh_context()
@@ -2580,29 +2719,47 @@ class SolarEclipseController(Observer):
         # Date & time format
         # TODO Requires Python 3.7
 
+        # A settings file that was edited by hand, or written by another version, must not keep the application
+        # from starting: a value that cannot be read is left out (and logged), and the rest is used
+
         default_date_format, *_ = DATE_FORMATS
-        date_format = self.view.settings.value("date_format", default_date_format, type=str)
+        date_format = self._read_setting("date_format", default_date_format, str)
+        if date_format not in DATE_FORMATS:
+            LOGGER.warning("Unknown date format %r in the settings, %r is used", date_format, default_date_format)
+            date_format = default_date_format
         default_time_format, *_ = TIME_FORMATS
-        time_format = self.view.settings.value("time_format", default_time_format, type=str)
+        time_format = self._read_setting("time_format", default_time_format, str)
+        if time_format not in TIME_FORMATS:
+            LOGGER.warning("Unknown time format %r in the settings, %r is used", time_format, default_time_format)
+            time_format = default_time_format
         self.set_datetime_format(date_format, time_format)
 
         # Layout
 
-        self.view.restore_layout_settings()
+        try:
+            self.view.restore_layout_settings()
+        except Exception:
+            LOGGER.exception("The saved layout of the main window could not be restored")
 
         # Location
 
         # A missing key is read as 0.0 when type=float is given, so check that the key exists first
 
-        longitude, latitude, altitude = (self.view.settings.value(key, type=float)
+        longitude, latitude, altitude = (self._read_setting(key, None, float)
                                          if self.view.settings.contains(key) else None
                                          for key in ("longitude", "latitude", "altitude"))
         is_location_loaded = self.set_location(longitude, latitude, altitude)
 
         # Eclipse date
 
-        is_eclipse_date_loaded = self.set_eclipse_date(self.view.settings.value("eclipse_date", None, type=str),
-                                                       date_format)
+        eclipse_date = self._read_setting("eclipse_date", None, str)
+        try:
+            is_eclipse_date_loaded = self.set_eclipse_date(eclipse_date, date_format)
+        except ValueError:
+            # E.g. a month name of another language than the one the date was saved in
+            LOGGER.warning("The eclipse date %r in the settings cannot be read in the format %r; choose the "
+                           "eclipse again", eclipse_date, date_format)
+            is_eclipse_date_loaded = False
 
         # Reference moments
 
@@ -2618,6 +2775,16 @@ class SolarEclipseController(Observer):
                     self.set_reference_moments()
                 except Exception:
                     pass
+
+    def _read_setting(self, key: str, default, value_type):
+        """ Read a setting of the given type, or the default (logged) when the saved value cannot be read. """
+
+        try:
+            return self.view.settings.value(key, default, type=value_type)
+        except (TypeError, ValueError):
+            LOGGER.warning("The setting %r cannot be read as %s (%r); it is ignored", key, value_type.__name__,
+                           self.view.settings.value(key))
+            return default
 
     def set_datetime_format(self, date_format: str, time_format: str):
         """ Set the date and time format in the view. """
@@ -2697,41 +2864,21 @@ class SolarEclipseController(Observer):
         result_container = {}
         download_progress = {}
 
-        class _DevNull:
-            def write(self, s):
-                return
-
-            def flush(self):
-                return
-
         def worker():
-            old_out = sys.stdout
-            old_err = sys.stderr
-            sys.stdout = _DevNull()
-            sys.stderr = _DevNull()
-            import logging
-            root_logger = logging.getLogger()
-            old_handlers = list(root_logger.handlers)
-            old_level = root_logger.level
             try:
                 # Prevent external libraries from printing to terminal while
                 # downloads happen.
-                root_logger.handlers = file_handlers_only(old_handlers)
-                if limb_correction_is_enabled():
-                    # The first time, the lunar limb profile is downloaded (72 MB)
-                    ensure_limb_profile(progress=lambda received, total: download_progress.update(
-                        received=received, total=total))
-                reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
+                with _quiet_console():
+                    if limb_correction_is_enabled():
+                        # The first time, the lunar limb profile is downloaded (72 MB)
+                        ensure_limb_profile(progress=lambda received, total: download_progress.update(
+                            received=received, total=total))
+                    reference_moments, magnitude, eclipse_type = self.model.get_reference_moments()
                 result_container["result"] = (reference_moments, magnitude, eclipse_type)
             except Exception:
                 import traceback
 
                 result_container["error"] = traceback.format_exc()
-            finally:
-                sys.stdout = old_out
-                sys.stderr = old_err
-                root_logger.handlers = old_handlers
-                root_logger.setLevel(old_level)
 
         th = threading.Thread(target=worker, daemon=True)
 
@@ -2763,9 +2910,18 @@ class SolarEclipseController(Observer):
         timer.start(100)
 
         dialog.exec()
+        # Esc or the close button of the dialog end exec() while the worker still runs: show the dialog again
+        # until the worker is done, so its result is not lost and is never read before it is there
+        while th.is_alive():
+            dialog.exec()
 
+        if "error" not in result_container and "result" not in result_container:
+            result_container["error"] = "The calculation ended without a result."
         if "error" in result_container:
-            LOGGER.exception("Error while calculating reference moments")
+            LOGGER.error("Error while calculating reference moments:\n%s", result_container["error"])
+            # The contact times of the previous location or date must not stay in use: a script loaded now would
+            # be scheduled against them, and the countdowns would count down to them
+            self._forget_reference_moments()
             QMessageBox.critical(
                 self.view,
                 "Reference moments failed",
@@ -2775,6 +2931,49 @@ class SolarEclipseController(Observer):
             reference_moments, magnitude, eclipse_type = result_container["result"]
             self.view.show_reference_moments(reference_moments, magnitude, eclipse_type)
             self._refresh_beads_window()
+
+    def _forget_reference_moments(self):
+        """ Drop the contact times in the model and on screen, e.g. after they could not be computed for a new
+        location or date. """
+
+        model = self.model
+        model.reference_moments = None
+        model.c1_info = model.c2_info = model.max_info = model.c3_info = model.c4_info = None
+        model.sunrise_info = model.sunset_info = None
+        view = self.view
+        view.eclipse_type.setText("")
+        for label in (view.c1_time_local_label, view.c2_time_local_label, view.max_time_local_label,
+                      view.c3_time_local_label, view.c4_time_local_label, view.sunrise_time_local_label,
+                      view.sunset_time_local_label,
+                      view.c1_time_utc_label, view.c2_time_utc_label, view.max_time_utc_label,
+                      view.c3_time_utc_label, view.c4_time_utc_label, view.sunrise_time_utc_label,
+                      view.sunset_time_utc_label,
+                      view.c1_azimuth_label, view.c2_azimuth_label, view.max_azimuth_label,
+                      view.c3_azimuth_label, view.c4_azimuth_label,
+                      view.c1_altitude_label, view.c2_altitude_label, view.max_altitude_label,
+                      view.c3_altitude_label, view.c4_altitude_label,
+                      view.beads_c2_label, view.beads_c3_label):
+            label.setText("")
+
+    def _reference_moments_changed(self, what: str):
+        """ Recompute the contact times after the location or the eclipse date changed.
+
+        Without this, the contact times of the previous location or date stay in use: the countdowns count down to
+        them, and a script loaded next is scheduled against them.  While a loaded script has jobs, its times stay as
+        they are (like for the limb correction and the solar radius), so the contact times on screen keep agreeing
+        with them.
+
+        Args:
+            - what: What changed, for the log ("location" or "eclipse date")
+        """
+
+        if not (self.model.is_location_set and self.model.is_eclipse_date_set):
+            return
+        if self._run_in_progress():
+            LOGGER.warning("The %s changed, but the loaded script keeps its times.  Stop the scheduler, click "
+                           "Reference moments and load the script again to use the new %s.", what, what)
+            return
+        self.set_reference_moments()
 
     def _apply_exposure_compensation(self, ev: int):
         """Set the exposure compensation for all following shots and show it."""
@@ -3037,7 +3236,8 @@ class LocationPopup(QWidget, Observable):
         layout = QVBoxLayout()
 
         # Shared location widget: saved-locations drop-down + address search + coordinate fields.
-        config_manager = ConfigManager()
+        # Shared with the Compare sites window, so neither overwrites the locations saved through the other
+        config_manager = observer.config_manager() if hasattr(observer, "config_manager") else ConfigManager()
         self.location_widget = LocationWidget(config_manager)
         # Only fall back to model coordinates when no saved location was restored
         # by the widget (i.e. the combo is still on "Custom"). If a saved location
@@ -3115,12 +3315,12 @@ class LocationPopup(QWidget, Observable):
         Silently ignored when longitude or latitude are empty or not yet valid numbers.
         """
         try:
-            lon = float(self.longitude.text())
-            lat = float(self.latitude.text())
+            lon = parse_number(self.longitude.text())
+            lat = parse_number(self.latitude.text())
         except ValueError:
             return
         try:
-            alt = float(self.altitude.text())
+            alt = parse_number(self.altitude.text())
         except ValueError:
             alt = 0.0
         self.location_plot.plot_location(longitude=lon, latitude=lat, altitude=alt)
@@ -3135,6 +3335,13 @@ class LocationPopup(QWidget, Observable):
         """
 
         if self.longitude.text() and self.latitude.text() and self.altitude.text():
+            # A field can hold text that is not a number yet (e.g. "-" while typing)
+            try:
+                for edit in (self.longitude, self.latitude, self.altitude):
+                    parse_number(edit.text())
+            except ValueError:
+                QMessageBox.warning(self, "Location", "The longitude, latitude and altitude must be numbers.")
+                return
             self.notify_observers(self)
             self.close()
 
@@ -3162,6 +3369,8 @@ class EclipsePopup(QWidget, Observable):
         self.eclipse_combobox = QComboBox()
 
         date_format = DATE_FORMATS[observer.view.date_format]
+        # The controller reads the date of the chosen entry back in this format
+        self.date_format = date_format
 
         # "<date> - <type> - <duration for central eclipses, magnitude for partial ones>"
         self.eclipse_combobox.addItems([label for label, _ in eclipse_choices(20, date_format)])
@@ -3274,7 +3483,8 @@ class SimulatorPopup(QWidget, Observable):
             - offset specified
         """
 
-        if self.offset_minutes.text():
+        # The validator lets through text that is not a number yet, e.g. "-" while typing
+        if self.offset_minutes.text() and self.offset_minutes.hasAcceptableInput():
             self.notify_observers(self)
             self.close()
 
@@ -4202,6 +4412,11 @@ class Observer:
     altitude: float
 
 
+# After the ephemerides of the eclipse plot could not be loaded (e.g. no network in the field), loading them is
+# tried again after this time [s], not at each redraw
+EPHEMERIS_RETRY_S = 3600
+
+
 class EclipsePlotWidget(QtWidgets.QWidget):
     """
     PyQt6 QWidget that plots Sun & Moon discs to scale for a given observer and datetime.
@@ -4216,6 +4431,9 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
     CACHED_EPHEMERIDES = None
     CACHED_TIMESCALE = None
+    # Whether the ephemerides are being loaded now, and when loading them failed last (time.monotonic())
+    _loading = False
+    _load_failed_at = None
 
     def __init__(
         self,
@@ -4262,17 +4480,40 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
         self.is_location_set = True
 
-    def _ensure_ephemerides_loaded(self):
+    def _ensure_ephemerides_loaded(self) -> bool:
         """Ensure shared Skyfield ephemerides and timescale are loaded.
 
         This is intentionally called lazily from `plot()` so the GUI can
         appear before any potential downloads start.
+
+        Returns: True when they are loaded; False while they are being loaded, or when loading them failed recently.
         """
         if EclipsePlotWidget.CACHED_TIMESCALE is not None and EclipsePlotWidget.CACHED_EPHEMERIDES is not None:
             # Already loaded
             self.sun_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["sun"]
             self.moon_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["moon"]
-            return
+            return True
+
+        # The plot is redrawn every few seconds, also while the dialog below waits for a download: without this, each
+        # redraw would open another dialog and start another download
+        if EclipsePlotWidget._loading:
+            return False
+        # Without a network in the field, a failed download would otherwise be retried, with a modal dialog, at
+        # every redraw
+        failed_at = EclipsePlotWidget._load_failed_at
+        if failed_at is not None and time.monotonic() - failed_at < EPHEMERIS_RETRY_S:
+            return False
+        EclipsePlotWidget._loading = True
+        try:
+            return self._load_ephemerides()
+        finally:
+            EclipsePlotWidget._loading = False
+
+    def _load_ephemerides(self) -> bool:
+        """ Load the shared Skyfield ephemerides and timescale on a thread, with a modal dialog meanwhile.
+
+        Returns: True when they are loaded, False when they could not be loaded (logged).
+        """
 
         # Show a compact modal dialog while we load ephemerides in background.
         parent = self.window() if self.window() is not None else self
@@ -4289,39 +4530,19 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
         result = {}
 
-        class _DevNull:
-            def write(self, s):
-                return
-
-            def flush(self):
-                return
-
         def worker():
-            old_out = sys.stdout
-            old_err = sys.stderr
-            sys.stdout = _DevNull()
-            sys.stderr = _DevNull()
-            import logging
-            root_logger = logging.getLogger()
-            old_handlers = list(root_logger.handlers)
-            old_level = root_logger.level
             try:
-                # Temporarily remove handlers to avoid terminal noise
-                root_logger.handlers = file_handlers_only(old_handlers)
-                if EclipsePlotWidget.CACHED_TIMESCALE is None:
-                    EclipsePlotWidget.CACHED_TIMESCALE = load.timescale()
-                if EclipsePlotWidget.CACHED_EPHEMERIDES is None:
-                    EclipsePlotWidget.CACHED_EPHEMERIDES = load("de440s.bsp")
+                # Silence the terminal noise of the download
+                with _quiet_console():
+                    if EclipsePlotWidget.CACHED_TIMESCALE is None:
+                        EclipsePlotWidget.CACHED_TIMESCALE = load.timescale()
+                    if EclipsePlotWidget.CACHED_EPHEMERIDES is None:
+                        EclipsePlotWidget.CACHED_EPHEMERIDES = load("de440s.bsp")
                 result['ok'] = True
             except Exception:
                 import traceback
 
                 result['error'] = traceback.format_exc()
-            finally:
-                sys.stdout = old_out
-                sys.stderr = old_err
-                root_logger.handlers = old_handlers
-                root_logger.setLevel(old_level)
 
         th = threading.Thread(target=worker, daemon=True)
 
@@ -4339,16 +4560,25 @@ class EclipsePlotWidget(QtWidgets.QWidget):
             if not th.is_alive():
                 timer.stop()
                 dialog.accept()
-                if 'error' in result:
-                    raise Exception(result['error'])
-                # Populate instance references
-                self.sun_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["sun"]
-                self.moon_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["moon"]
 
         timer.timeout.connect(poll)
         timer.start(100)
 
         dialog.exec()
+        # Esc or the close button end exec() while the worker still runs: wait for it with the dialog shown
+        while th.is_alive():
+            dialog.exec()
+
+        if 'ok' not in result:
+            EclipsePlotWidget._load_failed_at = time.monotonic()
+            LOGGER.error("The ephemerides for the eclipse plot could not be loaded (tried again in %d minutes):\n%s",
+                         EPHEMERIS_RETRY_S // 60, result.get('error', 'no result'))
+            return False
+
+        EclipsePlotWidget._load_failed_at = None
+        self.sun_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["sun"]
+        self.moon_ephemeris = EclipsePlotWidget.CACHED_EPHEMERIDES["moon"]
+        return True
 
     # ------------- Public API -------------
 
@@ -4367,11 +4597,12 @@ class EclipsePlotWidget(QtWidgets.QWidget):
 
         when += self.offset
 
-        # Ensure ephemerides are loaded lazily to avoid blocking UI startup.
-        self._ensure_ephemerides_loaded()
-
         if not self.is_location_set:
             LOGGER.info("Location not set. Please use set_location() first.")
+            return
+
+        # Ensure ephemerides are loaded lazily to avoid blocking UI startup.
+        if not self._ensure_ephemerides_loaded():
             return
 
         # Interpret naive datetimes as UTC for robustness
@@ -5188,10 +5419,15 @@ class CameraOverviewTableColumnNames(Enum):
 
 class CameraOverviewTableModel(QAbstractTableModel):
 
+    #: Ask for an update of the camera overview from any thread (e.g. a scheduled `sync_cameras`): the update runs
+    #: on the GUI thread, which owns this model, its view and its timers
+    update_requested = pyqtSignal(bool)
+
     def __init__(self):
         """ Initialisation of the model for the table with the camera overview. """
 
         super().__init__()
+        self.update_requested.connect(self.update_camera_overview)
 
         self.camera_overview_dict: Union[dict, None] = None
         # Optional callable invoked on the GUI thread after camera data is applied.
@@ -5290,7 +5526,7 @@ class CameraOverviewTableModel(QAbstractTableModel):
         worker.start()
 
         # start a short polling timer on the main thread to apply data when available
-        QTimer.singleShot(200, self._try_apply_pending)
+        QTimer.singleShot(200, lambda: self._try_apply_pending(worker))
 
     def _gather_camera_info(self):
         max_retries = 2
@@ -5653,17 +5889,28 @@ class CameraOverviewTableModel(QAbstractTableModel):
         self.continuous_mode_commands = continuous_mode_commands
         self.update_camera_banner()
 
-    def _try_apply_pending(self):
-        """Poll for pending data written by the background worker and apply it on the GUI thread."""
+    def _try_apply_pending(self, worker=None):
+        """Poll for pending data written by the background worker and apply it on the GUI thread.
+
+        No camera at all is a result too (an empty list), which is applied.  The polling stops when the worker
+        ended without a result (it logged and reported why), instead of going on for the rest of the run.
+
+        Args:
+            - worker: Thread of the worker that gathers the data (None: poll until there is data)
+        """
         try:
+            # Whether the worker still runs is read before its data: a worker that has ended has written its data
+            running = worker is None or worker.is_alive()
             data = getattr(self, '_pending_data', None)
-            if data:
+            if data is not None:
                 # clear pending before applying to avoid races
                 self._pending_data = None
                 self._on_data_ready(data)
-            else:
+            elif running:
                 # not ready yet — try again shortly
-                QTimer.singleShot(200, self._try_apply_pending)
+                QTimer.singleShot(200, lambda: self._try_apply_pending(worker))
+            else:
+                logging.debug('CameraOverview: the worker ended without camera data')
         except Exception:
             logging.exception('Error while polling for pending camera overview data')
 
@@ -6167,7 +6414,10 @@ def main():
         controller.set_location(args.longitude, args.latitude, args.altitude)
 
     if args.date:
-        controller.set_eclipse_date(args.date, date_format=None)
+        try:
+            controller.set_eclipse_date(args.date, date_format=None)
+        except ValueError:
+            parser.error(f"--date {args.date!r} is not a date in the YYYY-MM-DD format")
 
     # Show the main window first, then schedule reference-moments calculation so
     # the loading dialog is shown on top of the visible GUI if helper files
@@ -6282,7 +6532,10 @@ def sync_cameras(controller: SolarEclipseController):
         - controller: Controller of the Solar Eclipse Workbench UI
     """
 
-    controller.model.camera_overview.update_camera_overview(user_requested=False)
+    # The scheduler runs this on a thread of its own.  The update must run on the GUI thread: it resets the Qt
+    # model of the table and polls with a QTimer, which never fires on a thread without a Qt event loop (the table
+    # was then cleared and never filled again).  The signal is queued to the GUI thread, or called directly there.
+    controller.model.camera_overview.update_requested.emit(False)
 
 
 if __name__ == "__main__":

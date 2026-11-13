@@ -729,7 +729,11 @@ class Nudger:
                     mount.nudge_start(target)
                     self._moving[axis] = target
             self._last_error = ""
-        except (MountError, IndiError) as exc:
+        except Exception as exc:
+            # Anything else than a MountError/IndiError is a bug, but it must not end the nudge thread:
+            # the buttons would then do nothing for the rest of the session, without a word
+            if not isinstance(exc, (MountError, IndiError)):
+                logger.exception("Unexpected error while nudging the mount")
             if str(exc) != self._last_error:
                 logger.warning("Mount nudge failed: %s", exc)
                 hardware_problems.report("Mount", "a nudge of the mount failed", detail=str(exc),
@@ -759,6 +763,11 @@ def mount_track(mount: Mount) -> None:
     except (MountError, IndiError) as exc:
         _report("mount_track", exc)
         return
+    except Exception as exc:
+        # A bug, or a device that is not a Mount: still only this command fails, and it is shown
+        logger.exception("mount_track failed")
+        _report("mount_track", exc)
+        return
     if rate != "solar":
         hardware_problems.report(
             "Mount", "the mount has no solar tracking rate, so it tracks at the sidereal rate",
@@ -773,6 +782,11 @@ def mount_stop(mount: Mount) -> None:
         mount.stop_tracking()
     except (MountError, IndiError) as exc:
         _report("mount_stop", exc)
+        return
+    except Exception as exc:
+        # A bug, or a device that is not a Mount: still only this command fails, and it is shown
+        logger.exception("mount_stop failed")
+        _report("mount_stop", exc)
 
 
 def mount_park(mount: Mount) -> None:
@@ -781,4 +795,9 @@ def mount_park(mount: Mount) -> None:
     try:
         mount.park()
     except (MountError, IndiError) as exc:
+        _report("mount_park", exc)
+        return
+    except Exception as exc:
+        # A bug, or a device that is not a Mount: still only this command fails, and it is shown
+        logger.exception("mount_park failed")
         _report("mount_park", exc)

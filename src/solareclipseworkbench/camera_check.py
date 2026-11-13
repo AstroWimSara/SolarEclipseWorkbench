@@ -278,7 +278,9 @@ def check_settings(camera, commands: List[ScriptCommand], report: TestReport) ->
                        f"{_count(sum(isos[i] for i in missing), 'command')} would keep the previous ISO.  "
                        f"Available: {', '.join(iso_choices)}")
         else:
-            report.add(OK, "All ISO values are available", ", ".join(sorted(isos, key=lambda v: float(v))))
+            # Not numbers (e.g. "Auto") last, instead of failing the whole settings check
+            report.add(OK, "All ISO values are available",
+                       ", ".join(sorted(isos, key=lambda v: _shutter_seconds(v) or math.inf)))
 
     # Shutter speeds
     ss_widget = _widget(config, "shutterspeed", "shutterspeed2")
@@ -648,8 +650,9 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
     pictures = [c for c in commands if c.func == "take_picture"]
     if pictures:
         cmd = pictures[0]
-        settings = cam_module.CameraSettings(name, cmd.shutter, cmd.aperture, int(cmd.iso))
         try:
+            # Inside the try: an ISO that is not a number fails this test, not the whole check
+            settings = cam_module.CameraSettings(name, cmd.shutter, cmd.aperture, int(cmd.iso))
             elapsed = _timed(cam_module.take_picture, camera, settings)
             exposure = _shutter_seconds(cmd.shutter) or 0.0
             picture_overhead = elapsed - exposure
@@ -664,8 +667,8 @@ def run_active_test(camera, commands: List[ScriptCommand], report: TestReport) -
     bursts = [c for c in commands if c.func == "take_burst"]
     if bursts:
         cmd = bursts[0]
-        settings = cam_module.CameraSettings(name, cmd.shutter, cmd.aperture, int(cmd.iso))
         try:
+            settings = cam_module.CameraSettings(name, cmd.shutter, cmd.aperture, int(cmd.iso))
             burst = measure_burst(camera, settings, vendor)
             burst.report(report, "Test bursts")
         except Exception as e:
@@ -1037,7 +1040,10 @@ def fit_exposure(shutter: str, iso: int, aperture: str, profile: CameraProfile, 
     speeds = [(c.rstrip("s"), _shutter_seconds(c)) for c in profile.shutter_speeds]
     speeds = [(c, v) for c, v in speeds if v and v > 0]
     f_now = _f_number(aperture)
-    if not wanted or not speeds:
+    if f_now is not None and f_now <= 0:
+        f_now = None
+    # A zero or negative shutter speed or ISO would divide by zero or take a log of it below
+    if not wanted or wanted <= 0 or iso <= 0 or not speeds:
         return FittedExposure(shutter, iso, aperture, 0.0, [])
 
     # Start from the nearest value the camera has: a value it does not offer is
@@ -1120,7 +1126,7 @@ def adapt_script_lines(lines: List[str], camera_name: str, profile: CameraProfil
             continue
         try:
             iso = int(float(parts[7]))
-        except ValueError:
+        except (ValueError, OverflowError):     # OverflowError: 'inf'
             adapted.append(line)
             continue
         # take_hdr and take_bracket step through shutter speeds from their start

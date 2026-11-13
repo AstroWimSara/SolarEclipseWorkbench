@@ -274,7 +274,7 @@ def _normalise_aperture(value: str) -> str:
         f = float(value)
         if f == int(f):
             return str(int(f))
-    except ValueError:
+    except (ValueError, OverflowError):   # OverflowError: 'inf'
         pass
     return value
 
@@ -588,7 +588,10 @@ class GPhotoCameraAdapter(BaseCamera):
         self._first_capture_done: bool = False          # set by take_picture / take_hdr
 
     def __getattr__(self, item):
-        # Delegate attribute access to the underlying gphoto Camera
+        # Delegate attribute access to the underlying gphoto Camera.  '_camera'
+        # itself is not delegated: before it is set (copy, pickle) that recursed forever.
+        if item == '_camera':
+            raise AttributeError(item)
         return getattr(self._camera, item)
 
     def connect(self) -> None:
@@ -1845,7 +1848,7 @@ def take_picture(camera: Camera, camera_settings: CameraSettings) -> None:
                     _set_gp_config(camera, config, context)
                     log.debug(
                         'ensured stillcapturemode is Single Frame (0) before take_picture')
-                except gphoto2.GPhoto2Error as e:
+                except (gphoto2.GPhoto2Error, TypeError) as e:
                     log.warning(
                         'could not ensure single-frame mode before take_picture: %s', e)
             else:
@@ -2173,8 +2176,10 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
             # fallback to just take as number of shots equal to `burst_number`
             log.warning("'eosremoterelease' is not supported (%s), will take %s shots instead",
                         e, str(duration))
+            # Unwrapped: camera_settings already has the exposure compensation, and the camera is ours
+            single_picture = getattr(take_picture, '__wrapped__', take_picture)
             for fallback_shot in range(int(duration)):
-                take_picture(camera, camera_settings)
+                single_picture(camera, camera_settings)
         else:
             try:
                 time.sleep(duration)
@@ -2223,7 +2228,7 @@ def take_burst(camera: Camera, camera_settings: CameraSettings, duration: float)
                 gp.check_result(_set_gp_config(camera, config, context))
                 refused = False
                 log.debug('Set stillcapturemode to Continuous (2)')
-            except gphoto2.GPhoto2Error as e:
+            except (gphoto2.GPhoto2Error, TypeError) as e:
                 if refused and not isinstance(config, _SingleConfig):
                     config = gp.check_result(gp.gp_camera_get_config(target, context))
                 log.warning('could not set a continuous release mode (%s); take_burst may take a single '
@@ -2426,7 +2431,8 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
     choices = _get_shutter_speed_choices(config)
     base_speed = camera_settings.shutter_speed.strip()
     if base_speed not in choices:
-        base_speed = _find_closest_shutter_choice(ss_widget, base_speed)
+        # None when the widget lists no usable speed: keep the script's speed
+        base_speed = _find_closest_shutter_choice(ss_widget, base_speed) or base_speed
 
     target = camera._camera if hasattr(camera, '_camera') else camera
 
@@ -2451,6 +2457,7 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
             simulated_bracketing()
             return
 
+        aeb_failed = False
         try:
             # Turn on aeb
             gp.gp_widget_set_value(aeb, aeb_value)
@@ -2483,12 +2490,18 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                     except Exception:
                         log.exception('Bracket low-level capture failed')
                         raise
-
-            # Turn off aeb
-            aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
-            gp.gp_widget_set_value(aeb, "off")
-            _set_gp_config(camera, config, context)
         except gphoto2.GPhoto2Error:
+            aeb_failed = True
+        finally:
+            # Always turn AEB off again: left on, every later shot of the script
+            # (and the software fallback below) would be taken bracketed.
+            try:
+                aeb = gp.check_result(gp.gp_widget_get_child_by_name(config, 'aeb'))
+                gp.gp_widget_set_value(aeb, "off")
+                _set_gp_config(camera, config, context)
+            except gphoto2.GPhoto2Error as e:
+                log.error("could not turn AEB off after take_bracket: %s", e)
+        if aeb_failed:
             log.warning("'aeb' could not be used, will fallback to simulated bracketing")
             simulated_bracketing()
     elif vendor == 'Nikon':
@@ -2540,11 +2553,12 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                 num_pictures = int(supported_num_pictures)
             gp.gp_widget_set_value(aeb_bp_widget, final_aeb_bp_choice)
             _set_gp_config(camera, config, context)
-        except (gphoto2.GPhoto2Error, IndexError) as e:
+        except (gphoto2.GPhoto2Error, IndexError, ValueError) as e:
             log.warning(
                 "failed to set 'aebracketingpattern' due to '%s'", e)
 
         # Set burst number
+        burst_number = None
         try:
             burst_number = gp.check_result(gp.gp_widget_get_child_by_name(config, 'burstnumber'))
             gp.gp_widget_set_value(burst_number, num_pictures)
@@ -2554,31 +2568,35 @@ def take_bracket(camera: Camera, camera_settings: CameraSettings, steps: str) ->
                 "failed to set 'burstnumber' to %d due to '%s'", num_pictures, e)
 
         try:
-            with _shutter_release(camera):
-                camera.capture(gp.GP_CAPTURE_IMAGE, context)
-        except Exception:
-            log.exception('high-level capture failed, trying low-level gp capture')
             try:
-                ctx = gp.gp_context_new()
-                gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
+                with _shutter_release(camera):
+                    camera.capture(gp.GP_CAPTURE_IMAGE, context)
             except Exception:
-                log.exception('low-level capture failed')
-                raise
+                log.exception('high-level capture failed, trying low-level gp capture')
+                try:
+                    ctx = gp.gp_context_new()
+                    gp.check_result(gp.gp_camera_capture(target, gp.GP_CAPTURE_IMAGE, ctx))
+                except Exception:
+                    log.exception('low-level capture failed')
+                    raise
+        finally:
+            # Also after a failed capture: left on, the bracketing and burst number
+            # would apply to every later shot of the script.
+            # Rest burst number back to 1, to avoid interference with future commands.
+            if burst_number is not None:
+                try:
+                    gp.gp_widget_set_value(burst_number, 1)
+                    _set_gp_config(camera, config, context)
+                except gphoto2.GPhoto2Error as e:
+                    log.warning("could not reset Nikon burst number to 1 due to '%s'", e)
 
-        # Rest burst number back to 1, to avoid interference with future commands.
-        try:
-            gp.gp_widget_set_value(burst_number, 1)
-            _set_gp_config(camera, config, context)
-        except gphoto2.GPhoto2Error as e:
-            log.warning("could not reset Nikon burst number to 1 due to '%s'", e)
-
-        # Disable the bracketing
-        try:
-            gp.gp_widget_set_value(br_widget, 'Off')
-            _set_gp_config(camera, config, context)
-        except gphoto2.GPhoto2Error as e:
-            log.warning(
-                "failed to disable bracketing due to '%s'", e)
+            # Disable the bracketing
+            try:
+                gp.gp_widget_set_value(br_widget, 'Off')
+                _set_gp_config(camera, config, context)
+            except gphoto2.GPhoto2Error as e:
+                log.warning(
+                    "failed to disable bracketing due to '%s'", e)
     elif vendor == 'Sony':
         # Sony bracketing: enable continuous bracketing mode, turn on the bulb,
         # sleep for the chosen amount of time, turn off the bulb and
@@ -2874,7 +2892,7 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int, sequen
                     _set_gp_config(camera, config, context)
                     log.debug(
                         'ensured stillcapturemode is Single Frame (0) before take_picture')
-                except gphoto2.GPhoto2Error as e:
+                except (gphoto2.GPhoto2Error, TypeError) as e:
                     log.warning(
                         'could not ensure single-frame mode before take_picture: %s', e)
             else:
@@ -2932,8 +2950,9 @@ def take_hdr(camera: Camera, camera_settings: CameraSettings, stops: int, sequen
                     log.warning('take_hdr has failed to set the shutter speed to %s',
                                 speed)
                     speed = curr_speed
-                speed_s = _parse_shutter_speed_seconds(speed)
-                time.sleep(speed_s)
+                speed_s = _parse_shutter_speed_seconds(str(speed))
+                # -1 for a speed that is not a number (e.g. 'bulb'): sleep() refuses negative times
+                time.sleep(max(0.0, speed_s))
             log.info('take_hdr has triggered capture at %s', speed)
             # First successful trigger_capture establishes eos_remotemode=15 on EOS R.
             if vendor == 'Canon':
@@ -3397,7 +3416,7 @@ def get_focus_mode(camera: Camera) -> str:
         raise
 
 
-def get_battery_level(camera: Camera) -> str:
+def get_battery_level(camera: Camera, _retries: int = 20) -> str:
     """ Return the battery level of the selected camera
 
     Args:
@@ -3424,10 +3443,11 @@ def get_battery_level(camera: Camera) -> str:
     except gphoto2.GPhoto2Error as e:
         log.debug('gphoto2 error reading batterylevel: %s', e)
         error_str = str(e).lower()
-        if any(x in error_str for x in ['-110', 'i/o in progress']):
+        # Retried a limited number of times: a camera that stays busy must not recurse forever
+        if _retries > 0 and any(x in error_str for x in ['-110', 'i/o in progress']):
             log.debug("busy, will try to read battery level again")
             time.sleep(0.1)
-            return get_battery_level(camera)
+            return get_battery_level(camera, _retries - 1)
         raise CameraError(f"Could not read battery level for {camera_name}: {e}") from None
     except Exception:
         # VirtualCamera and other non-gphoto cameras don't expose battery info
@@ -3773,7 +3793,15 @@ def get_camera_dict(is_simulator: bool = False, alias_map: Optional[dict] = None
         if sdk.claims(model_name):
             logging.info('Leaving %s to its camera SDK; gphoto2 does not claim it', model_name)
             continue
-        cam = get_camera_by_port(model_name, port)
+        # A camera that cannot be opened must not cost the others (nor leave
+        # the ones already opened claimed when the caller retries).
+        try:
+            cam = get_camera_by_port(model_name, port)
+        except (CameraError, gphoto2.GPhoto2Error) as exc:
+            logging.exception('Could not open camera %s at %s', model_name, port)
+            hardware_problems.report(model_name, 'Could not open this camera; the other cameras are used',
+                                     detail=str(exc))
+            continue
 
         key = model_name  # default: use the gphoto2 model name
 
@@ -4001,7 +4029,7 @@ def main():
             print("Could not connect to the camera.  Did you start Solar Eclipse Workbench in sudo mode?")
 
 
-def get_sony_save_destination(camera) -> str | None:
+def get_sony_save_destination(camera, _retries: int = 20) -> str | None:
     """Return the Sony PC-Remote 'Save Destination' value string, or None if not found.
 
     This probes the camera config for widgets whose name/label contains
@@ -4020,10 +4048,10 @@ def get_sony_save_destination(camera) -> str | None:
     except gphoto2.GPhoto2Error as e:
         log.debug('gphoto2 error reading capturetarget: %s', e)
         error_str = str(e).lower()
-        if any(x in error_str for x in ['-110', 'i/o in progress']):
+        if _retries > 0 and any(x in error_str for x in ['-110', 'i/o in progress']):
             log.warning("busy, unable to get capture target, trying again")
             time.sleep(0.1)
-            return get_sony_save_destination(camera)
+            return get_sony_save_destination(camera, _retries - 1)
         else:
             log.warning("lacks capture target setting")
             return None
@@ -4031,7 +4059,7 @@ def get_sony_save_destination(camera) -> str | None:
         return None
 
 
-def get_sony_image_quality(camera: Camera) -> str:
+def get_sony_image_quality(camera: Camera, _retries: int = 20) -> str:
     """ Return the image quality of the selected Sony camera.
 
     Args:
@@ -4051,10 +4079,10 @@ def get_sony_image_quality(camera: Camera) -> str:
     except gphoto2.GPhoto2Error as e:
         log.debug('gphoto2 error reading imagequality: %s', e)
         error_str = str(e).lower()
-        if any(x in error_str for x in ['-110', 'i/o in progress']):
+        if _retries > 0 and any(x in error_str for x in ['-110', 'i/o in progress']):
             log.warning("busy, unable to get image quality, trying again")
             time.sleep(0.1)
-            return get_sony_image_quality(camera)
+            return get_sony_image_quality(camera, _retries - 1)
     except Exception:
         return None
 

@@ -5,6 +5,7 @@ registers it), so it can sit in any window without being handed the mount, and
 follows a mount that is connected or disconnected while it is shown.
 """
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +31,9 @@ def format_position(position: Optional[tuple]) -> str:
     if not position or None in position:
         return ""
     ra, dec = position
+    # The INDI client keeps NaN for a number it could not read; round(NaN) raises, every refresh
+    if not (math.isfinite(ra) and math.isfinite(dec)):
+        return ""
     ra_s = round(ra * 3600) % (24 * 3600)
     sign = "−" if dec < 0 else "+"
     dec_s = round(abs(dec) * 3600)

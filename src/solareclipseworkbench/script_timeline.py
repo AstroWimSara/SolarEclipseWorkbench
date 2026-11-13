@@ -242,6 +242,9 @@ def build_timeline(filename: str, reference_moments: dict, cameras: Optional[dic
             reference = latest
         elif ref_moment in moments:
             reference = moments[ref_moment]
+        elif ref_moment.upper() in {name.upper() for name in moments}:
+            # The scheduler finds the moment whatever its case (utils.reference_time_utc)
+            reference = next(moments[name] for name in moments if name.upper() == ref_moment.upper())
         else:
             unknown[ref_moment] = unknown.get(ref_moment, 0) + 1
             continue

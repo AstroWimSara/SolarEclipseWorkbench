@@ -339,7 +339,10 @@ class Camera:
         self._interface = interface
         self._handle = ctypes.c_void_p()
         self._camera_mode = ctypes.c_long()
-        self._closed = False
+        # Counts as closed until OpenEx has given us a handle: when loading the
+        # library or the open fails, __del__ must not run a teardown - and reach
+        # for a _lib_inst that was never set - on a session that never existed.
+        self._closed = True
         #: The body has left the bus - powered off or unplugged mid-session.
         #: Set by whoever meets the first CommunicationError; once set, close()
         #: abandons the handle instead of tearing it down.  See close().
@@ -377,6 +380,7 @@ class Camera:
             # occasional into repeatable.
             self._closed = True
         check_result(rc)
+        self._closed = False
 
         # Clean up any stale state from a previous crashed session.
         # SetPriorityMode fails with BusyError while live view is running or
@@ -527,8 +531,15 @@ class Camera:
         self.close()
 
     def __del__(self):
-        if not self._closed:
+        # getattr: an __init__ that raised, or an instance made with __new__,
+        # may not have _closed at all.  An exception from __del__ is only
+        # printed by the interpreter, so it is logged here instead.
+        if getattr(self, "_closed", True):
+            return
+        try:
             self.close()
+        except Exception:
+            log.warning("Closing an abandoned camera session failed", exc_info=True)
 
     @property
     def handle(self) -> ctypes.c_void_p:

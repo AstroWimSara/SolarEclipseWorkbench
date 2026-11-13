@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLay
                              QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from solareclipseworkbench import site_comparison
-from solareclipseworkbench.location_ui import ConfigManager
+from solareclipseworkbench.location_ui import ConfigManager, parse_number
 from solareclipseworkbench.site_comparison import CloudForecast, Site, SiteResult
 
 COLUMNS = ["Site", "Longitude", "Latitude", "Altitude [m]", "Eclipse", "Totality", "C2 (local)",
@@ -165,7 +165,7 @@ class SiteComparisonWindow(QWidget):
         for data in self.config.get_candidate_sites():
             try:
                 self.add_site(Site.from_dict(data), store=False)
-            except (KeyError, TypeError, ValueError):
+            except (AttributeError, KeyError, TypeError, ValueError):
                 continue
         if self.table.rowCount() == 0:
             self.add_current_location()
@@ -206,8 +206,14 @@ class SiteComparisonWindow(QWidget):
         location = self.config.get_location(self.saved_box.currentText())
         if location is None:
             return
-        self.add_site(Site(location["name"], float(location["longitude"]), float(location["latitude"]),
-                           float(location.get("altitude", 0.0))), select=True)
+        try:
+            site = Site(location["name"], parse_number(location["longitude"]), parse_number(location["latitude"]),
+                        parse_number(location.get("altitude", 0.0)))
+        except (KeyError, TypeError, ValueError):
+            QMessageBox.warning(self, "Compare sites",
+                                f"The saved location '{location.get('name', '')}' has no valid coordinates.")
+            return
+        self.add_site(site, select=True)
 
     def add_site(self, site: Site, store: bool = True, select: bool = False):
         self._filling = True
@@ -250,9 +256,9 @@ class SiteComparisonWindow(QWidget):
 
     def _site(self, row: int) -> Optional[Site]:
         try:
-            longitude = float(self.table.item(row, COL_LON).text())
-            latitude = float(self.table.item(row, COL_LAT).text())
-            altitude = float(self.table.item(row, COL_ALT).text())
+            longitude = parse_number(self.table.item(row, COL_LON).text())
+            latitude = parse_number(self.table.item(row, COL_LAT).text())
+            altitude = parse_number(self.table.item(row, COL_ALT).text())
         except (AttributeError, ValueError):
             return None
         if not (-180.0 <= longitude <= 180.0 and -90.0 <= latitude <= 90.0):
@@ -544,7 +550,8 @@ class SiteComparisonWindow(QWidget):
         if not filename:
             return
         try:
-            Path(filename).write_text(self.comparison_text() + "\n")
+            # UTF-8: the table has degree signs, and site names can be in any script
+            Path(filename).write_text(self.comparison_text() + "\n", encoding="utf-8")
         except OSError as e:
             QMessageBox.warning(self, "Compare sites", f"Could not write {filename}:\n{e}")
 

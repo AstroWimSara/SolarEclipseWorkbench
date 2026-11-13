@@ -233,10 +233,16 @@ class IndiServer:
                                   f"(on Ubuntu: the indi-full package of the INDI PPA, or a package of "
                                   f"third-party drivers)")
         log_dir = self.log_dir or Path.home() / ".SolarEclipseWorkbench" / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
-        self.log_path = log_dir / f"indiserver-{stamp}Z.log"
-        log = open(self.log_path, "w")
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            self.log_path = log_dir / f"indiserver-{stamp}Z.log"
+            log = open(self.log_path, "w")
+        except OSError as exc:
+            # The callers only expect IndiServerError: a full disk or a read-only home must not
+            # end up as an unhandled error in the interface
+            self.log_path = None
+            raise IndiServerError(f"the log file of the INDI server could not be made in {log_dir}: {exc}") from exc
         command = [server, "-v", "-p", str(self.port)]
         if supports_local_socket(server):
             # Besides its port, indiserver listens on a local socket, by default the same for every
@@ -273,16 +279,23 @@ class IndiServer:
         if process is None or process.poll() is not None:
             return
         logger.info("Stopping the INDI server")
-        process.terminate()
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("The INDI server (pid %s) could not be stopped: %s", process.pid, exc)
 
     def log_tail(self, lines: int = 5) -> str:
         """The last lines the server wrote, for an error message."""
         if self.log_path is None or not self.log_path.exists():
             return ""
-        text = self.log_path.read_text(errors="replace").strip().splitlines()
+        try:
+            text = self.log_path.read_text(errors="replace").strip().splitlines()
+        except OSError as exc:
+            logger.debug("The log of the INDI server %s could not be read: %s", self.log_path, exc)
+            return ""
         return " / ".join(text[-lines:])

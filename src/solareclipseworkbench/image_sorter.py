@@ -723,7 +723,9 @@ def _assign_destinations(plan: SortPlan) -> None:
 
 def _unique(path: Path, taken: set) -> Path:
     candidate, n = path, 1
-    while candidate in taken or candidate.exists():
+    # lexists: a dangling symbolic link (of an earlier --link sort) is a name in use too; copying onto it would
+    # write through it
+    while candidate in taken or os.path.lexists(candidate):
         candidate = path.with_name(f"{path.stem}_{n}{path.suffix}")
         n += 1
     taken.add(candidate)
@@ -740,9 +742,15 @@ def apply_plan(plan: SortPlan, out_dir: Path, mode: str = "copy", include_unmatc
     out_dir.mkdir(parents=True, exist_ok=True)
     taken: set = set()
     rows = []
+    failures: list = []
     try:
-        _place_all(plan, out_dir, mode, include_unmatched, progress, taken, rows)
+        _place_all(plan, out_dir, mode, include_unmatched, progress, taken, rows, failures)
     finally:
+        if failures:
+            shown = failures[:20]
+            more = f" (and {len(failures) - 20} more)" if len(failures) > 20 else ""
+            plan.warnings.append(f"{len(failures)} image(s) could not be {_DONE.get(mode, 'copied')} and were "
+                                 f"left where they are{more}: " + "; ".join(shown))
         manifest = out_dir / "sorting.csv"
         with open(manifest, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else ["source"])
@@ -751,26 +759,28 @@ def apply_plan(plan: SortPlan, out_dir: Path, mode: str = "copy", include_unmatc
     return manifest
 
 
+_DONE = {"move": "moved", "link": "linked", "copy": "copied"}
+
+
 def _place_all(plan: SortPlan, out_dir: Path, mode: str, include_unmatched: bool, progress: Optional[Progress],
-               taken: set, rows: list) -> None:
+               taken: set, rows: list, failures: list) -> None:
     verb = {"move": "Moving", "link": "Linking"}.get(mode, "Copying")
     for number, placement in enumerate(plan.placements):
         if progress is not None:
             progress(number, len(plan.placements), f"{verb} the images")
         target = None
+        note = placement.reason
         if placement.destination is not None and (placement.command is not None or include_unmatched):
             target = _unique(out_dir / placement.destination, taken)
-            target.parent.mkdir(parents=True, exist_ok=True)
             source = placement.image.path
-            if mode == "move":
-                shutil.move(str(source), target)
-            elif mode == "link":
-                try:
-                    os.link(source, target)
-                except OSError:
-                    target.symlink_to(source.resolve())
-            else:
-                shutil.copy2(source, target)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _place_one(source, target, mode)
+            except (OSError, shutil.Error) as error:
+                # One unreadable file (a bad sector on the card, a file without permission) must not stop the
+                # others: it is left where it is, and listed in sorting.csv and the warnings
+                target, note = _undo_partial(source, target, mode, error)
+                failures.append(f"{source}: {error}")
         command = placement.command
         rows.append({
             "source": str(placement.image.path),
@@ -786,8 +796,49 @@ def _place_all(plan: SortPlan, out_dir: Path, mode: str, include_unmatched: bool
             "phase": command.phase if command else "",
             "label": command.label if command else "",
             "frame": f"{placement.frame}/{placement.frames}" if command else "",
-            "note": placement.reason,
+            "note": note,
         })
+
+
+def _place_one(source: Path, target: Path, mode: str) -> None:
+    """Copy, move or link one image to a target that does not exist yet."""
+    if mode == "move":
+        shutil.move(str(source), target)
+    elif mode == "link":
+        try:
+            os.link(source, target)
+        except OSError:
+            target.symlink_to(source.resolve())
+    else:
+        shutil.copy2(source, target)
+
+
+def _undo_partial(source: Path, target: Path, mode: str, error: Exception) -> Tuple[Optional[Path], str]:
+    """After a failed copy, move or link: (the target to list, the note).
+
+    The original is never touched here.  A target is only removed when the
+    original is still there in full, so the image is never lost: a half copy
+    goes, a whole copy of which the original could not be removed (a card that
+    is write-protected, in move mode) stays and is listed.
+    """
+    LOGGER.warning("Could not %s %s to %s: %s", mode, source, target, error)
+    if not os.path.lexists(target):
+        return None, f"failed: {error}"
+    try:
+        source_size = source.stat().st_size
+    except OSError:
+        # The original is gone: what was written is the only copy, keep it
+        return target, f"the original is gone; check this copy: {error}"
+    if target.is_file() and not target.is_symlink() and target.stat().st_size == source_size:
+        if mode == "move":
+            return target, f"copied, but the original could not be removed: {error}"
+        return target, f"copied, but: {error}"
+    try:
+        target.unlink()
+    except OSError as unlink_error:
+        LOGGER.warning("Could not remove the partial %s: %s", target, unlink_error)
+        return target, f"failed, partial file left here: {error}"
+    return None, f"failed: {error}"
 
 
 def format_summary(plan: SortPlan) -> str:
@@ -887,9 +938,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.dry_run:
         return 0
     mode = "move" if args.move else "link" if args.link else "copy"
+    warned = len(plan.warnings)
     manifest = apply_plan(plan, output, mode, include_unmatched=not args.skip_unmatched)
+    for warning in plan.warnings[warned:]:
+        print(f"Warning: {warning}", file=sys.stderr)
     print(f"{len(plan.matched)} images sorted into {output} ({mode}); see {manifest}")
-    return 0
+    return 0 if len(plan.warnings) == warned else 1
 
 
 if __name__ == "__main__":

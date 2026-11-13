@@ -108,7 +108,7 @@ def list_devices(usbipd: Optional[str] = None) -> list:
         return []
     try:
         result = subprocess.run(
-            [usbipd, "state"], capture_output=True, text=True, timeout=_STATE_TIMEOUT_S,
+            [usbipd, "state"], capture_output=True, text=True, errors="replace", timeout=_STATE_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning("Could not run usbipd state: %s", e)
@@ -132,7 +132,7 @@ def attach(device: UsbDevice, usbipd: Optional[str] = None) -> bool:
     try:
         result = subprocess.run(
             [usbipd, "attach", "--wsl", "--busid", device.busid],
-            capture_output=True, text=True, timeout=_ATTACH_TIMEOUT_S,
+            capture_output=True, text=True, errors="replace", timeout=_ATTACH_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError) as e:
         _report_failure(device, str(e))

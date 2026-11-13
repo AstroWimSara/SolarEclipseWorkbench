@@ -44,6 +44,7 @@ The calling user must be in the ``dialout`` group::
 from __future__ import annotations
 
 import glob
+import logging
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -163,6 +164,23 @@ def estimate_time_offset(samples) -> timedelta:
     return max(gps_time - arrival_time for gps_time, arrival_time in samples)
 
 
+def position_from_sentence(msg) -> Optional[tuple]:
+    """Return ``(lat, lon)`` from a parsed GGA/RMC sentence, or ``None``.
+
+    pynmea2 turns an empty latitude/longitude field, or a missing hemisphere,
+    into 0.0 without complaint, and raises ``ValueError`` on a garbled one.
+    Neither may end up as the observer location, so both give ``None`` here.
+    """
+    try:
+        if not msg.lat or not msg.lon:
+            return None
+        if msg.lat_dir not in ("N", "S") or msg.lon_dir not in ("E", "W"):
+            return None
+        return msg.latitude, msg.longitude
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Qt worker (lazy import so the module is usable without PyQt6)
 # ---------------------------------------------------------------------------
@@ -261,7 +279,7 @@ def _make_usb_gps_worker():
 
             try:
                 ser = serial.Serial(device, self._baudrate, timeout=1)
-            except serial.SerialException as exc:
+            except (serial.SerialException, OSError, ValueError) as exc:
                 self.error.emit(f"Could not open {device}:\n{exc}")
                 return
 
@@ -318,7 +336,7 @@ def _make_usb_gps_worker():
 
                     try:
                         raw = ser.readline()
-                    except serial.SerialException as exc:
+                    except (serial.SerialException, OSError) as exc:
                         self.error.emit(f"Serial read error:\n{exc}")
                         return
 
@@ -373,9 +391,9 @@ def _make_usb_gps_worker():
                         except (TypeError, ValueError):
                             last_gga_sats = 0
 
-                        if msg.gps_qual and int(msg.gps_qual) > 0:
-                            lat = msg.latitude
-                            lon = msg.longitude
+                        position = position_from_sentence(msg)
+                        if last_gga_fix_quality > 0 and position is not None:
+                            lat, lon = position
                             if msg.altitude is not None:
                                 try:
                                     alt = float(msg.altitude)
@@ -385,11 +403,18 @@ def _make_usb_gps_worker():
                     # RMC sentence: position + precise UTC time + valid flag
                     elif isinstance(msg, pynmea2.RMC):
                         last_rmc_status = msg.status or "?"
-                        if msg.status == "A":
-                            lat = msg.latitude
-                            lon = msg.longitude
-                            if msg.datetime:
-                                gps_time = msg.datetime.replace(tzinfo=timezone.utc)
+                        position = position_from_sentence(msg)
+                        if msg.status == "A" and position is not None:
+                            lat, lon = position
+                            # pynmea2 hands back the raw text (or None) for an
+                            # empty/garbled date or time field, after which
+                            # msg.datetime raises TypeError: skip that sample.
+                            try:
+                                rmc_time = msg.datetime
+                            except (TypeError, ValueError):
+                                rmc_time = None
+                            if rmc_time:
+                                gps_time = rmc_time.replace(tzinfo=timezone.utc)
                                 time_samples.append((gps_time, arrival_time))
 
                     if (
@@ -427,8 +452,16 @@ def _make_usb_gps_worker():
                             }
                         )
                         return
+            except Exception as exc:
+                # Without this the thread dies silently and the dialog keeps
+                # saying "waiting for fix" until the user cancels it.
+                logging.getLogger(__name__).exception("USB GPS reader failed")
+                self.error.emit(f"USB GPS reader failed:\n{exc}")
             finally:
-                ser.close()
+                try:
+                    ser.close()
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("Could not close %s: %s", device, exc)
 
     return UsbGpsWorker
 

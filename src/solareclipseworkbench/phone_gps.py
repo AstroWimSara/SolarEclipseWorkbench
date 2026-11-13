@@ -263,6 +263,11 @@ class WebGpsServer:
         on_fix = self._on_fix
 
         class _Handler(http.server.BaseHTTPRequestHandler):
+            # The server handles one request at a time: a client that connects
+            # and then sends nothing (port scanner, stalled TLS handshake) must
+            # not block the phone that is trying to send its location.
+            timeout = 15
+
             def log_message(self, fmt, *args):  # silence default access log
                 pass
 
@@ -273,18 +278,12 @@ class WebGpsServer:
                 self.end_headers()
 
             def do_GET(self):
-                from urllib.parse import urlparse, parse_qs
+                from urllib.parse import urlparse
                 parsed = urlparse(self.path)
 
                 if parsed.path == "/location":
-                    params = parse_qs(parsed.query)
                     try:
-                        lat = float(params["lat"][0])
-                        lon = float(params["lon"][0])
-                        alt_v = params.get("alt", [None])[0]
-                        alt = float(alt_v) if alt_v and alt_v.strip() else None
-                        acc_v = params.get("accuracy", [None])[0]
-                        acc = float(acc_v) if acc_v and acc_v.strip() else None
+                        lat, lon, alt, acc = parse_location_query(parsed.query)
 
                         received.update({"lat": lat, "lon": lon, "alt": alt, "accuracy": acc})
                         event.set()
@@ -320,7 +319,11 @@ class WebGpsServer:
         if https_ok:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             ctx.load_cert_chain(self._cert_file, self._key_file)
-            self._server.socket = ctx.wrap_socket(self._server.socket, server_side=True)
+            # Handshake lazily, on the first read in the handler, where the
+            # handler timeout applies, rather than unbounded inside accept().
+            self._server.socket = ctx.wrap_socket(
+                self._server.socket, server_side=True, do_handshake_on_connect=False
+            )
 
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -342,7 +345,11 @@ class WebGpsServer:
     def stop(self) -> None:
         """Shut down the server and clean up temporary certificate files."""
         if self._server:
-            self._server.shutdown()
+            # shutdown() waits for serve_forever() to return, so it would block
+            # forever when start() failed before the serving thread was started.
+            if self._thread is not None and self._thread.is_alive():
+                self._server.shutdown()
+            self._server.server_close()
             self._server = None
         self._cleanup()
 
@@ -367,6 +374,39 @@ class WebGpsServer:
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
+def parse_location_query(query: str) -> tuple:
+    """Return ``(lat, lon, alt, accuracy)`` from the query string of a /location request.
+
+    ``alt`` and ``accuracy`` are ``None`` when absent or empty.  Raises ``ValueError``
+    for a missing, non-numeric, non-finite or out-of-range latitude/longitude, so that
+    a typo in the manual form (or a stray request on the network) never becomes the
+    observer location.
+    """
+    import math
+    from urllib.parse import parse_qs
+
+    params = parse_qs(query)
+
+    def _number(name: str, required: bool):
+        value = params.get(name, [""])[0].strip()
+        if not value:
+            if required:
+                raise ValueError(f"{name} is missing")
+            return None
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"{name} must be a finite number")
+        return number
+
+    lat = _number("lat", True)
+    lon = _number("lon", True)
+    if not -90.0 <= lat <= 90.0:
+        raise ValueError(f"latitude {lat} is outside -90..90")
+    if not -180.0 <= lon <= 180.0:
+        raise ValueError(f"longitude {lon} is outside -180..180")
+    return lat, lon, _number("alt", False), _number("accuracy", False)
+
 
 def _lan_ip() -> str:
     """Return the machine's LAN IP address, or 127.0.0.1 as fallback."""
@@ -410,6 +450,7 @@ def _make_phone_gps_worker():
             super().__init__(parent)
             self.port = port
             self._server: Optional[WebGpsServer] = None
+            self._stop_requested = threading.Event()
 
         def run(self) -> None:
             try:
@@ -418,6 +459,10 @@ def _make_phone_gps_worker():
                     on_fix=lambda data: self.location_received.emit(data),
                     on_started=lambda lan, local: self.server_started.emit(lan, local),
                 )
+                if self._stop_requested.is_set():
+                    # stop_server() came before the server existed: without this
+                    # check wait_for_fix() would never return and the thread hang.
+                    return
                 self._server.start()
                 # Block until a fix arrives or stop_server() signals the event.
                 self._server.wait_for_fix(timeout=None)
@@ -432,6 +477,7 @@ def _make_phone_gps_worker():
 
         def stop_server(self) -> None:
             """Signal the worker thread to stop (non-blocking, safe to call from main thread)."""
+            self._stop_requested.set()
             if self._server:
                 self._server._event.set()   # unblock wait_for_fix; run() calls stop()
 

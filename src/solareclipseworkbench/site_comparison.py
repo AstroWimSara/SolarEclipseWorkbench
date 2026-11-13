@@ -284,7 +284,13 @@ def fetch_cloud_cover(latitude: float, longitude: float, moment_utc: datetime.da
         except Exception as exc:
             LOGGER.warning("Could not fetch the cloud cover for %.4f, %.4f: %s", latitude, longitude, exc)
             return CloudForecast(source=label, error=f"no connection ({exc.__class__.__name__})")
-        return parse_cloud_cover(data, moment_utc, start_utc, end_utc, label)
+        try:
+            return parse_cloud_cover(data, moment_utc, start_utc, end_utc, label)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            # An answer of another shape than expected (an error page, a changed API):
+            # this function promises not to raise, and runs in a worker thread.
+            LOGGER.warning("Unexpected cloud cover answer for %.4f, %.4f: %r", latitude, longitude, exc)
+            return CloudForecast(source=label, error="unexpected answer")
 
     forecast = fetch(url, source)
     today = today or datetime.datetime.now(datetime.timezone.utc).date()

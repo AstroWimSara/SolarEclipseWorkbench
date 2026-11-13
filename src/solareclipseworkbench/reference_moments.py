@@ -8,6 +8,7 @@ Reference moments of a solar eclipse:
     - MAX: Maximum eclipse.
 """
 import logging
+import math
 from datetime import datetime, timedelta
 
 import astropy.units as u
@@ -26,6 +27,23 @@ def ut_to_hms(ut):
     minutes = int((ut - hours) * 60)
     seconds = ((ut - hours) * 60 - minutes) * 60
     return hours, minutes, seconds
+
+
+def _ut_to_datetime(time: Time, ut: float) -> datetime:
+    """ UTC datetime of a moment given in hours UT from midnight of the eclipse date.
+
+    Near midnight UT a contact can fall on the previous or the next day (ut < 0 or ut >= 24), e.g. C1 of the
+    2038-12-26 eclipse in Australia; datetime() would reject those hours.
+    """
+    days = math.floor(ut / 24)
+    ut -= 24 * days
+    if ut >= 24:    # Rounding of a tiny negative ut
+        ut -= 24
+        days += 1
+    hours, minutes, seconds = ut_to_hms(ut)
+    return datetime(time.datetime.year, time.datetime.month, time.datetime.day,
+                    hours, minutes, int(seconds), int((seconds - int(seconds)) * 1_000_000)).replace(
+        tzinfo=pytz.UTC) + timedelta(days=days)
 
 class ReferenceMomentInfo:
 
@@ -66,10 +84,23 @@ def _find_timezone(longitude: float, latitude: float) -> str:
                 for dlng in [-step, 0, step]:
                     if dlat == 0 and dlng == 0:
                         continue
-                    tz_name = tf.timezone_at_land(lng=longitude + dlng, lat=latitude + dlat)
+                    # Near the date line or the poles the probe point would fall outside the valid range, which
+                    # timezonefinder rejects with a ValueError: wrap the longitude and clamp the latitude.
+                    probe_lng = (longitude + dlng + 180.0) % 360.0 - 180.0
+                    probe_lat = max(-90.0, min(90.0, latitude + dlat))
+                    tz_name = tf.timezone_at_land(lng=probe_lng, lat=probe_lat)
                     if tz_name:
                         return tz_name
-    return tz_name or 'UTC'
+    if tz_name:
+        return tz_name
+    # Open ocean: use the nautical time zone of this longitude rather than UTC.  With UTC, far from Greenwich the
+    # "local day" searched for sunrise and sunset is not the observer's day, and sunrise could come out after
+    # sunset (e.g. 160°W), so every eclipse moment would look as if the sun was down.  Note the POSIX sign
+    # convention of the Etc zones: Etc/GMT+10 is UTC-10.
+    offset = int(round(((longitude + 180.0) % 360.0 - 180.0) / 15.0))
+    if offset == 0:
+        return 'UTC'
+    return f'Etc/GMT{-offset:+d}'
 
 
 def calculate_reference_moments(longitude: float, latitude: float, altitude: float, time: Time) -> (dict, int, str):
@@ -119,15 +150,17 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
     local_midnight = timezone.localize(datetime.combine(eclipse_utc.astimezone(timezone).date(), datetime.min.time()))
     date = ts.from_datetime(local_midnight)
 
-    sunrise, y = almanac.find_risings(observer, sun_ephem, date, date + 1)
-    sunset, y = almanac.find_settings(observer, sun_ephem, date, date + 1)
+    sunrise_time = _sun_event(almanac.find_risings, observer, sun_ephem, ts, earth, loc, date, eclipse_utc,
+                              midnight_sun=local_midnight)
+    sunset_time = _sun_event(almanac.find_settings, observer, sun_ephem, ts, earth, loc, date, eclipse_utc,
+                             midnight_sun=local_midnight + timedelta(days=1))
     timings = {}
-    alt, az, apparent_alt = __calculate_alt_az(ts, earth, sun_ephem, loc, sunrise.utc_datetime()[0])
-    sunrise = ReferenceMomentInfo(sunrise.utc_datetime()[0], az, alt.degrees, timezone, apparent_alt.degrees)
+    alt, az, apparent_alt = __calculate_alt_az(ts, earth, sun_ephem, loc, sunrise_time)
+    sunrise = ReferenceMomentInfo(sunrise_time, az, alt.degrees, timezone, apparent_alt.degrees)
     timings['sunrise'] = sunrise
 
-    alt, az, apparent_alt = __calculate_alt_az(ts, earth, sun_ephem, loc, sunset.utc_datetime()[0])
-    sunset = ReferenceMomentInfo(sunset.utc_datetime()[0], az, alt.degrees, timezone, apparent_alt.degrees)
+    alt, az, apparent_alt = __calculate_alt_az(ts, earth, sun_ephem, loc, sunset_time)
+    sunset = ReferenceMomentInfo(sunset_time, az, alt.degrees, timezone, apparent_alt.degrees)
     timings['sunset'] = sunset
 
     first_contact_alt, first_contact_az, first_contact_app = calculate_alt_az(earth, loc, result['ut_first_contact'], sun_ephem, time, ts)
@@ -140,43 +173,27 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
 
     # Check if altitude at one of the moments is > 0.0
     if res_h_val > 0.0 or first_alt_val > 0.0 or last_alt_val > 0.0:
-        sc_h, sc_m, sc_s = ut_to_hms(result['ut_first_contact'])
-        sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
-
-        c1 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
-                                                     sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
+        c1 = ReferenceMomentInfo(_ut_to_datetime(time, result['ut_first_contact']),
                                                      first_contact_az, first_contact_alt.degrees, timezone, first_contact_app.degrees)
         timings["C1"] = c1
 
         if result['ut_second_contact'] != result['ut_third_contact']:
             second_contact_alt, second_contact_az, second_contact_app = calculate_alt_az(earth, loc, result['ut_second_contact'], sun_ephem,
                                                                    time, ts)
-            sc_h, sc_m, sc_s = ut_to_hms(result['ut_second_contact'])
-            sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
-
-            c2 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
-                                              sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
+            c2 = ReferenceMomentInfo(_ut_to_datetime(time, result['ut_second_contact']),
                                      second_contact_az, second_contact_alt.degrees, timezone, second_contact_app.degrees)
             timings["C2"] = c2
 
         max_contact_alt, max_contact_az, max_contact_app = calculate_alt_az(earth, loc, result['ut_maximum'], sun_ephem,
                                                                time, ts)
-        sc_h, sc_m, sc_s = ut_to_hms(result['ut_maximum'])
-        sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
-
-        maximum = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
-                                          sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
+        maximum = ReferenceMomentInfo(_ut_to_datetime(time, result['ut_maximum']),
                                  max_contact_az, max_contact_alt.degrees, timezone, max_contact_app.degrees)
         timings["MAX"] = maximum
 
         if result['ut_second_contact'] != result['ut_third_contact']:
             third_contact_alt, third_contact_az, third_contact_app = calculate_alt_az(earth, loc, result['ut_third_contact'], sun_ephem,
                                                                    time, ts)
-            sc_h, sc_m, sc_s = ut_to_hms(result['ut_third_contact'])
-            sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
-
-            c3 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
-                                              sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
+            c3 = ReferenceMomentInfo(_ut_to_datetime(time, result['ut_third_contact']),
                                      third_contact_az, third_contact_alt.degrees, timezone, third_contact_app.degrees)
             timings["C3"] = c3
 
@@ -217,11 +234,7 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
                 timings["duration"] = timings["C3"].time_utc - timings["C2"].time_utc
                 timings["duration_mean"] = mean_duration
 
-        sc_h, sc_m, sc_s = ut_to_hms(result['ut_last_contact'])
-        sc_microseconds = int((sc_s - int(sc_s)) * 1_000_000)
-
-        c4 = ReferenceMomentInfo(datetime(time.datetime.year, time.datetime.month, time.datetime.day,
-                                                     sc_h, sc_m, int(sc_s), sc_microseconds).replace(tzinfo=pytz.UTC),
+        c4 = ReferenceMomentInfo(_ut_to_datetime(time, result['ut_last_contact']),
                                                      last_contact_az, last_contact_alt.degrees, timezone, last_contact_app.degrees)
         timings["C4"] = c4
 
@@ -231,11 +244,8 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
 
 
 def calculate_alt_az(earth, loc, reference_moment, sun_ephem, time, ts):
-    hours, minutes, seconds = ut_to_hms(reference_moment)
     # Convert the first contact time to a datetime object
-    first_contact_datetime = datetime(time.datetime.year, time.datetime.month, time.datetime.day,
-                                      hours, minutes, int(seconds), int((seconds - int(seconds)) * 1_000_000)).replace(
-        tzinfo=pytz.UTC)
+    first_contact_datetime = _ut_to_datetime(time, reference_moment)
     return __calculate_alt_az(ts, earth, sun_ephem, loc, first_contact_datetime)
 
 
@@ -247,6 +257,32 @@ def __calculate_alt_az(ts, earth, sun_ephem, loc, timing):
     alt, az, distance = app.altaz()
     apparent_alt, _, _ = app.altaz(temperature_C=10.0, pressure_mbar='standard')
     return alt, az, apparent_alt
+
+
+def _sun_event(finder, observer, sun_ephem, ts, earth, loc, date, eclipse_utc, midnight_sun):
+    """ UTC datetime of the sunrise or sunset (``finder``) on the local day that starts at ``date``.
+
+    Far north or south the Sun may not cross the horizon that day.  Skyfield then returns the moment it comes
+    closest to the horizon, flagged as not a real rising/setting.  In polar day (midnight sun) that moment would
+    make the whole eclipse look as if it happened after sunset, so the day boundary ``midnight_sun`` is returned
+    instead: the Sun is up all day.  In polar night the closest approach is kept, as before.
+    """
+    times, real = finder(observer, sun_ephem, date, date + 1)
+    index = 0
+    if len(times) == 0:
+        # The event drifts just across the window edge (DST change, high latitude): look half a day further.
+        times, real = finder(observer, sun_ephem, date + (-0.5), date + 1.5)
+        if len(times) == 0:
+            return midnight_sun.astimezone(pytz.UTC)
+        moments = times.utc_datetime()
+        index = min(range(len(moments)), key=lambda k: abs((moments[k] - eclipse_utc).total_seconds()))
+    moment = times.utc_datetime()[index]
+    if not real[index]:
+        alt, _, _ = __calculate_alt_az(ts, earth, sun_ephem, loc, moment)
+        # Skyfield's horizon for the Sun: upper limb on the refracted horizon
+        if alt.degrees > -0.8333:
+            return midnight_sun.astimezone(pytz.UTC)
+    return moment
 
 
 def main():

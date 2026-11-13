@@ -29,7 +29,7 @@ from solareclipseworkbench.camera import detect_cameras, detect_sdk_cameras, get
 from solareclipseworkbench.fuji_camera import maybe_reexec_for_fuji_sdk
 from solareclipseworkbench import solar_radius
 from solareclipseworkbench.location_ui import (ConfigManager, GeocodingWorker, GEOPY_AVAILABLE, LocationWidget,
-                                               SiteMapWidget)
+                                               SiteMapWidget, parse_number)
 from solareclipseworkbench.qt_utils import apply_system_color_scheme, _is_dark_mode_preferred, _build_dark_palette, dark_lineedit_style, apply_dark_to_lineedit
 
 # Import eclipse-specific modules
@@ -386,6 +386,7 @@ class EclipseConfigPage(QWizardPage):
                 
         except Exception as e:
             # Fallback if eclipse calculation fails
+            logging.exception("Could not list the coming eclipses")
             self.eclipse_combo.addItem("Custom Eclipse")
             self.eclipse_data = []
     
@@ -412,7 +413,7 @@ class EclipseConfigPage(QWizardPage):
             self.eclipse_type_field.setText(eclipse['type'])
             
             # Create eclipse name
-            eclipse_name = f"{eclipse['type']} Solar Eclipse {date_parts[2]}"
+            eclipse_name = f"{eclipse['type']} Solar Eclipse {date_parts[-1]}"
             self.eclipse_name_field.setText(eclipse_name)
     
     def validatePage(self):
@@ -427,6 +428,26 @@ class EclipseConfigPage(QWizardPage):
                 "Please provide longitude, latitude, and altitude for your observation location."
             )
             return False
+
+        # The fields follow the system locale, so "50,85" can be typed on a system with a decimal
+        # comma, and text out of range can be left while typing: check, and store with a decimal
+        # point, which is what the script generation reads.
+        try:
+            longitude, latitude, altitude = self.location_widget.get_coordinates()
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Location Data",
+                                "The longitude, latitude and altitude must be numbers.")
+            return False
+        if not (-180.0 <= longitude <= 180.0 and -90.0 <= latitude <= 90.0 and -500.0 <= altitude <= 9000.0):
+            QMessageBox.warning(self, "Invalid Location Data",
+                                "The longitude must be between -180 and 180, the latitude between -90 and 90 and "
+                                "the altitude between -500 and 9000 m.")
+            return False
+        for edit in (self.location_widget.longitude_edit, self.location_widget.latitude_edit,
+                     self.location_widget.altitude_edit):
+            text = edit.text().strip().replace(",", ".")
+            if text != edit.text():
+                edit.setText(text)
 
         # Update the hidden location field for page registration
         location_name = self.location_widget.location_combo.currentText()
@@ -755,13 +776,24 @@ class EquipmentPage(QWizardPage):
             camera = self.config_manager.get_camera(camera_name)
             if camera:
                 self.camera_name_edit.setText(camera["name"])
-                self.focal_length_spin.setValue(camera["focal_length"])
+
+                def number(value, default):
+                    # An old or hand-edited configuration can have a missing value, a float for
+                    # the focal length or a string: the spin boxes raise TypeError on those.
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return default
+
+                self.focal_length_spin.setValue(int(round(number(camera.get("focal_length"), 400))))
                 # Entered on this page, or else found by Test Camera
-                self.pixel_size_spin.setValue(camera.get("pixel_size")
-                                              or (camera.get("profile") or {}).get("pixel_size_um")
-                                              or DEFAULT_PIXEL_SIZE_UM)
-                self.aperture_min_spin.setValue(camera["aperture_min"])
-                self.aperture_max_spin.setValue(camera["aperture_max"])
+                profile = camera.get("profile")
+                self.pixel_size_spin.setValue(number(camera.get("pixel_size")
+                                                     or (profile.get("pixel_size_um") if isinstance(profile, dict)
+                                                         else None),
+                                                     DEFAULT_PIXEL_SIZE_UM))
+                self.aperture_min_spin.setValue(number(camera.get("aperture_min"), 5.6))
+                self.aperture_max_spin.setValue(number(camera.get("aperture_max"), 8.0))
                 
                 # Set ISO values (with defaults for backward compatibility)
                 self.preferred_iso_combo.setCurrentText(str(camera.get("preferred_iso", 400)))
@@ -1739,9 +1771,21 @@ class SummaryPage(QWizardPage):
         self.summary_text.setPlainText("\n".join(summary))
         
         # Generate script preview
-        script = self._generate_script()
-        self.script_preview.setPlainText(script)
-        self.summary_text.append(self._script_check_text(script))
+        try:
+            script = self._generate_script()
+        except Exception as e:
+            logging.exception("Could not generate the script")
+            self._last_timings = None
+            self.script_preview.setPlainText(f"# Error: the script could not be generated:\n# {e}")
+            QMessageBox.critical(self, "Script Generation Failed",
+                                 f"The script could not be generated:\n{e}\n\n"
+                                 "Go back and check the settings; the details are in the log file.")
+        else:
+            self.script_preview.setPlainText(script)
+            self.summary_text.append(self._script_check_text(script))
+            warning = getattr(self, '_location_warning', None)
+            if warning:
+                self.summary_text.append(f"WARNING: {warning}")
         
         # Set default save path
         if not self.save_path_edit.text():
@@ -1928,6 +1972,12 @@ class SummaryPage(QWizardPage):
         timer.start(100)
 
         dialog.exec()
+        # Escape closes the dialog before the computation ends: show it again rather than go on
+        # without the contact times (the script would then fall back to placeholders), and
+        # rather than start a second computation while this one still redirects stdout.
+        while th.is_alive():
+            timer.start(100)
+            dialog.exec()
 
         if 'error' in result:
             raise Exception(result['error'])
@@ -1973,6 +2023,21 @@ class SummaryPage(QWizardPage):
         
         lines.append(f"#")
         
+        # Problem with the location to show on the summary, or None
+        self._location_warning = None
+
+        def location_moments():
+            """The reference moments at the location; only sunrise and sunset where there is no eclipse.
+
+            Where the Moon misses the Sun, calculate_reference_moments still gives C1, MAX and C4 (with a
+            negative magnitude): left in, they would get partial-phase shots of an uneclipsed Sun.
+            """
+            moments, _, local_type = self._calculate_reference_moments_with_progress(longitude, latitude, altitude,
+                                                                                      eclipse_time)
+            if moments is not None and local_type == "No eclipse":
+                moments = {key: value for key, value in moments.items() if key in ("sunrise", "sunset")}
+            return moments
+
         # Calculate exposures based on eclipse circumstances
         exposures = {}
         try:
@@ -1984,14 +2049,14 @@ class SummaryPage(QWizardPage):
             eclipse_time = Time(parsed_date)
 
             # Get location
-            longitude = float(wizard.field('longitude'))
-            latitude = float(wizard.field('latitude'))
-            altitude = float(wizard.field('altitude'))
+            longitude = parse_number(wizard.field('longitude'))
+            latitude = parse_number(wizard.field('latitude'))
+            altitude = parse_number(wizard.field('altitude'))
 
             # Pre-compute reference moments first (shows modal dialog and captures download output)
             timings = None
             try:
-                timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                timings = location_moments()
             except Exception:
                 # If precomputation fails, leave timings as None and fallback to calculate inside exposures
                 timings = None
@@ -2029,13 +2094,23 @@ class SummaryPage(QWizardPage):
         has_totality = False
         try:
             if timings is None:
-                timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                timings = location_moments()
             if timings:
                 has_totality = 'C2' in timings and 'C3' in timings
         except Exception:
             # Fallback: assume totality only for globally total/annular/hybrid eclipses
             timings = None
             has_totality = eclipse_type in ["Total", "Annular", "Hybrid"]
+
+        if timings is None:
+            self._location_warning = ("The contact times could not be calculated for this location, so the script "
+                                      "uses placeholder timing.  See the log file for the reason.")
+        elif 'C1' not in timings or 'C4' not in timings:
+            self._location_warning = ("The eclipse is not visible from this location (no eclipse there, or the Sun "
+                                      "is below the horizon): the script has no eclipse shots.")
+        if self._location_warning:
+            lines.append(f"# WARNING: {self._location_warning}")
+            lines.append("")
 
         # Voice prompts - load from file if enabled
         if wizard.field('voice_enabled'):
@@ -2325,7 +2400,7 @@ class SummaryPage(QWizardPage):
             # Check if sun is above horizon at C1
             try:
                 if timings is None:
-                    timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                    timings = location_moments()
                 if timings and 'C1' in timings:
                     c1_time = timings['C1'].time_utc
                     _, c1_sun_alt = calculate_sun_altitudes_at_time(
@@ -2355,7 +2430,7 @@ class SummaryPage(QWizardPage):
             try:
                 # Get reference moments for detailed partial phase planning (reuse cached result when available)
                 if timings is None:
-                    timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                    timings = location_moments()
 
                 if timings and has_totality and 'C1' in timings and 'C2' in timings and 'C3' in timings and 'C4' in timings:
                     c1_time = timings['C1'].time_utc
@@ -2685,7 +2760,7 @@ class SummaryPage(QWizardPage):
                 try:
                     # Get totality duration to fill it optimally (reuse cached result when available)
                     if timings is None:
-                        timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                        timings = location_moments()
 
                     if timings and 'C2' in timings and 'C3' in timings:
                         totality_c2 = timings['C2'].time_utc
@@ -2904,7 +2979,7 @@ class SummaryPage(QWizardPage):
                 try:
                     # Get reference moments to calculate totality duration (reuse cached result when available)
                     if timings is None:
-                        timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                        timings = location_moments()
 
                     if timings and 'C2' in timings and 'C3' in timings:
                         totality_c2 = timings['C2'].time_utc
@@ -3004,7 +3079,7 @@ class SummaryPage(QWizardPage):
             # Check if sun is above horizon at C4
             try:
                 if timings is None:
-                    timings, _, _ = self._calculate_reference_moments_with_progress(longitude, latitude, altitude, eclipse_time)
+                    timings = location_moments()
                 if timings and 'C4' in timings:
                     c4_time = timings['C4'].time_utc
                     _, c4_sun_alt = calculate_sun_altitudes_at_time(
@@ -3055,14 +3130,14 @@ class SummaryPage(QWizardPage):
     
     def validatePage(self):
         """Validate and save the script when Finish is clicked."""
-        save_path = self.save_path_edit.text()
+        save_path = self.save_path_edit.text().strip()
         if not save_path:
             QMessageBox.warning(self, "No Save Path", "Please select a location to save the script.")
             return False
         
         try:
             script_content = self._generate_script()
-            Path(save_path).write_text(script_content, encoding='utf-8')
+            Path(save_path).expanduser().write_text(script_content, encoding='utf-8')
             
             QMessageBox.information(
                 self,
@@ -3234,6 +3309,38 @@ class SEWConfigWizard(QWizard):
         pass
 
 
+def _keep_running_on_unhandled_errors():
+    """Log an exception that escapes a button or page handler and tell the user, instead of ending the wizard.
+
+    PyQt6 calls qFatal() when an exception escapes a slot or a reimplemented method such as
+    initializePage(), so one unforeseen error closes the wizard and everything entered so far is lost.
+    KeyboardInterrupt (Ctrl-C) and SystemExit still end the wizard.
+    """
+    showing = []
+
+    def _hook(kind, value, traceback_object):
+        if issubclass(kind, (KeyboardInterrupt, SystemExit)):
+            sys.__excepthook__(kind, value, traceback_object)
+            app = QApplication.instance()
+            if app is not None:
+                app.exit(130 if issubclass(kind, KeyboardInterrupt) else 1)
+            return
+        logging.error("Unhandled %s in the wizard", kind.__name__, exc_info=(kind, value, traceback_object))
+        app = QApplication.instance()
+        # A message box only from the GUI thread, and not on top of one that is already open
+        if app is None or QThread.currentThread() is not app.thread() or showing:
+            return
+        showing.append(True)
+        try:
+            QMessageBox.critical(QApplication.activeWindow(), "Unexpected Error",
+                                 f"An unexpected error occurred:\n{kind.__name__}: {value}\n\n"
+                                 "The wizard keeps running; the details are in the log file.")
+        finally:
+            showing.clear()
+
+    sys.excepthook = _hook
+
+
 def main():
     """Main entry point for the wizard application."""
     # Before anything else: when the Fujifilm SDK libraries are not on the
@@ -3245,6 +3352,7 @@ def main():
     logging.info("Solar radius: %s", solar_radius.describe())
     app = QApplication(sys.argv)
     app.setApplicationName("Solar Eclipse Workbench Configuration Wizard")
+    _keep_running_on_unhandled_errors()
     apply_system_color_scheme(app)
 
     wizard = SEWConfigWizard()

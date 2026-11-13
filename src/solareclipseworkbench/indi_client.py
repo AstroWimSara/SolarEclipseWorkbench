@@ -297,6 +297,11 @@ class IndiClient:
                     self._handle(element)
         except (OSError, ET.ParseError) as exc:
             self._lost(exc)
+        except Exception as exc:
+            # A bug in handling one element must not leave a dead reader behind a client that looks
+            # connected: every change would then wait for its full timeout
+            logger.exception("The INDI reader for %s failed", self.describe())
+            self._lost(exc)
 
     def _handle(self, element: ET.Element) -> None:
         tag, attrs = element.tag, element.attrib

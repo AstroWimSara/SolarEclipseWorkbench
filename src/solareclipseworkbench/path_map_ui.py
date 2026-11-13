@@ -89,7 +89,12 @@ class EclipsePathMap(FigureCanvas):
         self.setParent(parent)
         FigureCanvas.updateGeometry(self)
 
-        _land().clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", linewidth=0.5, ax=self.ax)
+        try:
+            _land().clip([-180, -90, 180, 90]).plot(color="white", edgecolor="black", linewidth=0.5, ax=self.ax)
+        except Exception:
+            # The land polygons are downloaded the first time (geodatasets): offline at the site that fails.
+            # The path and the observer are still drawn, against the grid of longitude and latitude.
+            LOGGER.warning("Could not draw the land masses on the eclipse path map", exc_info=True)
         self.ax.set_xlabel("Longitude [°]")
         self.mpl_connect("resize_event", lambda _event: self.figure.tight_layout())
         self.ax.set_ylabel("Latitude [°]")

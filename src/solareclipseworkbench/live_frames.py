@@ -27,6 +27,8 @@ class LiveFrames:
         self._latest: Optional[tuple] = None
         self._jpeg: Optional[bytes] = None
         self._jpeg_time = 0.0
+        # Counts clear(), so a frame being decoded while the live view closes is not kept after it
+        self._generation = 0
         #: Name of the camera the frames come from
         self.camera = ""
 
@@ -41,6 +43,7 @@ class LiveFrames:
         """Forget the frames (the live view closed): old frames must not count as the sun now."""
         with self._lock:
             self._jpeg, self._latest = None, None
+            self._generation += 1
 
     def push_array(self, frame: np.ndarray) -> None:
         """A new frame that is already decoded."""
@@ -50,7 +53,7 @@ class LiveFrames:
 
     def latest(self) -> Optional[tuple]:
         with self._lock:
-            jpeg, when = self._jpeg, self._jpeg_time
+            jpeg, when, generation = self._jpeg, self._jpeg_time, self._generation
             if jpeg is None:
                 return self._latest
             self._jpeg = None
@@ -60,7 +63,12 @@ class LiveFrames:
             logger.debug("A live-view frame could not be decoded", exc_info=True)
             return self._latest
         with self._lock:
-            self._latest = (when, frame)
+            if self._generation != generation:
+                # Cleared while decoding (the live view closed): an old frame must not count as the sun now
+                return self._latest
+            if self._latest is None or when >= self._latest[0]:
+                # Not when another thread decoded a newer frame meanwhile
+                self._latest = (when, frame)
             return self._latest
 
 

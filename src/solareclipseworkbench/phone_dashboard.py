@@ -621,6 +621,10 @@ def _make_handler(server: DashboardServer):
     page = _DASHBOARD_HTML.encode()
 
     class _Handler(http.server.BaseHTTPRequestHandler):
+        # A client that connects and sends nothing, or announces a longer body than it sends,
+        # must not hold a server thread (and its socket) for ever
+        timeout = 15
+
         def log_message(self, fmt, *args):  # no access log: the page polls every second
             pass
 

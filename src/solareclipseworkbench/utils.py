@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
@@ -45,6 +46,9 @@ COMMANDS = {
 #: The relay serialises its own commands (see relay_trigger._serialised_on_trigger),
 #: so they are replayed as one more "camera".
 RELAY_BUSY_NAME = "the relay"
+
+#: Worker threads of the scheduler (see start_scheduler)
+SCHEDULER_WORKERS = 20
 
 
 @dataclass(frozen=True)
@@ -307,7 +311,7 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
     # Calculate simulated time
     if reference_moment:
         now = datetime.now(pytz.utc)
-        simulated_start = now + timedelta(minutes=minutes_to_reference_moment)
+        simulated_start = now + timedelta(minutes=minutes_to_reference_moment or 0)
 
         offset = simulation_offset(ref_moments, reference_moment, minutes_to_reference_moment, now)
     else:
@@ -320,8 +324,15 @@ def observe_solar_eclipse(ref_moments: dict, commands_filename: str, cameras: di
         controller.view.eclipse_visualization.set_offset(offset)
 
     # Schedule commands
-    unknown = schedule_commands(commands_filename, scheduler, ref_moments, cameras, controller, reference_moment,
-                                simulated_start, gps_time_offset=gps_time_offset)
+    try:
+        unknown = schedule_commands(commands_filename, scheduler, ref_moments, cameras, controller, reference_moment,
+                                    simulated_start, gps_time_offset=gps_time_offset)
+    except BaseException:
+        # The caller never gets this scheduler, so nothing could stop it: jobs
+        # already added would fire with no way to see or cancel them.
+        logging.exception("The script %s could not be scheduled", commands_filename)
+        scheduler.shutdown(wait=False)
+        raise
 
     return scheduler, unknown
 
@@ -344,11 +355,47 @@ def simulation_offset(ref_moments: dict, reference_moment: str, minutes_to_refer
              reference moment does not exist for this eclipse.
     """
 
-    if not reference_moment or not ref_moments or reference_moment not in ref_moments:
+    if not reference_moment or not ref_moments:
+        return timedelta(0)
+    try:
+        reference_time = reference_time_utc(ref_moments, reference_moment)
+    except KeyError:
         return timedelta(0)
     if now is None:
         now = datetime.now(pytz.utc)
-    return ref_moments[reference_moment].time_utc - timedelta(minutes=minutes_to_reference_moment or 0) - now
+    return reference_time - timedelta(minutes=minutes_to_reference_moment or 0) - now
+
+
+def reference_time_utc(reference_moments: dict, name: str) -> datetime:
+    """UTC time of the reference moment with this name, ignoring case (C2, c2; sunrise, SUNRISE).
+
+    The calculation names most moments in capitals but sunrise and sunset in
+    lower case, while scripts and the simulator write them either way.
+
+    Raises: KeyError(name) when the eclipse has no such moment.
+    """
+    if name in reference_moments:
+        return reference_moments[name].time_utc
+    wanted = str(name).strip().upper()
+    for key, moment in reference_moments.items():
+        if str(key).upper() == wanted:
+            return moment.time_utc
+    raise KeyError(name)
+
+
+def _latest_job_time(scheduler) -> Optional[datetime]:
+    """Run time of the latest job scheduled so far (the LAST reference moment), None without jobs."""
+    latest = None
+    for job in scheduler.get_jobs():
+        when = getattr(getattr(job, "trigger", None), "run_date", None) or getattr(job, "next_run_time", None)
+        if when is not None and (latest is None or when > latest):
+            latest = when
+    return latest
+
+
+def _report_bad_line(problem: str, cmd_str: str) -> None:
+    """A script line that cannot be scheduled: say so while the script can still be fixed."""
+    hardware_problems.report("Script", f"{problem}.  This line will not run.", detail=str(cmd_str).strip())
 
 
 def start_scheduler():
@@ -360,7 +407,11 @@ def start_scheduler():
     # Use the default misfire_grace_time (1 s).  Timing accuracy is enforced
     # inside _serialised_on_camera: if the USB lock is busy for more than
     # _MAX_LOCK_WAIT_S the shot is dropped rather than taken late.
-    scheduler = BackgroundScheduler()
+    # More worker threads than the default 10: every job holds a worker until it
+    # returns (a burst for many seconds, a voice prompt for as long as it plays,
+    # a shot waiting for the camera lock), and a job that has to wait for a free
+    # worker for more than the grace time is skipped as missed.
+    scheduler = BackgroundScheduler(executors={'default': ThreadPoolExecutor(max_workers=SCHEDULER_WORKERS)})
     scheduler.start()
 
     return scheduler
@@ -404,19 +455,29 @@ def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_m
     # Loop over all lines in script file
     busy_windows = []
     for cmd_str in script_file:
-        window = schedule_command(
-            scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start,
-            gps_time_offset=gps_time_offset, unknown_moments=unknown, timing_profiles=timing_profiles,
-            past_commands=past)
+        # One bad line must never cost the lines after it
+        try:
+            window = schedule_command(
+                scheduler, reference_moments, cmd_str, cameras, controller, reference_moment, simulated_start,
+                gps_time_offset=gps_time_offset, unknown_moments=unknown, timing_profiles=timing_profiles,
+                past_commands=past)
+        except Exception as exc:
+            logging.exception("Could not schedule the script line %s", cmd_str.strip())
+            _report_bad_line(f"Could not schedule this line ({type(exc).__name__}: {exc})", cmd_str)
+            continue
         if window is not None:
             busy_windows.append(window)
 
     report_past_commands(past)
     report_camera_conflicts(busy_windows)
     time_shift = gps_time_offset
-    if reference_moment:
-        time_shift += reference_moments[reference_moment.upper()].time_utc - simulated_start
-    warn_if_script_outlasts_totality(scheduler, reference_moments, time_shift)
+    try:
+        if reference_moment:
+            time_shift += reference_time_utc(reference_moments, reference_moment) - simulated_start
+    except KeyError:
+        logging.warning("Simulation reference moment %s does not exist for this eclipse", reference_moment)
+    else:
+        warn_if_script_outlasts_totality(scheduler, reference_moments, time_shift)
 
     return unknown
 
@@ -717,12 +778,29 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     # Use CSV reader to properly handle quoted fields with commas
     try:
         cmd_str_split = next(csv.reader([cmd_str], skipinitialspace=True))
-    except StopIteration:
+    except (StopIteration, csv.Error):
         logging.error(f"Could not parse command: {cmd_str}")
         return
-    
-    func_name = cmd_str_split[0].strip()
-    ref_moment = cmd_str_split[1].strip()
+
+    try:
+        func_name = cmd_str_split[0].strip()
+        ref_moment = cmd_str_split[1].strip()
+        sign = cmd_str_split[2].strip()    # + or -
+        hours, minutes, seconds = cmd_str_split[3].strip().split(":")   # hh:mm:ss.ss
+        delta = timedelta(hours=float(hours), minutes=float(minutes), seconds=float(seconds))
+    except (IndexError, ValueError):
+        logging.error("Could not parse command: %s", cmd_str.strip())
+        _report_bad_line("Could not read the reference moment and time of this line", cmd_str)
+        return
+    if sign not in ("+", "-"):
+        # Anything but "+" used to count as "-": the command would silently move to the other side of the contact
+        logging.error('The sign must be + or -, not "%s": %s', sign, cmd_str.strip())
+        _report_bad_line(f'The sign must be + or -, not "{sign}"', cmd_str)
+        return
+    if func_name not in COMMANDS:
+        logging.error("Unknown command %s: %s", func_name, cmd_str.strip())
+        _report_bad_line(f'Unknown command "{func_name}"', cmd_str)
+        return
 
     if ref_moment.upper() == "SUNRISE":
         ref_moment = "sunrise"
@@ -730,8 +808,6 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
     if ref_moment.upper() == "SUNSET":
         ref_moment = "sunset"
 
-    sign = cmd_str_split[2].strip()    # + or -
-    hours, minutes, seconds = cmd_str_split[3].strip().split(":")   # hh:mm:ss.ss
     description = cmd_str_split[-1].strip()
 
     logging.info(f"Scheduling {func_name} at {ref_moment}{sign}{cmd_str_split[3].strip()}")
@@ -805,6 +881,14 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
                     'in the wizard).  This command will be skipped.',
                     camera_name_in_script, available,
                 )
+                hardware_problems.report(
+                    "Script", f'No camera "{camera_name_in_script}" is connected: its commands will not run',
+                    detail=f"connected: {', '.join(available) or 'none'}", severity="warning")
+                return
+            except (IndexError, ValueError) as exc:
+                # A missing field, or an ISO, burst length or number of stops that is not a number
+                logging.error("Could not read the settings of %s: %s (%s)", func_name, cmd_str.strip(), exc)
+                _report_bad_line(f"Could not read the settings of this {func_name} ({exc})", cmd_str)
                 return
         else:
             # No camera dict at all: the script was loaded before any camera was
@@ -824,36 +908,36 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
 
     try:
-        if ref_moment == "LAST":
-            try:
-                # Get last job from scheduler
-                last_job = scheduler.get_jobs()[-1]
+        # How much earlier on the computer clock than on the time scale of the
+        # reference moments every command runs: the simulation offset, plus the
+        # GPS–computer time offset.  If GPS time is ahead of the computer
+        # (offset > 0), the computer is slow and would fire the shutter late.
+        # Scheduling earlier on the computer clock by subtracting the offset
+        # ensures the action happens at the correct moment.
+        shift = gps_time_offset
+        if reference_moment_for_simulation:
+            shift = shift + (reference_time_utc(reference_moments, reference_moment_for_simulation)
+                             - simulated_start)
 
-                # Get the last job's time
-                reference_moment = last_job.next_run_time.astimezone(pytz.utc)
-            except AttributeError:
+        if ref_moment.upper() == "LAST":
+            latest = _latest_job_time(scheduler)
+            if latest is None:
                 logging.error("No jobs found in the scheduler. Cannot determine LAST reference moment.")
+                _report_bad_line("LAST refers to the command before it, but no command was scheduled before it",
+                                 cmd_str)
                 return
+            # The jobs are on the computer clock: back on the time scale of the
+            # reference moments, or the shift would be applied twice
+            reference_moment = latest.astimezone(pytz.utc) + shift
         else:
-            reference_moment = reference_moments[ref_moment].time_utc
-
-
-        delta = timedelta(hours=float(hours), minutes=float(minutes), seconds=float(seconds))
+            reference_moment = reference_time_utc(reference_moments, ref_moment)
 
         if sign == "+":
             execution_time = reference_moment + delta
         else:
             execution_time = reference_moment - delta
 
-        if reference_moment_for_simulation:
-            diff = reference_moments[reference_moment_for_simulation.upper()].time_utc - simulated_start
-            execution_time = execution_time - diff
-
-        # Compensate for the GPS–computer time offset.
-        # If GPS time is ahead of the computer (offset > 0), the computer is slow
-        # and would fire the shutter late.  Scheduling earlier on the computer clock
-        # by subtracting the offset ensures the action happens at the correct moment.
-        execution_time = execution_time - gps_time_offset
+        execution_time = execution_time - shift
 
         now = datetime.now(timezone.utc)
         if execution_time.tzinfo is None:

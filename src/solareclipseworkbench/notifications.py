@@ -1,3 +1,4 @@
+import logging
 import subprocess
 import sys
 from difflib import get_close_matches
@@ -5,10 +6,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from solareclipseworkbench import hardware_problems
+
 if sys.platform != "darwin":
     from playsound3 import playsound
 
 SOUND_PATH = Path(__file__).parent.resolve() / "sound"
+
+# A voice prompt is a few seconds long; a player that hangs must not hold a scheduler worker for ever
+_PLAY_TIMEOUT_S = 30
 
 class Notifications(str, Enum):
     """ Enumeration of notifications that will be used for the voice prompt."""
@@ -129,11 +135,19 @@ def voice_prompt(notification: str) -> None:
         - notification: Notification
     """
 
-    sound_file = str(SOUND_PATH) + "/" + Notifications[notification.lstrip()].value
-    if sys.platform == "darwin":
-        subprocess.run(["afplay", sound_file], check=True)
-    else:
-        playsound(sound_file)
+    # strip(), as check_notification does: a name it accepted must also play
+    sound_file = str(SOUND_PATH) + "/" + Notifications[notification.strip()].value
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["afplay", sound_file], check=True, timeout=_PLAY_TIMEOUT_S)
+        else:
+            playsound(sound_file)
+    except Exception as exc:
+        # No audio device, a sound server that is not running, ...  The prompts
+        # that follow will fail the same way, so the user has to know now.
+        logging.error("Could not play the voice prompt %s: %s", notification.strip(), exc)
+        hardware_problems.report("Voice prompt", "Voice prompts cannot be played", detail=str(exc))
+        raise       # the scheduler logs the job as failed, for the run report
 
 
 def main():

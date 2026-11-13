@@ -604,6 +604,11 @@ class Console:
             self.out(f"Error: {exc}")
         except (ValueError, IndexError) as exc:
             self.out(f"Bad arguments: {exc}")
+        except Exception as exc:
+            # One failing command (a serial port that vanished, an INDI server that could not be started)
+            # must not end the session: that would also release the relay and drop the mount connection
+            logger.exception("The command %r failed", line)
+            self.out(f"Error: {exc}")
         return True
 
     def run(self) -> None:

@@ -337,9 +337,12 @@ class SortImagesDialog(_TaskDialog):
             plan = self._plan(images, output, cameras, offset, progress)
             if not plan.placements:
                 return plan, None
-            manifest = image_sorter.apply_plan(plan, output, mode, include_unmatched, progress)
-            if mode == "move":
-                self._infos = None      # the images are not there any more
+            try:
+                manifest = image_sorter.apply_plan(plan, output, mode, include_unmatched, progress)
+            finally:
+                if mode == "move":
+                    # The images are not there any more, also after a Cancel or an error half-way
+                    self._infos = None
             return plan, manifest
 
         self.start(work, self._show_sorted)

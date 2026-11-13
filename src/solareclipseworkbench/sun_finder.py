@@ -450,6 +450,12 @@ def find_sun(grey: np.ndarray, radius_hint: Optional[float] = None, seed: int = 
     grey = sun_channel(grey)
     if grey.ndim != 2 or min(grey.shape) < 16:
         return _no_sun("not an image")
+    if grey.dtype.kind == "f" and not np.isfinite(grey).all():
+        # A float frame (a 32-bit TIFF) with NaN or infinite pixels: np.histogram refuses those
+        finite = np.isfinite(grey)
+        if not finite.any():
+            return _no_sun("no finite pixels")
+        grey = np.where(finite, grey, float(grey[finite].min()))
     sample = grey[::4, ::4].astype(np.float32)
     sky = float(np.median(sample))
     noise = 1.4826 * float(np.median(np.abs(sample - sky)))
