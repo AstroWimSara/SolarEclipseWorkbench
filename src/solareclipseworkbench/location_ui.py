@@ -9,6 +9,7 @@ Provides:
       an optional address-search bar and coordinate fields.  Used by both
       gui.py (LocationPopup) and wizard.py (EclipseConfigPage).
 """
+import copy
 import json
 import logging
 import math
@@ -17,7 +18,12 @@ import time
 import requests
 from datetime import timedelta
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
+
+try:
+    import fcntl
+except ImportError:  # Windows (native): no advisory locks, the merge still applies
+    fcntl = None
 
 import qrcode
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -112,12 +118,73 @@ def _report_save_failure(config_file: Path, error: OSError) -> None:
                                                      "Settings not saved", text))
 
 
+_DELETED = object()
+
+
+def _named_items(value) -> Optional[Dict[str, Dict]]:
+    """Return {name: item} for a list of dicts with unique string names, else None."""
+    if not isinstance(value, list):
+        return None
+    items = {}
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or item["name"] in items:
+            return None
+        items[item["name"]] = item
+    return items
+
+
+def _merge_config(base: Any, mine: Any, theirs: Any) -> Any:
+    """Three-way merge of a JSON configuration.
+
+    ``base`` is what this process read, ``mine`` what it holds now and
+    ``theirs`` what is on disk now (written by another window or by
+    ``sew``/``sew_wizard`` running at the same time).  What only one side
+    changed is kept; where both changed the same value, this process wins.
+    Dicts are merged per key, lists of named entries (saved cameras and
+    locations) per name, anything else as a whole.  ``_DELETED`` stands for a
+    missing key or entry.
+    """
+    if mine == base:
+        return theirs
+    if theirs == base or mine is _DELETED or theirs is _DELETED:
+        return mine
+    if isinstance(mine, dict) and isinstance(theirs, dict):
+        base_dict = base if isinstance(base, dict) else {}
+        merged = {}
+        for key in list(theirs) + [k for k in mine if k not in theirs]:
+            value = _merge_config(base_dict.get(key, _DELETED), mine.get(key, _DELETED),
+                                  theirs.get(key, _DELETED))
+            if value is not _DELETED:
+                merged[key] = value
+        return merged
+    mine_items, theirs_items = _named_items(mine), _named_items(theirs)
+    if mine_items is not None and theirs_items is not None:
+        base_items = _named_items(base) or {}
+        merged = []
+        for name in list(theirs_items) + [n for n in mine_items if n not in theirs_items]:
+            value = _merge_config(base_items.get(name, _DELETED), mine_items.get(name, _DELETED),
+                                  theirs_items.get(name, _DELETED))
+            if value is not _DELETED:
+                merged.append(value)
+        return merged
+    return mine
+
+
 class ConfigManager:
-    """Manages saving and loading of camera and location configurations."""
+    """Manages saving and loading of camera and location configurations.
+
+    Several ConfigManagers can share the file: windows of one program each have
+    their own, and ``sew`` and ``sew_wizard`` can run at the same time.  A save
+    therefore merges this manager's changes into what is on disk now, under a
+    file lock, instead of writing its own (possibly outdated) copy over it.
+    """
 
     def __init__(self):
         self.config_file = Path.home() / ".sew_wizard_config.json"
         self.config = self._load_config()
+        # What the file held when it was last read or written by this manager:
+        # the common ancestor for merging on the next save.
+        self._base = copy.deepcopy(self.config)
 
     def _load_config(self) -> Dict:
         """Load configuration from file, or create a default one."""
@@ -205,11 +272,19 @@ class ConfigManager:
         # truncated file behind (which would lose every saved camera and location).
         target = Path(os.path.realpath(self.config_file))
         temporary = target.with_name(target.name + ".tmp")
+        lock = None
         try:
-            text = json.dumps(self.config, indent=2)
+            lock = self._lock(target)
+            merged = self._merge_with_disk(target)
+            text = json.dumps(merged, indent=2)
             with open(temporary, 'w', encoding='utf-8') as f:
                 f.write(text)
             os.replace(temporary, target)
+            # Take over what other programs saved, keeping the same dict object
+            # (pages that share this manager hold on to it).
+            self.config.clear()
+            self.config.update(merged)
+            self._base = copy.deepcopy(merged)
         except (OSError, TypeError, ValueError) as e:
             try:
                 temporary.unlink()
@@ -219,6 +294,46 @@ class ConfigManager:
             if not ConfigManager._save_failure_reported:
                 ConfigManager._save_failure_reported = True
                 _report_save_failure(self.config_file, e)
+        finally:
+            if lock is not None:
+                lock.close()  # releases the lock
+
+    @staticmethod
+    def _lock(target: Path):
+        """Take an exclusive lock on ``<config>.lock``; return the open file (closing it unlocks).
+
+        Returns None where locks are not available, or the lock file cannot be
+        made (the save itself then reports what is wrong).
+        """
+        if fcntl is None:
+            return None
+        try:
+            lock = open(target.with_name(target.name + ".lock"), 'a')
+        except OSError:
+            return None
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except OSError:
+            lock.close()
+            return None
+        return lock
+
+    def _merge_with_disk(self, target: Path) -> Dict:
+        """Return this manager's configuration merged into the one on disk now."""
+        base = getattr(self, "_base", None)
+        if base is None:
+            return copy.deepcopy(self.config)
+        try:
+            with open(target, 'r', encoding='utf-8') as f:
+                theirs = json.load(f)
+        except FileNotFoundError:
+            return copy.deepcopy(self.config)
+        except (OSError, ValueError) as e:
+            logging.warning("Could not read %s before saving (%s); it is overwritten", target, e)
+            return copy.deepcopy(self.config)
+        if not isinstance(theirs, dict):
+            return copy.deepcopy(self.config)
+        return copy.deepcopy(_merge_config(base, self.config, theirs))
 
     # ------------------------------------------------------------------
     # Camera helpers

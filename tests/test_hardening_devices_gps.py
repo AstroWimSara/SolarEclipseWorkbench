@@ -131,3 +131,57 @@ def test_phone_worker_stopped_before_it_runs_ends():
     runner.start()
     runner.join(3)
     assert not runner.is_alive()
+
+
+def test_web_gps_server_requires_access_key(monkeypatch):
+    """Without the key in the URL, nobody else on the network can read the page or send a location."""
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setattr(phone_gps, "_lan_ip", lambda: "127.0.0.1")
+    with socket_free_port() as port:
+        pass
+    fixes = []
+    server = phone_gps.WebGpsServer(port=port, on_fix=fixes.append)
+    server.start()
+    try:
+        assert f"?k={server.key}" in server.lan_url and f"?k={server.key}" in server.local_url
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        base = f"{server.proto}://127.0.0.1:{port}"
+
+        def get(path):
+            try:
+                with urllib.request.urlopen(base + path, context=ctx if server.proto == "https" else None,
+                                            timeout=5) as response:
+                    return response.status, response.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, ""
+
+        assert get("/")[0] == 403
+        assert get("/?k=wrong")[0] == 403
+        assert get("/location?lat=1&lon=2")[0] == 403
+        assert get("/location?lat=1&lon=2&k=wrong")[0] == 403
+        assert not fixes
+
+        status, page = get(f"/?k={server.key}")
+        assert status == 200 and f'name="k" value="{server.key}"' in page
+        assert get(f"/location?lat=1&lon=2&k={server.key}")[0] == 200
+        assert fixes and fixes[0]["lat"] == 1.0
+    finally:
+        server.stop()
+
+
+class socket_free_port:
+    """Context manager that yields a free TCP port on localhost."""
+
+    def __enter__(self):
+        import socket
+        self._sock = socket.socket()
+        self._sock.bind(("127.0.0.1", 0))
+        return self._sock.getsockname()[1]
+
+    def __exit__(self, *exc):
+        self._sock.close()

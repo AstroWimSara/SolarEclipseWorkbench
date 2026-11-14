@@ -32,7 +32,9 @@ simplest case.
 
 1. Connect both devices to the same WiFi network.
 2. Click **📱 Get GPS from Phone** (or run the script).
-3. Open the URL shown (e.g. `https://192.168.1.42:8765`) on your phone.
+3. Scan the QR code, or open the URL shown (e.g. `https://192.168.1.42:8765/?k=Xy3...`) on your phone.
+   Type the whole URL: the `?k=...` part is a random access key, and without it the page answers
+   "Forbidden", so nobody else on the network can send a false location.
 4. Accept the certificate warning (see [below](#accepting-the-certificate-warning)).
 5. Tap **📍 Get My Location** and allow location access when prompted.
 6. The page submits the coordinates and you can close the browser.
@@ -149,13 +151,13 @@ and exits.
 GPS capture server running (HTTPS).
 
 From your PHONE (same WiFi or phone hotspot):
-    https://10.33.178.15:8765
+    https://10.33.178.15:8765/?k=q3Vn8xT0aLk2
 
   Certificate warning: tap 'Advanced' → 'Proceed' (Chrome)
                     or 'Show Details' → 'Visit this website' (Safari)
 
 From this LAPTOP (to test):
-    https://localhost:8765
+    https://localhost:8765/?k=q3Vn8xT0aLk2
 
   → Location received from 10.33.178.15: lat=50.830412, lon=4.863891
 

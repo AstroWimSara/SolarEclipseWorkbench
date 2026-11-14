@@ -6,6 +6,10 @@ The page uses the browser's Geolocation API and submits coordinates via
 a plain HTML form GET request (immune to SSL/CORS blocking on self-signed
 certificates).
 
+The URLs carry a random access key (``?k=...``, also in the QR code).  Requests
+without it get 403, so someone else on the same network cannot send a false
+location.
+
 Typical usage
 -------------
 ::
@@ -27,8 +31,10 @@ with keys ``lat``, ``lon``, ``alt``, ``accuracy`` when coordinates arrive.
 
 from __future__ import annotations
 
+import hmac
 import http.server
 import os
+import secrets
 import socket
 import ssl
 import subprocess
@@ -93,6 +99,7 @@ _WEB_HTML = """\
       <label>Altitude in metres (optional)</label>
       <input type="text" name="alt" id="malt" placeholder="38.0">
       <input type="hidden" name="accuracy" value="">
+      <input type="hidden" name="k" value="__ACCESS_KEY__">
       <br>
       <button type="submit">&#x2714; Send location</button>
     </form>
@@ -198,6 +205,9 @@ class WebGpsServer:
     on_started:
         Optional callback called when the server is listening.  Receives
         ``(lan_url, localhost_url)`` as strings.
+    key:
+        Access key that every request must carry; a random one when not given.
+        It is part of ``lan_url`` and ``local_url``.
     """
 
     def __init__(
@@ -205,8 +215,10 @@ class WebGpsServer:
         port: int = 8765,
         on_fix: Optional[Callable[[dict], None]] = None,
         on_started: Optional[Callable[[str, str], None]] = None,
+        key: Optional[str] = None,
     ) -> None:
         self.port = port
+        self.key = key or secrets.token_urlsafe(9)
         self._on_fix = on_fix
         self._on_started = on_started
 
@@ -254,10 +266,11 @@ class WebGpsServer:
                   "Falling back to HTTP (geolocation may not work on mobile).")
 
         self.proto = "https" if https_ok else "http"
-        self.lan_url = f"{self.proto}://{lan_ip}:{self.port}"
-        self.local_url = f"{self.proto}://localhost:{self.port}"
+        self.lan_url = f"{self.proto}://{lan_ip}:{self.port}/?k={self.key}"
+        self.local_url = f"{self.proto}://localhost:{self.port}/?k={self.key}"
 
-        html_bytes = _WEB_HTML.encode()
+        html_bytes = _WEB_HTML.replace("__ACCESS_KEY__", self.key).encode()
+        key_ok = self.key_ok
         received = self._received
         event = self._event
         on_fix = self._on_fix
@@ -278,8 +291,18 @@ class WebGpsServer:
                 self.end_headers()
 
             def do_GET(self):
-                from urllib.parse import urlparse
+                from urllib.parse import parse_qs, urlparse
                 parsed = urlparse(self.path)
+
+                if not key_ok(parse_qs(parsed.query).get("k", [None])[0]):
+                    body = (b"Forbidden: open the URL with its key "
+                            b"(scan the QR code in Solar Eclipse Workbench)")
+                    self.send_response(403)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
 
                 if parsed.path == "/location":
                     try:
@@ -330,6 +353,10 @@ class WebGpsServer:
 
         if self._on_started:
             self._on_started(self.lan_url, self.local_url)
+
+    def key_ok(self, key: Optional[str]) -> bool:
+        """Whether *key* is this server's access key (compared in constant time)."""
+        return bool(key) and hmac.compare_digest(str(key), self.key)
 
     def wait_for_fix(self, timeout: Optional[float] = 300.0) -> Optional[dict]:
         """Block until coordinates arrive or *timeout* seconds elapse.

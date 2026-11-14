@@ -33,8 +33,6 @@ def plot_location(longitude: float, latitude: float):
     plt.show()
 
 
-# Durango, Mexico
-latitude = 24.83333
-longitude = -104.83333
-
-plot_location(longitude, latitude)
+if __name__ == "__main__":
+    # Demo: Durango, Mexico
+    plot_location(longitude=-104.83333, latitude=24.83333)
