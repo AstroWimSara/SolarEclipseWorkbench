@@ -50,6 +50,15 @@ RELAY_BUSY_NAME = "the relay"
 #: Worker threads of the scheduler (see start_scheduler)
 SCHEDULER_WORKERS = 20
 
+#: The scheduler executor the mount commands run on, apart from the camera
+#: commands: a hung INDI server then ties up only this pool, never the workers
+#: a shot needs (see ensure_mount_executor).
+MOUNT_EXECUTOR = 'mount'
+
+#: Worker threads of the mount executor.  One: the commands go to one mount and
+#: must run in the order of the script (a track before the stop that follows it).
+MOUNT_WORKERS = 1
+
 
 @dataclass(frozen=True)
 class CameraBusyWindow:
@@ -411,10 +420,27 @@ def start_scheduler():
     # returns (a burst for many seconds, a voice prompt for as long as it plays,
     # a shot waiting for the camera lock), and a job that has to wait for a free
     # worker for more than the grace time is skipped as missed.
-    scheduler = BackgroundScheduler(executors={'default': ThreadPoolExecutor(max_workers=SCHEDULER_WORKERS)})
+    # The mount commands get a pool of their own: a mount job waiting on a hung
+    # INDI server must not take a worker that a shot needs.
+    scheduler = BackgroundScheduler(executors={'default': ThreadPoolExecutor(max_workers=SCHEDULER_WORKERS),
+                                               MOUNT_EXECUTOR: ThreadPoolExecutor(max_workers=MOUNT_WORKERS)})
     scheduler.start()
 
     return scheduler
+
+
+def ensure_mount_executor(scheduler) -> str:
+    """Give ``scheduler`` the executor of the mount commands if it has none yet, and return its name.
+
+    A scheduler made elsewhere than in start_scheduler (the tests, an older
+    caller) would otherwise fail every mount job at the moment it fires, when
+    the executor is looked up.
+    """
+    try:
+        scheduler._lookup_executor(MOUNT_EXECUTOR)
+    except KeyError:
+        scheduler.add_executor(ThreadPoolExecutor(max_workers=MOUNT_WORKERS), MOUNT_EXECUTOR)
+    return MOUNT_EXECUTOR
 
 
 def schedule_commands(filename: str, scheduler: BackgroundScheduler, reference_moments: dict,
@@ -949,7 +975,10 @@ def schedule_command(scheduler: BackgroundScheduler, reference_moments: dict, cm
 
         # Camera commands log how long after this time they released the shutter
         kwargs = {'scheduled_at': execution_time} if func_name in TIMED_CAMERA_COMMANDS else None
-        job = scheduler.add_job(func, trigger=trigger, args=args, kwargs=kwargs, name=description)
+        # A mount command runs on its own executor, so a hung INDI server cannot delay a shot
+        executor = ensure_mount_executor(scheduler) if HARDWARE_COMMANDS.get(func_name) == 'mount' else 'default'
+        job = scheduler.add_job(func, trigger=trigger, args=args, kwargs=kwargs, name=description,
+                                executor=executor)
         JOB_COMMANDS[job.id] = func_name
         JOB_REFERENCES[job.id] = ref_moment
         scheduled_job = (job.id, execution_time)

@@ -137,6 +137,11 @@ class IndiClient:
                       message a driver sends.  Must return quickly.
     """
 
+    #: Seconds a send may block before the server counts as hung and the
+    #: connection as lost.  A send only blocks when the server has stopped
+    #: reading and the socket buffers are full, so this is generous.
+    SEND_TIMEOUT_S = 5.0
+
     def __init__(self, host: str = "localhost", port: int = DEFAULT_PORT, timeout: float = 5.0,
                  on_message: Optional[Callable[[str, str], None]] = None):
         self.host, self.port = host, int(port)
@@ -152,7 +157,10 @@ class IndiClient:
             self._sock = socket.create_connection((self.host, self.port), timeout=timeout)
         except OSError as exc:
             raise IndiError(f"no INDI server at {self.host}:{self.port} ({exc})") from exc
-        self._sock.settimeout(None)
+        # A send to a server that stopped reading gives up after SEND_TIMEOUT_S
+        # instead of blocking the calling thread (a scheduler worker) forever.
+        # The same timeout applies to the reader's recv, which just reads on.
+        self._sock.settimeout(self.SEND_TIMEOUT_S)
         self._reader = threading.Thread(target=self._read, name=f"indi-{self.host}:{self.port}", daemon=True)
         self._reader.start()
         self._send('<getProperties version="1.7"/>')
@@ -289,7 +297,13 @@ class IndiClient:
         stream = XmlStream()
         try:
             while True:
-                data = self._sock.recv(65536)
+                try:
+                    data = self._sock.recv(65536)
+                except TimeoutError:
+                    # Nothing to read for a while (the socket timeout is there for the sends)
+                    if self._closed:
+                        return
+                    continue
                 if not data:
                     self._lost("the server closed the connection")
                     return

@@ -19,7 +19,8 @@ from solareclipseworkbench.mount import (Mount, MountError, distance_km, find_mo
                                          mount_stop, mount_track, parse_address)
 from solareclipseworkbench.reference_moments import ReferenceMomentInfo
 from solareclipseworkbench.script_timeline import build_timeline
-from solareclipseworkbench.utils import COMMANDS, DeviceAtRuntime, schedule_commands
+from solareclipseworkbench.utils import (COMMANDS, MOUNT_EXECUTOR, DeviceAtRuntime, ensure_mount_executor,
+                                         schedule_commands, start_scheduler)
 
 
 @pytest.fixture(autouse=True)
@@ -422,6 +423,73 @@ def test_mount_commands_in_a_script(tmp_path, server, mount):
     finally:
         if scheduler.running:
             scheduler.shutdown(wait=False)
+
+
+def test_mount_commands_run_on_their_own_executor(tmp_path):
+    """A mount job waiting on a hung INDI server must not hold a worker a shot needs."""
+    script = tmp_path / "script.txt"
+    script.write_text('mount_track, C2, -, 1:00:00.0, "track"\n'
+                      'voice_prompt, C2, -, 0:59:00.0, C2_IN_10_MINUTES, "prompt"\n')
+    c2 = datetime.datetime.now(timezone.utc) + timedelta(hours=2)
+    moments = {"C2": ReferenceMomentInfo(c2, Angle(degrees=250.0), 30.0, timezone.utc)}
+    # A scheduler made without the mount executor gets it when a mount job is scheduled
+    scheduler = BackgroundScheduler()
+    try:
+        schedule_commands(str(script), scheduler, moments, {}, None, None, None)
+        jobs = {job.name: job for job in scheduler.get_jobs()}
+        assert jobs["track"].executor == MOUNT_EXECUTOR
+        assert jobs["prompt"].executor == "default"
+        scheduler._lookup_executor(MOUNT_EXECUTOR)
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+
+def test_the_running_scheduler_has_a_mount_executor():
+    scheduler = start_scheduler()
+    try:
+        assert ensure_mount_executor(scheduler) == MOUNT_EXECUTOR
+        scheduler._lookup_executor(MOUNT_EXECUTOR)
+        scheduler._lookup_executor("default")
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def test_a_send_to_a_hung_server_times_out(monkeypatch):
+    """A server that accepts the connection but never reads: the send gives up instead of blocking."""
+    monkeypatch.setattr(IndiClient, "SEND_TIMEOUT_S", 0.5)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    client = IndiClient("127.0.0.1", listener.getsockname()[1])
+    accepted, _ = listener.accept()
+    try:
+        # Small buffers, so they fill up quickly when nothing is read
+        client._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        accepted.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        start = time.monotonic()
+        with pytest.raises(IndiError, match="lost"):
+            for _ in range(10000):
+                client._send("<x>" + "a" * 65536 + "</x>")
+        assert time.monotonic() - start < 10
+        assert not client.connected
+    finally:
+        client.close()
+        accepted.close()
+        listener.close()
+
+
+def test_a_quiet_server_does_not_drop_the_connection(server, monkeypatch):
+    """The send timeout also applies to the reader, which must read on through a quiet spell."""
+    monkeypatch.setattr(IndiClient, "SEND_TIMEOUT_S", 0.2)
+    client = IndiClient("127.0.0.1", server.port)
+    try:
+        client.wait_settled()
+        time.sleep(0.8)
+        assert client.connected
+        assert find_mounts(client) == [DEVICE]
+    finally:
+        client.close()
 
 
 def test_mount_commands_keep_no_camera_busy_in_the_timeline(tmp_path):
