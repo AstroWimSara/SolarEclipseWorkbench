@@ -112,7 +112,7 @@ def test_calibrate_and_keep_the_sun_centred_from_the_mount_window(controller, mo
 
         popup.centring_checkbox.setChecked(True)
         assert controller.centrer is not None and controller.centrer.running
-        controller.centrer.interval_s = 1.0         # look every second instead of every 30 s
+        controller.centrer.interval_s = 1.0         # look every second instead of every 15 s
         # The simulated sun starts 35 px off the middle: it is brought back
         assert _until(lambda: controller.centring_status().state == CENTRED, 90), \
             controller.centring_status().message

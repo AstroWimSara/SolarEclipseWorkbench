@@ -133,10 +133,11 @@ iOptron says the HAZ mounts work with a third-party INDI driver on Linux and mac
 | H.4b Track sun once | **Stop tracking**, then **Track sun** once; repeat three times, and once after a **Park** | Tracks after one click each time (it may take up to a few seconds).  The log shows "switched tracking off again … (try 1 of 4)" when the driver dropped it.  Note how many tries it took | ✅ Works from the first click (the log shows three tries, note 8) |
 | H.5 Directions | At the slowest speed, hold each nudge button 2 s; watch the axes | **Which axis does N/S move, and which E/W: altitude/azimuth, or RA/Dec?**  Note it, and whether "N" goes up or down | N goes down, S up, E left, W right (issue 4) |
 | H.5b Reverse | Tick **Reverse N/S** in the `Mount` window; hold **▲ N**, then **▼ S**.  Disconnect, connect again, and on the phone | N goes up now, S down; still ticked after connecting again, and the phone's buttons move the same way | ✅ |
-| H.6 Guide pulses | `sew_hardware`: `mount guide N 2000`, `mount guide E 2000` | Do they move the mount at all in alt-az mode?  Which axis?  (Without guide pulses there is no centring.)  Too small to see by eye: check in the live view | ⏳ Accepted by the driver; whether they move the mount: with the camera (H.7) |
-| H.7 Calibrate | On the sun (filter!), roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate | ⏳ |
+| H.6 Guide pulses | `sew_hardware`: `mount guide N 2000`, `mount guide E 2000` | Do they move the mount at all in alt-az mode?  Which axis?  (Without guide pulses there is no centring.)  Too small to see by eye: check in the live view | ❌ 2026-11-14, alt-az mode: accepted by the driver ("Ok"), but the mount does not move: 90 s of guiding E or N did not change its RA/Dec (issue 5) |
+| H.7 Calibrate | On the sun (filter!), roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate | ❌ 2026-11-14 (Canon EOS 80D on a PhotoLine 80): failed, see issue 5 |
+| H.7b Calibrate with slews | **Track sun**, wait until the status says tracking, sun roughly centred, **Calibrate** | After about 30 s of guiding E: "the mount ignores guide pulses: calibrating again with slews at the 1x rate instead"; then "slewing W at the 1x rate brought the sun back only …: trying the 2x rate", and a calibration "slewing at the 2x rate east moves the sun … (… px south, … px west)", west about a third of east.  **Track sun** and **Stop tracking** are greyed out meanwhile.  Then **Keep the sun centred**: the corrections say "slewing at the 1x rate".  If the sun is "not found", send the `no-sun-*.png` from the log folder | ✅ 2026-11-14 (log `sew-20261114-130913Z.log`): pulses found ignored, 1x and 2x did not move the sun west, calibrated at 3x (fast rate 4x).  The centring brought the sun in from 101 px and held it within 3-7 px for 18 min (looks every 30 s, now 15 s).  Behind a tree the sun was "not found" (soft edge) and the mount was left alone, as it should |
 | H.8 Field rotation | **Keep the sun centred** for at least an hour (C.F1); then **Calibrate** again | **Compare the direction with H.7.**  If it turned by several degrees, the guide pulses move in RA/Dec while the sky turns in the frame: tell me, and the calibration will be turned with the sky (from the location, the time and the sun's position).  If it did not turn, alt-az corrections need nothing more | ⏳ |
-| H.9 After 1-2 hours | Leave the centring on | "centred" most of the time; or after a while "… did not move the sun the way they should: calibrate again" (field rotation, see H.8) | ⏳ |
+| H.9 After 1-2 hours | Leave the centring on | "centred" most of the time; or after a while "… did not move the sun the way they should: calibrate again" (field rotation, see H.8) | ⏳ 18 min on 2026-11-14 (H.7b) without problems; 1-2 hours still to do |
 
 ### Results so far
 
@@ -160,6 +161,37 @@ From the tests above and the sew log of 2026-11-07 (`sew-20261107-143421Z.log`):
    mount facing south; N/S is the altitude, the wrong way round.  For the centring this does not
    matter (the calibration measures it).  **Fixed:** **Reverse N/S** and **Reverse E/W** in the
    `Mount` window swap the nudge buttons, kept for each mount.  To retest: H.5b.
+5. **Calibration fails** (H.6, H.7; log `sew-20261114-114028Z.log`, outdoors, alt-az mode, Wi-Fi).
+   Three things went wrong:
+   - The HAZ31 in alt-az mode **ignores guide pulses**.  Every `TIMED_GUIDE` was answered "Ok",
+     but during 90 s of guiding E and then 90 s N the mount's RA and Dec stayed within a few
+     arcseconds (0.5× sidereal predicts 675″).  What the calibration measured (8 px in 90 s) was
+     the sky drifting: guiding W as long moved the sun on the same way ("came back -72%").
+     Slews (`TELESCOPE_MOTION`, the N/S/E/W buttons) do move it.  **Fixed:** the calibration
+     checks the mount's coordinates after 20 s of guiding, and a return leg that moves the sun on
+     instead of back.  When the pulses are ignored it calibrates again with timed slews at the
+     slowest slew rate, and the centring then corrects with those slews.
+   - **Tracking was off** during two of the runs (switched off from the `Mount` window at 11:57:10,
+     on again at 12:01:03), so the sun drifted out of the frame at the sidereal rate.  **Fixed:**
+     the calibration refuses a mount that does not track (tracking that is back within 5 s counts,
+     for this driver's flicker), and **Track sun**, **Stop tracking** and **Park** are greyed out
+     while it calibrates.
+   - After the first `take_picture` of a simulation the sun finder found "nothing above the noise"
+     in the live view, although the sun was still visible there.  The mount did not move (its
+     coordinates stayed the same).  Not explained yet.  **Changed:** the log now gives the
+     brightness of the frame with that message, and the first frame in which the calibration or
+     the centring does not find the sun is saved as `no-sun-*.png` next to the log file.
+   To retest: H.7b.
+6. **Centring with slews does not get closer than about 8 px** (2026-11-14 13:46, log
+   `sew-20261114-123919Z.log`).  The calibration fell back to slews at 1x and the coarse moves at
+   2x brought the sun from 118 px to 8 px, but then every correction W at 1x did nothing, and the
+   centring stopped after three ("did not move the sun the way they should").  The mount's RA
+   shows why: at 1x it slews E (2× sidereal: 3.1 px/s) but not W (the RA stays the same; the
+   calibration's own return leg came back -23 %).  At 2x it slews 3× sidereal E and 1× W.  The
+   HAZ31 in alt-az mode seems to turn its motor at the slew rate against the ground, with the sky
+   adding or taking 1× sidereal.  **Fixed:** W and S are measured on their own, corrections use
+   the speed of the direction they move in, and a rate that hardly moves one way is skipped for
+   the next one up (2x for the HAZ31; the fast rate is then 3x).  To retest: H.7b.
 
 ## Your mount: SkyWatcher AZ-GTi
 

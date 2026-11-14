@@ -515,6 +515,16 @@ class Mount:
         with self._lock:
             self._change(prop, {element: float(milliseconds)}, wait_done=False)
 
+    def guide_rate(self) -> Optional[tuple]:
+        """(right ascension, declination) guide rate as multiples of the sidereal rate; None when unknown."""
+        prop = self.client.property(self.device, "GUIDE_RATE")
+        if prop is None:
+            return None
+        ra, dec = prop.values.get("RA_GUIDE_RATE"), prop.values.get("DE_GUIDE_RATE")
+        if ra is None and dec is None:
+            return None
+        return ra if ra is not None else dec, dec if dec is not None else ra
+
     def nudge_start(self, direction: str) -> None:
         """Start moving towards N, S, E or W, until nudge_stop."""
         _, _, prop, element = self._direction(direction)

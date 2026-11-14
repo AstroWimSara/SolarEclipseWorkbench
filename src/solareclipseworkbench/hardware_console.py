@@ -117,7 +117,7 @@ Telescope mount (through an INDI server)
   mount centre                  find the sun and guide it to the middle of the frame, once
                                 (needs 'mount calibrate' first)
   mount follow [seconds]        keep the sun in the middle: a look every 'seconds' (default
-                                30), a correction when it is more than 2 px off, until Ctrl-C
+                                15), a correction when it is more than 2 px off, until Ctrl-C
   mount sun [goto]              where the sun is now (RA/Dec of date); with 'goto', point a
                                 simulator there (INDI's telescope simulator starts at the pole).
                                 Never a real mount: point that at the sun by hand
@@ -481,11 +481,11 @@ class Console:
         self.out(f"Now at {x:.1f}, {y:.1f}: {x - target[0]:+.1f}, {y - target[1]:+.1f} px from the middle.")
 
     def _mount_follow(self, args) -> None:
-        from solareclipseworkbench.centring import Centrer
+        from solareclipseworkbench.centring import CENTRING_INTERVAL_S, Centrer
         if self.calibration is None:
             self.out("Not calibrated.  Run 'mount calibrate' first.")
             return
-        interval = float(args[0]) if args else 30.0
+        interval = float(args[0]) if args else CENTRING_INTERVAL_S
         start = time.monotonic()
 
         def report(status):

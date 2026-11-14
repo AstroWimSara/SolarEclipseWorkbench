@@ -3,6 +3,7 @@ import math
 import threading
 import time
 
+import numpy as np
 import pytest
 
 from solareclipseworkbench.centring import Calibration, CalibrationError, Calibrator, measure
@@ -19,7 +20,7 @@ class FakeMount:
     """
 
     def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True, fast=None,
-                 tick_s=0.0):
+                 tick_s=0.0, slow=15.0, guide_rates=None, tracking=None, slew_bias=0.0):
         self.ra_h, self.dec_deg = ra_h, dec_deg
         self.rate = rate
         self.scale = scale or {}
@@ -33,6 +34,18 @@ class FakeMount:
         #: Moves last whole steps of this length, as INDI's telescope simulator moves (0: exact)
         self.tick_s = tick_s
         self._moving = {}           # direction → (time.monotonic() it started, rate)
+        #: Speed of the slowest slew rate, in arcseconds per second
+        self.slow = slow
+        #: (RA, Dec) guide rate as multiples of sidereal, as an INDI driver reports it; None: not reported
+        self.guide_rates = guide_rates
+        if tracking is not None:
+            self.tracking = tracking
+        #: Slews east are this much faster and slews west this much slower (arcseconds a second), as an
+        #: alt-az iOptron slews: the motor turns at the rate against the ground, the sky drifts west
+        self.slew_bias = slew_bias
+
+    def guide_rate(self):
+        return self.guide_rates
 
     def slew_rates(self):
         return [("1x", "Guide"), ("2x", "Centering"), ("3x", "Find")] if self.fast else []
@@ -51,8 +64,9 @@ class FakeMount:
         if self.tick_s:
             seconds = math.floor(seconds / self.tick_s) * self.tick_s
         self.motions.append((direction, seconds))
-        speed = {"1x": 15.0, "2x": self.fast, "3x": self.fast * 8}[started[1]]
-        self._shift(direction, speed * seconds)
+        speed = {"1x": self.slow, "2x": self.fast, "3x": self.fast * 8}[started[1]]
+        speed += {"E": self.slew_bias, "W": -self.slew_bias}.get(direction, 0.0)
+        self._shift(direction, max(speed, 0.0) * seconds)
 
     def position(self):
         return self.ra_h, self.dec_deg
@@ -321,3 +335,110 @@ def test_calibrating_the_simulated_indi_mount():
         mount.close()
     finally:
         server.close()
+
+
+# ------------------------------------------------------ mounts that ignore guide pulses
+
+
+class DriftingMount(FakeMount):
+    """Guide pulses do nothing, but the sky drifts east while they last (a mount that does not track)."""
+
+    def guide(self, direction, milliseconds):
+        self.pulses.append((direction, milliseconds))
+        self._shift("E", self.rate * milliseconds / 1000)
+
+
+def test_a_mount_that_does_not_track_is_not_calibrated():
+    mount = FakeMount(tracking=False)
+    camera = SimulatedSunCamera(mount)
+    calibrator = Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0, wait_for_pulses=False)
+    with pytest.raises(CalibrationError, match="does not track"):
+        calibrator.run()
+    assert mount.pulses == []
+
+
+def test_tracking_that_comes_back_within_seconds_is_tracking():
+    """The iOptron driver reports tracking off for a second or two now and then while the mount tracks."""
+    mount = FakeMount(tracking=False)
+    camera = SimulatedSunCamera(mount)
+    threading.Timer(0.5, lambda: setattr(mount, "tracking", True)).start()
+    calibration = calibrate(mount, camera)
+    assert calibration.guide_by == "pulses"
+
+
+def test_a_mount_that_ignores_guide_pulses_is_calibrated_with_slews():
+    """The iOptron HAZ31 in alt-az mode: every pulse is answered, none moves it; its coordinates show it."""
+    mount = FakeMount(moves=False, fast=1200, slow=150, guide_rates=(0.5, 0.5))
+    camera = SimulatedSunCamera(mount, rotation_deg=25)
+    lines = []
+    calibration = calibrate(mount, camera, progress=lines.append)
+    assert calibration.by_slews and calibration.slow_rate == "1x"
+    assert any("ignores guide pulses" in line for line in lines)
+    # Found from the coordinates, long before a leg's 90 s of guiding were used up
+    assert sum(ms for _, ms in mount.pulses) < 40_000
+    assert calibration.angle_deg == pytest.approx(25, abs=3)
+    assert calibration.pixels_per_second() == pytest.approx((150 / 16, 150 / 16), rel=0.15)
+    assert "slewing at the 1x rate" in calibration.describe()
+    assert mount.slew_rate == "1x"              # what it was before
+
+
+def test_a_mount_that_ignores_guide_pulses_without_coordinates_is_found_by_the_sun_not_moving():
+    mount = FakeMount(moves=False, fast=1200, slow=150)
+    camera = SimulatedSunCamera(mount)
+    calibration = calibrate(mount, camera, max_leg_ms=2000)
+    assert calibration.by_slews
+
+
+def test_a_mount_that_tracks_and_takes_guide_pulses_is_not_switched_to_slews():
+    # 5″/s (a third of sidereal, as reported): a leg takes about 26 s, so the coordinates are checked
+    mount = FakeMount(rate=5, fast=1200, guide_rates=(5 / 15.041, 5 / 15.041))
+    camera = SimulatedSunCamera(mount)
+    calibration = calibrate(mount, camera)
+    assert calibration.guide_by == "pulses"
+    assert max(ms for _, ms in mount.pulses) <= 3000 and sum(ms for _, ms in mount.pulses) > 20_000
+
+
+def test_drift_is_not_taken_for_guiding():
+    """A return leg that moves the sun on the same way: the sky drifted, the pulses did nothing."""
+    mount = DriftingMount()
+    camera = SimulatedSunCamera(mount)
+    with pytest.raises(CalibrationError, match="drifting"):
+        calibrate(mount, camera)
+
+
+def test_a_calibration_by_slews_is_saved_and_read_back():
+    calibration = Calibration(north=(0.0, -0.01), east=(0.01, 0.0), frame_size=(960, 640), radius=100.0,
+                              guide_by="slews", slow_rate="1x")
+    again = Calibration.from_json(calibration.to_json())
+    assert again.by_slews and again.slow_rate == "1x"
+
+
+def test_slews_that_move_east_faster_than_west_are_calibrated_each_way():
+    """The iOptron HAZ31 in alt-az mode: at 1x east is 2× sidereal and west does not move at all."""
+    mount = FakeMount(moves=False, slow=30, fast=60, slew_bias=30, guide_rates=(0.5, 0.5))
+    camera = SimulatedSunCamera(mount, rotation_deg=10)
+    lines = []
+    calibration = calibrate(mount, camera, progress=lines.append)
+    assert calibration.by_slews
+    assert calibration.slow_rate == "2x"        # 1x does not move west
+    assert any("trying the 2x rate" in line for line in lines)
+    assert calibration.fast_rate == "3x"
+    # 2x: east 90″/s, west 30″/s, at 16″/px
+    assert float(np.linalg.norm(calibration.east)) * 1000 == pytest.approx(90 / 16, rel=0.15)
+    assert float(np.linalg.norm(calibration.west)) * 1000 == pytest.approx(30 / 16, rel=0.15)
+    east = calibration.pulses_for(*(calibration.movement({"E": 1000.0})))
+    west = calibration.pulses_for(*(calibration.movement({"W": 1000.0})))
+    assert east == pytest.approx({"E": 1000.0}, abs=1) and west == pytest.approx({"W": 1000.0}, abs=1)
+
+
+def test_moves_are_solved_with_the_vectors_of_the_directions_used():
+    calibration = Calibration(north=(0.0, -0.01), east=(0.03, 0.0), south=(0.0, 0.02), west=(-0.01, 0.0),
+                              frame_size=(960, 640), radius=100.0, guide_by="slews", slow_rate="2x")
+    assert calibration.pulses_for(-10, 0) == pytest.approx({"W": 1000.0})
+    assert calibration.pulses_for(30, 0) == pytest.approx({"E": 1000.0})
+    assert calibration.pulses_for(0, 20) == pytest.approx({"S": 1000.0})
+    moves = calibration.pulses_for(-5, -5)
+    assert moves == pytest.approx({"N": 500.0, "W": 500.0})
+    assert calibration.movement(moves) == pytest.approx((-5, -5))
+    again = Calibration.from_json(calibration.to_json())
+    assert again.west == (-0.01, 0.0) and again.south == (0.0, 0.02)

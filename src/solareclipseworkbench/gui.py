@@ -3931,7 +3931,7 @@ class MountPopup(QWidget, Observable):
         self.calibration_label.setWordWrap(True)
         centring_layout.addWidget(self.calibration_label, 0, 1)
         self.centring_checkbox = QCheckBox("Keep the sun centred")
-        self.centring_checkbox.setToolTip("Every 30 s, find the sun in the live view and guide it back to the "
+        self.centring_checkbox.setToolTip("Every 15 s, find the sun in the live view and guide it back to the "
                                           "middle when it is more than 2 px off, in a gap between the scheduled "
                                           "shots.  Paused from 15 s before C2 to 15 s after C3.")
         self.centring_checkbox.toggled.connect(self.centring_toggled)
@@ -4073,9 +4073,12 @@ class MountPopup(QWidget, Observable):
         else:
             placeholder = "searched by the driver"
         self.device_port.setPlaceholderText(placeholder)
+        # Tracking must not change while the calibration measures: the sky drifting would be measured
+        calibrating = self._calibrator is not None
         for button in (self.track_button, self.stop_button, self.park_button, self.abort_button,
                        self.reverse_ns_checkbox, self.reverse_we_checkbox):
-            button.setEnabled(connected and mount.connected)
+            locked = calibrating and button in (self.track_button, self.stop_button, self.park_button)
+            button.setEnabled(connected and mount.connected and not locked)
         self.status_label.setText(mount.describe() if connected else "Not connected")
         self.nudge_panel.refresh()
         self._show_centring()
@@ -4126,8 +4129,11 @@ class MountPopup(QWidget, Observable):
             return
         answer = QMessageBox.question(
             self, "Mount", "The calibration guides the mount east, west, north and south, for about 1.5 minutes "
-                           "at the guide rate, and brings the sun back where it was.\n\nThe sun must be in the "
-                           "live view, roughly in the middle, through the filter.  Calibrate now?")
+                           "at the guide rate, and brings the sun back where it was.  A mount that ignores guide "
+                           "pulses (an iOptron in alt-az mode) is then calibrated with slews at its slowest rate."
+                           "\n\nThe mount must track the sun, and the sun must be in the live view, roughly in the "
+                           "middle, through the filter.  Tracking cannot be changed while it calibrates.  "
+                           "Calibrate now?")
         if answer != QMessageBox.StandardButton.Yes:
             return
         controller.stop_centring()
@@ -4150,8 +4156,8 @@ class MountPopup(QWidget, Observable):
                 pass        # the window was closed
 
         threading.Thread(target=run, name="mount-calibration", daemon=True).start()
+        self.show_state()
         self.calibration_label.setText("Calibrating…")
-        self._show_centring()
 
     def _on_calibration_progress(self, line: str):
         self.calibration_label.setText(f"Calibrating: {line}")
@@ -4164,7 +4170,7 @@ class MountPopup(QWidget, Observable):
                 QMessageBox.information(self, "Mount", "Calibrated, but: " + "; ".join(calibration.warnings))
         else:
             QMessageBox.warning(self, "Mount", f"The calibration failed: {error}")
-        self._show_centring()
+        self.show_state()
 
     def centring_toggled(self, checked: bool):
         """ Start or stop keeping the sun centred. """

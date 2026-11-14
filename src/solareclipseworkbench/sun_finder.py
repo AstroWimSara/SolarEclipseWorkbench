@@ -460,7 +460,8 @@ def find_sun(grey: np.ndarray, radius_hint: Optional[float] = None, seed: int = 
     sky = float(np.median(sample))
     noise = 1.4826 * float(np.median(np.abs(sample - sky)))
     if float(grey.max()) - sky < PEAK_SIGMAS * noise + MIN_PEAK_ABOVE_SKY:
-        return _no_sun("nothing stands out above the noise of the sky")
+        return _no_sun(f"nothing stands out above the noise of the sky (brightest {float(grey.max()):.0f}, "
+                       f"sky {sky:.0f}, noise {noise:.1f})")
     image, factor = _reduce(grey)
     threshold = otsu_threshold(image)
     if threshold is None:

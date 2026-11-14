@@ -412,3 +412,38 @@ def test_scheduling_records_the_busy_time_of_camera_commands(tmp_path, busy):
     assert busy_s >= 4.5
     assert not utils.quiet_for(scheduler, 10, now=start - timedelta(seconds=3))
     assert utils.quiet_for(scheduler, 10, now=start - timedelta(seconds=60))
+
+
+def test_a_calibration_by_slews_centres_with_slews():
+    """A mount that ignores guide pulses (iOptron HAZ31 in alt-az mode): the corrections are slews too."""
+    mount = FakeMount(moves=False, fast=1200, slow=150, guide_rates=(0.5, 0.5))
+    camera = SimulatedSunCamera(mount, rotation_deg=35)
+    calibration = calibrate(mount, camera)
+    assert calibration.by_slews
+    drift(mount, 240, -190)                     # about 19 px at 16″/px
+    pulses = len(mount.pulses)
+    loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: slews are timed
+    for _ in range(6):
+        loop.step()
+        if loop.status.state == CENTRED:
+            break
+    assert loop.status.state == CENTRED, loop.status.message
+    assert off_centre(camera, calibration) <= 2.0
+    assert len(mount.pulses) == pulses          # no guide pulses: they would do nothing
+
+
+def test_slews_that_move_east_faster_than_west_still_centre():
+    """The iOptron HAZ31 in alt-az mode: the corrections west last longer than those east."""
+    mount = FakeMount(moves=False, slow=30, fast=60, slew_bias=30, guide_rates=(0.5, 0.5))
+    camera = SimulatedSunCamera(mount, rotation_deg=-15)
+    calibration = calibrate(mount, camera)
+    assert calibration.slow_rate == "2x"
+    for east, north in ((240, -190), (-260, 150)):
+        drift(mount, east, north)
+        loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: slews are timed
+        for _ in range(6):
+            loop.step()
+            if loop.status.state == CENTRED:
+                break
+        assert loop.status.state == CENTRED, loop.status.message
+        assert off_centre(camera, calibration) <= 2.0

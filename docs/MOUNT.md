@@ -164,7 +164,10 @@ stops by itself within a second, so a lost button release never leaves the mount
 With the mount connected and the `Live View` window open on the camera that shows the sun, Solar
 Eclipse Workbench can keep the sun in the middle of the frame for the whole run.
 
-1. Centre the sun roughly with the nudge buttons, filter on.
+1. Click **Track sun**, and centre the sun roughly with the nudge buttons, filter on.  The
+   calibration refuses a mount that does not track: the sky drifting through the frame would be
+   measured instead of the mount.  **Track sun**, **Stop tracking** and **Park** are greyed out
+   while it runs.
 2. In the `Mount` window, click **Calibrate**.  The mount is guided east, west, north and south at
    the guide rate, then moved briefly at a fast slew rate (the driver's "Centering" rate), and the
    sun is brought back where it was each time: about 1.5 minutes at a guide rate of half the
@@ -172,9 +175,18 @@ Eclipse Workbench can keep the sun in the middle of the frame for the whole run.
    how far guiding and moving fast move the sun in the live view, so a camera turned on the
    telescope and a mirrored image (a diagonal) are handled.  The calibration is kept for the next
    start; calibrate again when the camera is turned or the live-view size changes.
+
+   Some mounts answer guide pulses and do not move: the iOptron HAZ31 in alt-az mode does that.
+   After 20 seconds of guiding, the calibration checks that the mount's own coordinates moved as
+   far as its guide rate says, and that guiding back brings the sun back.  When the pulses are
+   ignored, it calibrates again with timed slews (as the N/S/E/W buttons move the mount), and the
+   centring then corrects with those slews instead of guide pulses.  An alt-az mount does not slew
+   equally fast both ways: the iOptron HAZ31 slews at 1x as fast as 2× sidereal east and does not
+   move west at all, and at 2x 3× east and 1× west.  So the four directions are measured each on
+   their own, and a rate that hardly moves the sun one way is skipped for the next one up.
 3. Tick **Keep the sun centred**.
 
-Every 30 seconds the sun is found in the live view: its own edge is used, so the centre stays put
+Every 15 seconds the sun is found in the live view: its own edge is used, so the centre stays put
 while the moon covers more and more of it.  When it is more than 2 pixels off the middle, it is
 guided back.  A sun more than 10 pixels off is first moved most of the way at the fast rate (a
 few seconds), and guide pulses do the rest.  A correction is as long as it needs to be when no
