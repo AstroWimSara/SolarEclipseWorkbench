@@ -387,6 +387,8 @@ class BaseCamera(ABC):
         # raise -110 I/O in progress.  Acquiring this lock at the start of every
         # public capture function ensures jobs queue up rather than crash.
         self._usb_lock = threading.RLock()
+        # Number of scheduled commands waiting for _usb_lock (see _claiming_camera).
+        self._camera_claims = 0
 
     @abstractmethod
     def connect(self) -> None:
@@ -695,18 +697,13 @@ class SonyCamera(GPhotoCameraAdapter):
             downloader.stop()
             downloader.join(timeout=2.0)
 
-            # Check if the thread actually exited
+            # The stop request also cancels the camera call the downloader is in.  A thread
+            # still alive now is stuck in a call that ignores cancelling.  Its USB lock cannot
+            # be released from here (only the owning thread can release an RLock), and using
+            # the camera while that call runs is unsafe anyway.
             if downloader.is_alive():
-                camera_log(self).warning('Background Downloader failed to terminate within timeout.')
-
-                # Force-release the USB lock if the thread is stuck and holding it
-                if hasattr(self, '_usb_lock') and self._usb_lock.locked():
-                    try:
-                        self._usb_lock.release()
-                        camera_log(self).warning('forced release of _usb_lock after downloader thread timeout.')
-                    except RuntimeError:
-                        # Raised if release() is called on an unacquired or cross-thread locked RLock/Lock
-                        pass
+                camera_log(self).warning('Background Downloader failed to terminate within timeout '
+                                         '(stuck in a camera call for %.1f s)', downloader.busy_for())
         except Exception as e:
             camera_log(self).debug('error stopping Background Downloader (%s)', e)
         finally:
@@ -1014,6 +1011,68 @@ def _find_canon_continuous_drivemode(widget) -> Optional[str]:
 # the camera's own cycle time and accept the resulting timing drift.
 _MAX_LOCK_WAIT_S: float = 1.5
 
+# The Sony background downloader fetches files that are already taken and wait in
+# the camera's buffer, so it always gives way to scheduled shots.  It never starts a camera
+# call while a shot is waiting for the camera, it releases the USB lock after
+# every file, and every call it makes runs on a gphoto2 context whose cancel
+# callback aborts the call when a shot starts waiting, when the downloader is
+# stopped, or when the call has run longer than this.
+_DOWNLOADER_CALL_TIMEOUT_S: float = 10.0
+
+# A downloader call still running this long after it started has not reacted to
+# the cancel request: it is stuck inside libgphoto2 and the user has to know,
+# because the shots on that camera are dropped until it returns.
+_DOWNLOADER_STUCK_S: float = _DOWNLOADER_CALL_TIMEOUT_S + 5.0
+
+# Counts the scheduled commands waiting for each camera's USB lock.  The counts
+# live on the camera objects; this lock only guards updating them.
+_camera_claims_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _claiming_camera(camera):
+    """Mark that a scheduled command is waiting for the camera.
+
+    While at least one command is waiting, the background downloader does not
+    take the USB lock and cancels the camera call it is running, so the command
+    gets the camera within its lock wait instead of being dropped.
+    """
+    with _camera_claims_lock:
+        camera._camera_claims = getattr(camera, '_camera_claims', 0) + 1
+    try:
+        yield
+    finally:
+        with _camera_claims_lock:
+            camera._camera_claims -= 1
+
+
+def _camera_claimed(camera) -> bool:
+    """Whether a scheduled command is waiting for this camera's USB lock."""
+    return getattr(camera, '_camera_claims', 0) > 0
+
+
+def _report_stuck_downloader(camera) -> None:
+    """Say why a shot was dropped when the background downloader holds the camera.
+
+    A downloader call that ignores its cancel request cannot be interrupted from
+    Python, and the camera cannot safely be used while it runs: libgphoto2 is not
+    thread-safe.  The best that can be done is tell the user, so they can
+    reconnect the camera.
+    """
+    downloader = getattr(camera, '_bg_downloader', None)
+    busy_for = getattr(downloader, 'busy_for', None)
+    if busy_for is None:
+        return
+    seconds = busy_for()
+    if seconds < _DOWNLOADER_STUCK_S:
+        return
+    camera_log(camera).error('the background downloader has been stuck in one camera call for %.0f s; '
+                             'shots on this camera are dropped until it returns', seconds)
+    hardware_problems.report(getattr(camera, 'name', 'Sony'),
+                             'The background downloader is stuck and blocks the camera',
+                             detail=f'One camera call has not returned for {seconds:.0f} s, so scheduled shots '
+                                    'on this camera are dropped. Disconnect and reconnect the camera.')
+
 # Timing of the camera command running on this thread: when it was scheduled,
 # when it started and whether its shutter has been released yet.  Set by
 # _serialised_on_camera, used by _shutter_release.
@@ -1077,7 +1136,8 @@ def _serialised_on_camera(func):
                                         args[0].shutter_speed)
                 args = (settings,) + args[1:]
         started = datetime.now(timezone.utc)
-        acquired = camera._usb_lock.acquire(timeout=_MAX_LOCK_WAIT_S)
+        with _claiming_camera(camera):
+            acquired = camera._usb_lock.acquire(timeout=_MAX_LOCK_WAIT_S)
         scheduled = f' (scheduled {_utc_hms(scheduled_at)} UTC)' if scheduled_at is not None else ''
         if not acquired:
             camera_log(camera).warning(
@@ -1085,6 +1145,7 @@ def _serialised_on_camera(func):
                 '(shot is too late; timing accuracy preserved)',
                 func.__name__, scheduled, _MAX_LOCK_WAIT_S,
             )
+            _report_stuck_downloader(camera)
             return
         got_camera = datetime.now(timezone.utc)
         _command_timing.state = {'command': func.__name__, 'scheduled_at': scheduled_at,
@@ -1158,6 +1219,15 @@ class _SonyBackgroundDownloader(threading.Thread):
     This is event-driven first, with a light fallback scan to recover from missed
     events. It keeps a small retry queue so files that are visible before they
     are actually readable do not get hammered in a tight loop.
+
+    Scheduled shots always win over downloads (see _DOWNLOADER_CALL_TIMEOUT_S):
+
+    * no camera call is started while a shot is waiting for the camera;
+    * the USB lock is released after every downloaded file, so a burst of RAW
+      files does not keep the camera for the whole transfer;
+    * every call runs on a context whose cancel callback aborts it when a shot
+      starts waiting, on stop, or after _DOWNLOADER_CALL_TIMEOUT_S.  A cancelled
+      download is retried later; the file waits in the camera's buffer meanwhile.
     """
 
     def __init__(self, adapter: GPhotoCameraAdapter, context):
@@ -1178,12 +1248,61 @@ class _SonyBackgroundDownloader(threading.Thread):
         self.camera_name = getattr(adapter, 'name', 'Sony')
         self._log = camera_log(self.camera_name)
 
+        # Start (time.monotonic()) of the camera call in progress, None between calls.
+        self._call_started: Optional[float] = None
+        self._cancel_logged = False
+        try:
+            # Keep the returned reference: older python-gphoto2 versions need it
+            # to keep the callback alive.
+            self._cancel_callback = context.set_cancel_func(self._cancel_requested, None)
+        except Exception:
+            self._cancel_callback = None
+            self._log.warning('Background Downloader: camera calls cannot be cancelled with this gphoto2 version')
+
     def stop(self):
         self._stop_event.set()
 
     def join(self, timeout=None):
         self.stop()
         super().join(timeout)
+
+    def busy_for(self) -> float:
+        """How long the camera call in progress has been running, 0 between calls."""
+        started = self._call_started
+        return 0.0 if started is None else time.monotonic() - started
+
+    def _cancel_reason(self) -> Optional[str]:
+        if self._stop_event.is_set():
+            return 'stop requested'
+        if _camera_claimed(self.adapter):
+            return 'a scheduled command needs the camera'
+        if self.busy_for() > _DOWNLOADER_CALL_TIMEOUT_S:
+            return f'call took longer than {_DOWNLOADER_CALL_TIMEOUT_S:.0f} s'
+        return None
+
+    def _cancel_requested(self, _context, _data) -> int:
+        """gphoto2 cancel callback, polled by libgphoto2 while a call runs."""
+        if self._call_started is None:
+            return gp.GP_CONTEXT_FEEDBACK_OK
+        reason = self._cancel_reason()
+        if reason is None:
+            return gp.GP_CONTEXT_FEEDBACK_OK
+        if not self._cancel_logged:
+            self._cancel_logged = True
+            self._log.info('Background Downloader: cancelling camera call (%s)', reason)
+        return gp.GP_CONTEXT_FEEDBACK_CANCEL
+
+    def _camera_call(self, func, *args):
+        """Run one gphoto2 call with the cancel callback watching it."""
+        self._cancel_logged = False
+        self._call_started = time.monotonic()
+        try:
+            return func(*args)
+        finally:
+            self._call_started = None
+
+    def _must_yield(self) -> bool:
+        return self._stop_event.is_set() or _camera_claimed(self.adapter)
 
     def _queue_path(self, folder, name, now: float) -> None:
         if not name:
@@ -1201,7 +1320,7 @@ class _SonyBackgroundDownloader(threading.Thread):
 
     def _download_one(self, target, ctx, folder: str, name: str) -> None:
         cam_file = gp.CameraFile()
-        gp.check_result(
+        self._camera_call(lambda: gp.check_result(
             gp.gp_camera_file_get(
                 target,
                 folder,
@@ -1210,12 +1329,26 @@ class _SonyBackgroundDownloader(threading.Thread):
                 cam_file,
                 ctx,
             )
-        )
+        ))
         save_path = os.path.join(self.save_dir, name)
         gp.check_result(gp.gp_file_save(cam_file, save_path))
         size = os.path.getsize(save_path)
         self._log.info("saved %s (%d bytes)", save_path, size)
         self._seen_on_disk.add(name)
+
+    def _due_download(self, now: float):
+        for key, state in self._pending.items():
+            if now >= state["next_try"]:
+                return key, state
+        return None
+
+    def _retry_later(self, key, state, now: float, exc: Exception, retry_base_s: float, retry_max_s: float) -> None:
+        state["attempts"] += 1
+        delay = min(retry_max_s, retry_base_s * (2 ** min(state["attempts"], 3)))
+        state["next_try"] = now + delay
+        level = logging.DEBUG if isinstance(exc, gphoto2.GPhoto2Error) else logging.WARNING
+        self._log.log(level, "Background Downloader: download %s for %s: %s (retry in %.1fs)",
+                      "not ready" if level == logging.DEBUG else "failed", key[1], exc, delay)
 
     def run(self):
         target = self.adapter._camera if hasattr(self.adapter, "_camera") else self.adapter
@@ -1226,13 +1359,20 @@ class _SonyBackgroundDownloader(threading.Thread):
         retry_base_s = 0.25
         retry_max_s = 2.0
         cycle_sleep = 0.25
+        # Between two downloads, only long enough for a waiting shot to get the lock.
+        between_files_sleep = 0.01
 
         last_fallback_scan = 0.0
 
         while not self._stop_event.is_set():
+            # Do not even compete for the lock while a scheduled command waits for it.
+            if self._must_yield():
+                self._stop_event.wait(0.05)
+                continue
+
             acquired = False
+            more_due = False
             try:
-                # Use a non-blocking or low-timeout attempt to acquire lock
                 acquired = self.adapter._usb_lock.acquire(timeout=0.05)
                 if not acquired:
                     # Interruptible sleep check
@@ -1240,16 +1380,16 @@ class _SonyBackgroundDownloader(threading.Thread):
                     continue
 
                 # Check if stop requested right after obtaining lock
-                if self._stop_event.is_set():
-                    break
+                if self._must_yield():
+                    continue
 
                 now = time.monotonic()
 
                 # 1) Primary path: consume one camera event per cycle.
                 try:
-                    event_type, event_data = gp.check_result(
+                    event_type, event_data = self._camera_call(lambda: gp.check_result(
                         gp.gp_camera_wait_for_event(target, event_timeout_ms, ctx)
-                    )
+                    ))
                 except gphoto2.GPhoto2Error as e:
                     self._log.debug("Background Downloader: wait_for_event failed: %s", e)
                     event_type, event_data = gp.GP_EVENT_TIMEOUT, None
@@ -1266,9 +1406,10 @@ class _SonyBackgroundDownloader(threading.Thread):
                     self._queue_path(folder, name, now)
 
                 # 2) Safety net: occasionally scan the root folder in case an event was missed.
-                if now - last_fallback_scan >= fallback_scan_every_s:
+                if now - last_fallback_scan >= fallback_scan_every_s and not self._must_yield():
                     try:
-                        files = gp.check_result(gp.gp_camera_folder_list_files(target, "/", ctx))
+                        files = self._camera_call(lambda: gp.check_result(
+                            gp.gp_camera_folder_list_files(target, "/", ctx)))
                         for i in range(files.count()):
                             name = files.get_name(i)
                             self._queue_path("/", name, now)
@@ -1276,41 +1417,17 @@ class _SonyBackgroundDownloader(threading.Thread):
                         self._log.debug("Background Downloader: fallback list failed: %s", exc)
                     last_fallback_scan = now
 
-                # 3) Try any queued downloads whose retry delay has expired.
-                for key, state in list(self._pending.items()):
-                    if now < state["next_try"]:
-                        continue
-
-                    folder, name = key
+                # 3) Download at most one queued file whose retry delay has expired, then
+                #    hand the camera back so a scheduled shot never waits for a whole burst.
+                due = None if self._must_yield() else self._due_download(now)
+                if due is not None:
+                    key, state = due
                     try:
-                        self._download_one(target, ctx, folder, name)
+                        self._download_one(target, ctx, *key)
                         del self._pending[key]
-                    except gphoto2.GPhoto2Error as exc:
-                        state["attempts"] += 1
-                        delay = min(
-                            retry_max_s,
-                            retry_base_s * (2 ** min(state["attempts"], 3)),
-                        )
-                        state["next_try"] = now + delay
-                        self._log.debug(
-                            "Background Downloader: download not ready for %s: %s (retry in %.1fs)",
-                            name,
-                            exc,
-                            delay,
-                        )
                     except Exception as exc:
-                        state["attempts"] += 1
-                        delay = min(
-                            retry_max_s,
-                            retry_base_s * (2 ** min(state["attempts"], 3)),
-                        )
-                        state["next_try"] = now + delay
-                        self._log.warning(
-                            "Background Downloader: download failed for %s: %s (retry in %.1fs)",
-                            name,
-                            exc,
-                            delay,
-                        )
+                        self._retry_later(key, state, time.monotonic(), exc, retry_base_s, retry_max_s)
+                    more_due = self._due_download(time.monotonic()) is not None
 
             finally:
                 if acquired:
@@ -1320,7 +1437,7 @@ class _SonyBackgroundDownloader(threading.Thread):
                         pass
 
             # Responsive wait instead of un-interruptible time.sleep
-            self._stop_event.wait(cycle_sleep)
+            self._stop_event.wait(between_files_sleep if more_due else cycle_sleep)
 
 
 class LiveViewThread(threading.Thread):
