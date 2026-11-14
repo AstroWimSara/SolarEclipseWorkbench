@@ -1261,6 +1261,7 @@ endfor
 
 - Astropy/IERS is used to compute Delta T (TT − UT1) for eclipse reference times.  This is the most up to date information available, but it requires an internet connection to download the latest IERS tables.  If no internet is available, a CSV-based fallback is used.
   - For the 2026 eclipse, the fallback value for Delta T is 69.1085.
+  - The CSV table ends with the last measured year (2026).  For later eclipses, Delta T is the last measured value plus the increase that the Espenak & Meeus polynomials (the model behind NASA's eclipse predictions) predict since then.  It has no jump at the end of the table and follows NASA's long-term trend, about 6 s below NASA's values, as the Earth has slowed down less than predicted.  Delta T cannot be predicted exactly; by the end of the century the uncertainty is several tens of seconds.
 - The solar radius is 959.95" ± 0.05" by default (Quaglia et al. 2021), measured from eclipse contacts.  This is slightly larger than the conventional 959.63" (Auwers 1891) of published predictions, which can be selected instead, as can a value of your own.  See [Solar radius](#solar-radius) for why this value is the default.
 
 ## Shortcomings

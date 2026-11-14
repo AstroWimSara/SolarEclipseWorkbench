@@ -21,6 +21,48 @@ from solareclipseworkbench.besselian_element_generator import BesselianElementGe
 rad = math.pi / 180
 max_iterations = 20
 
+
+def predicted_delta_t(year):
+    """
+    Long-term prediction of Delta T (TT - UT1, in seconds) from the Espenak & Meeus polynomials, the same model
+    used for the Delta T values in NASA's Five Millennium Canon of Solar Eclipses (and the `dt` column of
+    `eclipse_besselian.csv`).
+
+    Parameters:
+        year (float): (Decimal) year, valid from 2005 onwards.
+
+    Returns:
+        float: Predicted Delta T in seconds.
+    """
+    if year < 2050:
+        t = year - 2000
+        return 62.92 + 0.32217 * t + 0.005589 * t * t
+    u = (year - 1820) / 100
+    if year < 2150:
+        return -20 + 32 * u * u - 0.5628 * (2150 - year)
+    return -20 + 32 * u * u
+
+
+def extrapolate_delta_t(year, last_year, last_delta_t):
+    """
+    Estimates Delta T for a year beyond the last tabulated (measured) value.
+
+    The last measured value is extended with the *increase* predicted by the Espenak & Meeus polynomials, rather
+    than switching to the predicted value itself.  This keeps Delta T continuous at the end of the table (no jump
+    from the last measured year to the next one), while following NASA's long-term trend for the distant future.
+    The offset with respect to NASA's predictions stays equal to the offset in the last measured year (about -6 s
+    in 2026, as the Earth's rotation has slowed down less than predicted).
+
+    Parameters:
+        year (int): Year for which Delta T is needed (> last_year).
+        last_year (int): Last year in the Delta T table.
+        last_delta_t (float): Delta T for last_year, in seconds.
+
+    Returns:
+        float: Estimated Delta T in seconds.
+    """
+    return last_delta_t + predicted_delta_t(year + 0.5) - predicted_delta_t(last_year + 0.5)
+
 def solve_quadrant(sin, cos):
     """
     Determines the angle (in radians) from the given sine and cosine values, resolving the correct quadrant.
@@ -172,19 +214,19 @@ def get_element_coeffs(date=None):
     # Read delta t from the deltat.csv file
     delta_t_path = os.path.join(os.path.dirname(__file__), 'deltat.csv')
 
+    eclipse_year = int(coeffs['year'])
     with open(delta_t_path, newline='') as dt_file:
-        dt_reader = csv.DictReader(dt_file)
-        for dt_row in dt_reader:
-            if int(dt_row['year']) == int(coeffs['year']):
-                elements['Δt'] = float(dt_row['deltat'])
-                break
+        delta_t_table = {int(dt_row['year']): float(dt_row['deltat']) for dt_row in csv.DictReader(dt_file)}
+    if eclipse_year in delta_t_table:
+        elements['Δt'] = delta_t_table[eclipse_year]
+    else:
+        last_year = max(delta_t_table)
+        if eclipse_year > last_year:
+            # Future eclipse: extend the last measured value with the predicted trend (no jump at the table end)
+            elements['Δt'] = extrapolate_delta_t(eclipse_year, last_year, delta_t_table[last_year])
         else:
-            # If no year found, use the last known value
-            dt_file.seek(0)  # Reset file pointer to the beginning
-            for dt_row in dt_reader:
-                if dt_row['deltat'] != 'deltat':
-                    elements['Δt'] = float(dt_row['deltat'])
-                    break
+            # Before the start of the table (not in the eclipse catalogue): use the oldest known value
+            elements['Δt'] = delta_t_table[min(delta_t_table)]
 
     # Compute Delta T using Astropy/IERS (new method)
     old_dt = elements.get('Δt')

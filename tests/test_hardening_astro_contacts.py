@@ -88,3 +88,18 @@ def test_midnight_sun_keeps_the_eclipse_in_daylight():
     assert "C1" in timings and "C4" in timings
     assert timings["sunrise"].time_utc <= timings["C1"].time_utc
     assert timings["C4"].time_utc <= timings["sunset"].time_utc
+
+
+def test_delta_t_after_the_table_has_no_jump_and_follows_the_prediction():
+    # deltat.csv ends in 2026: later years extend the last value with the predicted increase
+    with open(os.path.join(os.path.dirname(solar_eclipse.__file__), "deltat.csv"), newline="") as dt_file:
+        table = {int(r["year"]): float(r["deltat"]) for r in csv.DictReader(dt_file)}
+    last_year = max(table)
+    next_year = solar_eclipse.extrapolate_delta_t(last_year + 1, last_year, table[last_year])
+    assert 0 < next_year - table[last_year] < 1.5
+    # Within ~10 s of NASA's prediction for 2099 (200.6 s in the eclipse catalogue)
+    late = solar_eclipse.extrapolate_delta_t(2099, last_year, table[last_year])
+    assert abs(late - 200.6) < 10
+    # The prediction itself matches the catalogue's dt column
+    assert solar_eclipse.predicted_delta_t(2099.7) == pytest.approx(200.6, abs=2.0)
+    assert solar_eclipse.predicted_delta_t(2027.6) == pytest.approx(76.0, abs=0.5)
