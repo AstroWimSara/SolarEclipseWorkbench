@@ -26,9 +26,10 @@ from pathlib import Path
 import numpy as np
 import requests
 from skyfield import framelib
-from skyfield.api import load, wgs84
+from skyfield.api import wgs84
 from skyfield.planetarylib import PlanetaryConstants
 
+from solareclipseworkbench import data_files
 from solareclipseworkbench.constants import EARTH_RADIUS
 from solareclipseworkbench.lunar_limb import LimbBand
 
@@ -53,32 +54,9 @@ BAND_SIZE = 72260818
 # Set (to anything) to never download the blob, e.g. in the test suite.
 NO_DOWNLOAD_ENV = "SEW_NO_LIMB_DOWNLOAD"
 
-PACKAGE_DIRECTORY = Path(__file__).resolve().parent
-DATA_DIRECTORY = PACKAGE_DIRECTORY.parents[1] / "data"
-USER_DATA_DIRECTORY = Path.home() / ".SolarEclipseWorkbench"
-
-
 def data_path(name: str) -> Path:
-    """Where a data file is.
-
-    A checkout keeps the downloaded kernels and the limb blob in data/, the
-    ephemeris ships inside the package, and the downloaded limb blob lives in
-    the user's data directory; anything still missing resolves to skyfield's
-    load path, which is where it gets downloaded to.
-    """
-    for directory in (DATA_DIRECTORY, PACKAGE_DIRECTORY, USER_DATA_DIRECTORY):
-        candidate = directory / name
-        if candidate.exists():
-            return candidate
-    return Path(load.path_to(name))
-
-
-def _open_kernel(name: str):
-    """An open handle on a kernel, downloaded on first use when it is not local."""
-    path = data_path(name)
-    if path.exists():
-        return open(path, "rb")
-    return load(name)
+    """Where a data file is, or where it will be downloaded to (see data_files)."""
+    return data_files.data_path(name)
 
 
 def band_file() -> Path:
@@ -103,9 +81,9 @@ def download_limb_profile(progress=None) -> Path:
 
     Raises: OSError (incl. requests.RequestException) or ValueError when the download fails or is corrupt.
     """
-    target = USER_DATA_DIRECTORY / BAND_FILE_NAME
+    target = data_files.USER_DATA_DIRECTORY / BAND_FILE_NAME
     partial = target.with_name(target.name + ".part")
-    USER_DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    data_files.USER_DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
     logging.info("Downloading the lunar limb profile (%d MB) from %s", BAND_SIZE // 1_000_000, BAND_URL)
     digest = hashlib.sha256()
@@ -197,13 +175,13 @@ class LunarLimb:
                  orientation_kernel_name=ORIENTATION_KERNEL_NAME,
                  ephemeris_name=EPHEMERIS_NAME):
         self.band = LimbBand(Path(band_path) if band_path else band_file())
-        self.ephemeris = load(str(data_path(ephemeris_name)))
+        self.ephemeris = data_files.load_ephemeris(ephemeris_name)
 
         constants = PlanetaryConstants()
-        constants.read_text(_open_kernel(frame_kernel_name))
+        constants.read_text(data_files.open_kernel(frame_kernel_name))
         # The binary kernel is read lazily on every rotation_at() call, so the
         # handle has to outlive this constructor.
-        self._orientation_kernel = _open_kernel(orientation_kernel_name)
+        self._orientation_kernel = data_files.open_kernel(orientation_kernel_name)
         constants.read_binary(self._orientation_kernel)
         self.frame = constants.build_frame_named("MOON_ME_DE421")
 
@@ -474,7 +452,7 @@ def load_default_limb(download=True):
         logging.info("Lunar limb profile unavailable, contacts will use the mean limb. "
                      "Install %s (downloaded automatically, or built with "
                      "tools/build_limb_blob.py) for limb-corrected contacts and bead "
-                     "windows.", USER_DATA_DIRECTORY / BAND_FILE_NAME)
+                     "windows.", data_files.USER_DATA_DIRECTORY / BAND_FILE_NAME)
         return None
     try:
         return LunarLimb()
@@ -605,7 +583,7 @@ def solve_limb(eclipse_date, latitude, longitude, elevation_m,
     # Comparing this with contact-epoch profiles on two eclipses/four contacts
     # moved the solved contacts by at most 0.014 s, below the profile-source
     # uncertainty, so the cheaper single-profile convention is retained.
-    timescale = load.timescale()
+    timescale = data_files.timescale()
     moment = timescale.ut1(day.year, day.month, day.day, 0, 0,
                            (maximum + elements["T0"] - delta_t_hours) * 3600.0)
     angles = np.arange(0.0, 360.0, profile_step_deg)

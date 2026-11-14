@@ -16,9 +16,10 @@ import pytz
 from astropy.coordinates import EarthLocation
 from astropy.time import Time
 from skyfield import almanac
-from skyfield.api import load, wgs84, Topos
+from skyfield.api import wgs84, Topos
 from skyfield.units import Angle
 from timezonefinder import TimezoneFinder
+from solareclipseworkbench import data_files
 from solareclipseworkbench.limb_correction import bead_reference_moments
 from solareclipseworkbench.solar_eclipse import get_local_circumstances
 
@@ -133,8 +134,8 @@ def calculate_reference_moments(longitude: float, latitude: float, altitude: flo
     timestr = str(time).split(' ')[0]
     result = get_local_circumstances(latitude, longitude, altitude, timestr)
 
-    eph = load("de421.bsp")
-    ts = load.timescale()
+    eph = data_files.load_ephemeris("de421.bsp")
+    ts = data_files.timescale()
 
     earth = eph["Earth"]
     sun_ephem = eph['Sun']

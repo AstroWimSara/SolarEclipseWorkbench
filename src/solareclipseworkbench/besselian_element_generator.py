@@ -1,7 +1,7 @@
 import math
 from astropy.time import Time
 from solareclipseworkbench.nutation import Nutation
-from skyfield.api import load
+from solareclipseworkbench import data_files
 from solareclipseworkbench.vec import Vec, PolynomialRegression
 from solareclipseworkbench.constants import EARTH_RADIUS as earth_radius
 from solareclipseworkbench import solar_radius
@@ -62,8 +62,8 @@ class BesselianElementGenerator:
             dict: Sun and Moon positions (RA, Dec in radians, distance in Earth radii).
         """
         # Load the JPL ephemeris DE440s (covers 1849-2150).
-        planets = load('de440s.bsp')
-        ts = load.timescale()
+        planets = data_files.load_ephemeris("de440s.bsp")
+        ts = data_files.timescale()
         # Directly use the Julian Date in TDB format
         t = ts.tdb_jd(jd_tdb)
         # Get the coordinates of the sun and moon

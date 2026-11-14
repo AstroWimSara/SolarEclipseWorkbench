@@ -5,6 +5,7 @@ Unit tests for solar_eclipse.py, covering key functions with mock data and patch
 import unittest
 from unittest.mock import patch, mock_open
 import math
+import os
 from src.solareclipseworkbench import solar_eclipse
 
 class TestSolarEclipse(unittest.TestCase):
@@ -14,7 +15,9 @@ class TestSolarEclipse(unittest.TestCase):
         self.assertAlmostEqual(solar_eclipse.solve_quadrant(-1, -1), -math.acos(-1))
         self.assertAlmostEqual(solar_eclipse.solve_quadrant(1, -1), math.acos(-1))
 
-    @patch('os.path.join', side_effect=['eclipse_besselian.csv', 'deltat.csv'])
+    # Only the two catalogue paths are replaced: pathlib (e.g. looking for the ephemeris) also calls os.path.join
+    @patch('os.path.join', side_effect=lambda *parts, _join=os.path.join:
+           parts[-1] if parts[-1] in ('eclipse_besselian.csv', 'deltat.csv') else _join(*parts))
     @patch('builtins.open')
     @patch('csv.DictReader')
     def test_get_element_coeffs(self, mock_csv_dictreader, mock_open, mock_join):

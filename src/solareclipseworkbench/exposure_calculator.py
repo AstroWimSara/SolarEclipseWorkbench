@@ -628,10 +628,11 @@ def calculate_sun_altitudes_at_time(
     if not HAS_REFERENCE_MOMENTS:
         raise ImportError("reference_moments module not available")
     
-    from skyfield.api import load, wgs84
+    from skyfield.api import wgs84
+    from solareclipseworkbench import data_files
     
-    eph = load("de421.bsp")
-    ts = load.timescale()
+    eph = data_files.load_ephemeris("de421.bsp")
+    ts = data_files.timescale()
     earth = eph["Earth"]
     sun_ephem = eph['Sun']
     place = wgs84.latlon(latitude, longitude, observer_altitude_m)

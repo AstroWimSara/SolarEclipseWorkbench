@@ -40,10 +40,11 @@ from gphoto2 import GPhoto2Error, Camera
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import serial as pyserial
-from skyfield.api import load, wgs84
+from skyfield.api import wgs84
 
 import threading
 
+from solareclipseworkbench import data_files
 from solareclipseworkbench.camera import get_camera_dict, get_battery_level, get_free_space, get_space, \
     get_shooting_mode, get_focus_mode, set_time, CameraSettings, LiveViewThread, \
     get_sony_save_destination, get_sony_image_quality, CameraKeepAliveThread, get_auto_power_off, \
@@ -4541,9 +4542,9 @@ class EclipsePlotWidget(QtWidgets.QWidget):
                 # Silence the terminal noise of the download
                 with _quiet_console():
                     if EclipsePlotWidget.CACHED_TIMESCALE is None:
-                        EclipsePlotWidget.CACHED_TIMESCALE = load.timescale()
+                        EclipsePlotWidget.CACHED_TIMESCALE = data_files.timescale()
                     if EclipsePlotWidget.CACHED_EPHEMERIDES is None:
-                        EclipsePlotWidget.CACHED_EPHEMERIDES = load("de440s.bsp")
+                        EclipsePlotWidget.CACHED_EPHEMERIDES = data_files.load_ephemeris("de440s.bsp")
                 result['ok'] = True
             except Exception:
                 import traceback

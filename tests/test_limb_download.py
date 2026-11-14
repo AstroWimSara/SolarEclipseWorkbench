@@ -10,7 +10,7 @@ import hashlib
 import pytest
 import requests
 
-from solareclipseworkbench import limb_correction
+from solareclipseworkbench import data_files, limb_correction
 
 CONTENT = b"SEWLIMB" + bytes(range(256)) * 10
 
@@ -39,11 +39,10 @@ class FakeResponse:
 def user_data(tmp_path, monkeypatch):
     """Point every place the blob is looked for at empty temporary directories."""
     directory = tmp_path / "user"
-    monkeypatch.setattr(limb_correction, "USER_DATA_DIRECTORY", directory)
-    monkeypatch.setattr(limb_correction, "DATA_DIRECTORY", tmp_path / "checkout-data")
-    monkeypatch.setattr(limb_correction, "PACKAGE_DIRECTORY", tmp_path / "package")
-    monkeypatch.setattr(limb_correction, "load", type("Load", (), {"path_to": staticmethod(
-        lambda name: str(tmp_path / "skyfield" / name))})())
+    monkeypatch.setattr(data_files, "USER_DATA_DIRECTORY", directory)
+    monkeypatch.setattr(data_files, "CHECKOUT_DIRECTORY", tmp_path / "checkout")
+    monkeypatch.setattr(data_files, "PACKAGE_DIRECTORY", tmp_path / "package")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(limb_correction, "BAND_SHA256", hashlib.sha256(CONTENT).hexdigest())
     monkeypatch.setattr(limb_correction, "BAND_SIZE", len(CONTENT))
     monkeypatch.setattr(limb_correction, "_download_attempted", False)
