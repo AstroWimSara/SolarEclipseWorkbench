@@ -10,15 +10,14 @@ import pytest
 from solareclipseworkbench import utils
 from solareclipseworkbench.centring import (CENTRED, CORRECTING, NO_SUN, PAUSED, STOPPED, WAITING, Calibration,
                                             Centrer)
-from solareclipseworkbench.sun_simulator import SimulatedSunCamera
-from test_calibration import FakeMount, calibrate
+from test_calibration import FakeMount, calibrate, sun_camera
 
 
 @pytest.fixture
 def setup():
     """A fake mount, a camera turned 35°, its calibration, and the sun put 20 px off the middle."""
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount, rotation_deg=35)
+    camera = sun_camera(mount, rotation_deg=35)
     calibration = calibrate(mount, camera)
     drift(mount, 240, -190)                    # about 19 px at 16″/px
     return mount, camera, calibration
@@ -37,7 +36,7 @@ def off_centre(camera, calibration) -> float:
 
 
 def centrer(mount, camera, calibration, **kwargs):
-    return Centrer(mount, camera, calibration, wait_for_pulses=False, settle_s=0.0, **kwargs)
+    return Centrer(mount, camera, calibration, wait_for_pulses=False, settle_s=0.0, clock=mount.clock, **kwargs)
 
 
 # ------------------------------------------------------------------ centring
@@ -78,7 +77,7 @@ def test_corrections_are_capped(setup):
 
 def test_a_crescent_is_centred_on_the_centre_of_the_sun():
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount, rotation_deg=-20, moon=(0.55, -0.3))
+    camera = sun_camera(mount, rotation_deg=-20, moon=(0.55, -0.3))
     calibration = calibrate(mount, camera)
     drift(mount, -250, 300)
     loop = centrer(mount, camera, calibration)
@@ -99,7 +98,7 @@ def test_another_target_than_the_middle(setup):
 def test_before_c1_a_correction_is_as_long_as_it_needs():
     """No shots coming: the whole correction at once, in pulses of at most 3 s."""
     mount = FakeMount(rate=20)                  # 1.25 px a second of guiding
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     calibration = calibrate(mount, camera)
     drift(mount, 400, 0)                        # 25 px off: 14 s of guiding at 70 %
     loop = centrer(mount, camera, calibration)
@@ -113,7 +112,7 @@ def test_before_c1_a_correction_is_as_long_as_it_needs():
 
 def test_in_a_short_gap_only_a_short_correction():
     mount = FakeMount(rate=20)
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     calibration = calibrate(mount, camera)
     drift(mount, 400, 0)
     loop = centrer(mount, camera, calibration, quiet=lambda seconds: seconds <= 4)
@@ -126,11 +125,11 @@ def test_in_a_short_gap_only_a_short_correction():
 
 def test_far_off_the_sun_is_moved_at_the_fast_rate_first():
     mount = FakeMount(rate=20, fast=1200)       # guiding 1.25 px/s, the fast rate 75 px/s
-    camera = SimulatedSunCamera(mount, rotation_deg=-30)
+    camera = sun_camera(mount, rotation_deg=-30)
     calibration = calibrate(mount, camera)
     assert calibration.has_fast_rate
     drift(mount, 2400, -1600)                   # about 180 px off: more than a second at the fast rate
-    loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: the moves are timed
+    loop = Centrer(mount, camera, calibration, settle_s=0.0, clock=mount.clock)     # the moves are timed
     before = len(mount.motions)
     for _ in range(6):
         loop.step()
@@ -149,12 +148,12 @@ def test_a_fast_rate_that_moves_in_steps_is_not_used_for_short_moves():
     the centring gave up.  Short corrections must be guide pulses.
     """
     mount = FakeMount(rate=7.5, fast=1800, tick_s=0.25)     # guiding 0.47 px/s, the fast rate 112 px/s
-    camera = SimulatedSunCamera(mount, rotation_deg=20)
+    camera = sun_camera(mount, rotation_deg=20)
     calibration = calibrate(mount, camera)
     assert calibration.has_fast_rate
     for push in ((250, 0), (0, -400), (-600, 300)):           # 15 to 40 px off: less than a second fast
         drift(mount, *push)
-        loop = Centrer(mount, camera, calibration, settle_s=0.0, wait_for_pulses=False)
+        loop = Centrer(mount, camera, calibration, settle_s=0.0, wait_for_pulses=False, clock=mount.clock)
         before = len(mount.motions)
         for _ in range(8):
             loop.step()
@@ -164,7 +163,7 @@ def test_a_fast_rate_that_moves_in_steps_is_not_used_for_short_moves():
         assert len(mount.motions) == before                    # no fast moves
         assert off_centre(camera, calibration) <= 2.0
     drift(mount, 2500, 2500)                                    # 220 px off: a fast move first
-    loop = Centrer(mount, camera, calibration, settle_s=0.0, wait_for_pulses=False)
+    loop = Centrer(mount, camera, calibration, settle_s=0.0, wait_for_pulses=False, clock=mount.clock)
     before = len(mount.motions)
     for _ in range(10):
         loop.step()
@@ -329,7 +328,7 @@ def test_the_thread_keeps_the_sun_centred_and_reports(setup):
     mount, camera, calibration = setup
     states = []
     loop = Centrer(mount, camera, calibration, wait_for_pulses=False, settle_s=0.0, interval_s=0.05,
-                   on_status=lambda status: states.append(status.state))
+                   on_status=lambda status: states.append(status.state), clock=mount.clock)
     loop.start()
     try:
         deadline = time.monotonic() + 10
@@ -417,12 +416,12 @@ def test_scheduling_records_the_busy_time_of_camera_commands(tmp_path, busy):
 def test_a_calibration_by_slews_centres_with_slews():
     """A mount that ignores guide pulses (iOptron HAZ31 in alt-az mode): the corrections are slews too."""
     mount = FakeMount(moves=False, fast=1200, slow=150, guide_rates=(0.5, 0.5))
-    camera = SimulatedSunCamera(mount, rotation_deg=35)
+    camera = sun_camera(mount, rotation_deg=35)
     calibration = calibrate(mount, camera)
     assert calibration.by_slews
     drift(mount, 240, -190)                     # about 19 px at 16″/px
     pulses = len(mount.pulses)
-    loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: slews are timed
+    loop = Centrer(mount, camera, calibration, settle_s=0.0, clock=mount.clock)     # slews are timed
     for _ in range(6):
         loop.step()
         if loop.status.state == CENTRED:
@@ -435,12 +434,12 @@ def test_a_calibration_by_slews_centres_with_slews():
 def test_slews_that_move_east_faster_than_west_still_centre():
     """The iOptron HAZ31 in alt-az mode: the corrections west last longer than those east."""
     mount = FakeMount(moves=False, slow=30, fast=60, slew_bias=30, guide_rates=(0.5, 0.5))
-    camera = SimulatedSunCamera(mount, rotation_deg=-15)
+    camera = sun_camera(mount, rotation_deg=-15)
     calibration = calibrate(mount, camera)
     assert calibration.slow_rate == "2x"
     for east, north in ((240, -190), (-260, 150)):
         drift(mount, east, north)
-        loop = Centrer(mount, camera, calibration, settle_s=0.0)     # waits for real: slews are timed
+        loop = Centrer(mount, camera, calibration, settle_s=0.0, clock=mount.clock)     # slews are timed
         for _ in range(6):
             loop.step()
             if loop.status.state == CENTRED:

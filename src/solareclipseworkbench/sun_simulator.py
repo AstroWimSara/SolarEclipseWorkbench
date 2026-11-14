@@ -128,12 +128,20 @@ class SimulatedSunCamera:
         - offset: Where the sun starts in the frame, in pixels from the centre
         - images: EclipseImages to show the real sun instead of drawing one
         - clock: () → (seconds from C2, seconds from C3) or None: the phase the images show
+        - monotonic: () → the time the frames are stamped with (a simulated clock in the tests)
+        - frame_interval_s: 0: a new frame at every call; else one new frame per interval, as a live
+                            view makes them (the frame times are multiples of it), so that a test with
+                            a simulated clock does not draw a frame for every poll of 50 ms
     """
 
     def __init__(self, mount, width: int = 1000, height: int = 667, arcsec_per_pixel: float = 16.0,
                  rotation_deg: float = 0.0, mirrored: bool = False, moon: Optional[tuple] = None,
                  offset: tuple = (0.0, 0.0), noise: float = 3.0, seed: int = 0,
-                 images: Optional[EclipseImages] = None, clock: Optional[Callable[[], Optional[tuple]]] = None):
+                 images: Optional[EclipseImages] = None, clock: Optional[Callable[[], Optional[tuple]]] = None,
+                 monotonic: Callable[[], float] = time.monotonic, frame_interval_s: float = 0.0):
+        self.monotonic = monotonic
+        self.frame_interval_s = frame_interval_s
+        self._last: Optional[tuple] = None      # (what was drawn, (time, frame)) with a frame interval
         self.images = images
         self.clock = clock
         self.mount = mount
@@ -181,7 +189,21 @@ class SimulatedSunCamera:
         centre = self.sun_in_frame()
         if centre is None:
             return None
-        x, y = centre
+        now = self.monotonic()
+        if not self.frame_interval_s:
+            return now, self._draw(*centre)
+        stamp = math.floor(now / self.frame_interval_s) * self.frame_interval_s
+        drawn = (stamp, centre, self.width, self.height, self.moon)
+        with self._lock:
+            if self._last is not None and self._last[0] == drawn:
+                return self._last[1]
+        latest = stamp, self._draw(*centre)
+        with self._lock:
+            self._last = (drawn, latest)
+        return latest
+
+    def _draw(self, x: float, y: float) -> np.ndarray:
+        """A frame with the sun's centre at (x, y)."""
         if self.images is not None:
             moment = None
             if self.clock is not None:
@@ -191,16 +213,14 @@ class SimulatedSunCamera:
                     moment = None
             entry = self.images.pick(*(moment or (None, None)))
             with self._lock:
-                frame = self.images.render(self.width, self.height, x, y, self.radius_px, entry, noise=self.noise,
-                                           rng=self._rng)
-            return time.monotonic(), frame
+                return self.images.render(self.width, self.height, x, y, self.radius_px, entry, noise=self.noise,
+                                          rng=self._rng)
         moon = None
         if self.moon is not None:
             moon = (x + self.moon[0] * self.radius_px, y + self.moon[1] * self.radius_px, 1.03 * self.radius_px)
         with self._lock:
-            frame = render_sun(self.width, self.height, x, y, self.radius_px, moon=moon, noise=self.noise,
-                               rng=self._rng)
-        return time.monotonic(), frame
+            return render_sun(self.width, self.height, x, y, self.radius_px, moon=moon, noise=self.noise,
+                              rng=self._rng)
 
 
 #: The simulated camera of each simulated mount, for the virtual camera's live view

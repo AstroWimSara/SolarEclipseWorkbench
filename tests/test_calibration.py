@@ -6,7 +6,8 @@ import time
 import numpy as np
 import pytest
 
-from solareclipseworkbench.centring import Calibration, CalibrationError, Calibrator, measure
+from fake_clock import FakeClock
+from solareclipseworkbench.centring import REAL_CLOCK, Calibration, CalibrationError, Calibrator, measure
 from solareclipseworkbench.indi_simulator import SimulatedIndiServer
 from solareclipseworkbench.mount import Mount
 from solareclipseworkbench.sun_simulator import SimulatedSunCamera
@@ -17,10 +18,12 @@ class FakeMount:
 
     ``scale`` per direction changes how far a pulse goes (backlash: less), and
     ``axes`` sends a direction's pulses to another axis (a broken setup).
+    Its slews are timed by ``clock``: a FakeClock unless given (REAL_CLOCK for real time).
     """
 
     def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True, fast=None,
-                 tick_s=0.0, slow=15.0, guide_rates=None, tracking=None, slew_bias=0.0):
+                 tick_s=0.0, slow=15.0, guide_rates=None, tracking=None, slew_bias=0.0, clock=None):
+        self.clock = clock if clock is not None else FakeClock()
         self.ra_h, self.dec_deg = ra_h, dec_deg
         self.rate = rate
         self.scale = scale or {}
@@ -33,7 +36,7 @@ class FakeMount:
         self.motions = []           # (direction, seconds) of the moves at a slew rate
         #: Moves last whole steps of this length, as INDI's telescope simulator moves (0: exact)
         self.tick_s = tick_s
-        self._moving = {}           # direction → (time.monotonic() it started, rate)
+        self._moving = {}           # direction → (clock.monotonic() it started, rate)
         #: Speed of the slowest slew rate, in arcseconds per second
         self.slow = slow
         #: (RA, Dec) guide rate as multiples of sidereal, as an INDI driver reports it; None: not reported
@@ -54,15 +57,15 @@ class FakeMount:
         self.slew_rate = rate
 
     def nudge_start(self, direction):
-        self._moving[direction] = (time.monotonic(), self.slew_rate)
+        self._moving[direction] = (self.clock.monotonic(), self.slew_rate)
 
     def nudge_stop(self, direction):
         started = self._moving.pop(direction, None)
         if started is None:
             return
-        seconds = time.monotonic() - started[0]
+        seconds = self.clock.monotonic() - started[0]
         if self.tick_s:
-            seconds = math.floor(seconds / self.tick_s) * self.tick_s
+            seconds = math.floor(seconds / self.tick_s + 1e-9) * self.tick_s
         self.motions.append((direction, seconds))
         speed = {"1x": self.slow, "2x": self.fast, "3x": self.fast * 8}[started[1]]
         speed += {"E": self.slew_bias, "W": -self.slew_bias}.get(direction, 0.0)
@@ -86,10 +89,29 @@ class FakeMount:
             self.ra_h += sign * arcsec / 3600 / 15 / math.cos(math.radians(self.dec_deg))
 
 
+def clock_of(mount):
+    """The clock the mount's moves are timed by: a FakeMount's, else real time (a mount over INDI)."""
+    return getattr(mount, "clock", REAL_CLOCK)
+
+
+def sun_camera(mount, **kwargs):
+    """A simulated camera on the mount, its frames stamped by the mount's clock.
+
+    With a simulated clock, two frames a second, as a slow live view: drawing a
+    frame and finding the sun in it takes 50 ms of real time, so a frame at every
+    poll would make waiting for the sun take about as long as in real time.
+    """
+    clock = clock_of(mount)
+    if isinstance(clock, FakeClock):
+        kwargs.setdefault("monotonic", clock.monotonic)
+        kwargs.setdefault("frame_interval_s", 0.5)
+    return SimulatedSunCamera(mount, **kwargs)
+
+
 def calibrate(mount, frames, **kwargs):
-    """Calibrate without waiting: the fake mount moves at once."""
+    """Calibrate without waiting: the fake mount moves at once, and its clock only moves when waited on."""
     kwargs.setdefault("wait_for_pulses", not isinstance(mount, FakeMount))
-    return Calibrator(mount, frames, settle_s=0.0, find_timeout=2.0, **kwargs).run()
+    return Calibrator(mount, frames, settle_s=0.0, find_timeout=2.0, clock=clock_of(mount), **kwargs).run()
 
 
 def move_sun_to(calibration, mount, camera, target):
@@ -106,7 +128,7 @@ def move_sun_to(calibration, mount, camera, target):
 @pytest.mark.parametrize("mirrored", [False, True])
 def test_the_calibration_finds_how_the_axes_lie_in_the_frame(rotation, mirrored):
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount, rotation_deg=rotation, mirrored=mirrored, seed=rotation)
+    camera = sun_camera(mount, rotation_deg=rotation, mirrored=mirrored, seed=rotation)
     calibration = calibrate(mount, camera)
 
     assert calibration.mirrored == mirrored
@@ -127,7 +149,7 @@ def test_the_calibration_finds_how_the_axes_lie_in_the_frame(rotation, mirrored)
 
 def test_a_frame_showing_the_sky_as_it_looks_has_guiding_east_move_the_sun_right():
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount)          # north up, east left
+    camera = sun_camera(mount)          # north up, east left
     x0, _ = camera.sun_in_frame()
     mount.guide("E", 1000)
     assert camera.sun_in_frame()[0] > x0
@@ -138,7 +160,7 @@ def test_a_frame_showing_the_sky_as_it_looks_has_guiding_east_move_the_sun_right
 
 def test_calibrating_on_a_crescent():
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount, rotation_deg=45, moon=(0.6, 0.2))
+    camera = sun_camera(mount, rotation_deg=45, moon=(0.6, 0.2))
     calibration = calibrate(mount, camera)
     assert calibration.angle_deg == pytest.approx(45, abs=3)
     target = (520.0, 300.0)
@@ -148,7 +170,7 @@ def test_calibrating_on_a_crescent():
 
 def test_a_slow_guide_rate_needs_longer_legs():
     mount = FakeMount(rate=20)                  # about 1.2 px per second
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     calibration = calibrate(mount, camera)
     assert calibration.pixels_per_second() == pytest.approx((20 / 16, 20 / 16), rel=0.06)
     longest_leg = max(ms for _, ms in mount.pulses)
@@ -157,7 +179,7 @@ def test_a_slow_guide_rate_needs_longer_legs():
 
 def test_the_sun_is_brought_back_after_each_leg():
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount, rotation_deg=10)
+    camera = sun_camera(mount, rotation_deg=10)
     start = camera.sun_in_frame()
     calibrate(mount, camera)
     end = camera.sun_in_frame()
@@ -169,45 +191,45 @@ def test_the_sun_is_brought_back_after_each_leg():
 
 def test_no_sun_in_the_frame():
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount, offset=(2000, 0))
+    camera = sun_camera(mount, offset=(2000, 0))
     with pytest.raises(CalibrationError, match="not found"):
-        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0).run()
+        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0, clock=mount.clock).run()
 
 
 def test_a_mount_at_the_pole_is_not_calibrated():
     """INDI's telescope simulator starts at the pole: guiding east there does not move the sun."""
     mount = FakeMount(dec_deg=90.0)
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     with pytest.raises(CalibrationError, match="celestial pole"):
-        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0).run()
+        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0, clock=mount.clock).run()
     assert mount.pulses == []
 
 
 def test_a_parked_mount_is_not_calibrated():
     mount = FakeMount()
     mount.parked = True
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     with pytest.raises(CalibrationError, match="parked"):
-        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0).run()
+        Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0, clock=mount.clock).run()
 
 
 def test_a_mount_that_does_not_move():
     mount = FakeMount(moves=False)
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     with pytest.raises(CalibrationError, match="did not move"):
         calibrate(mount, camera, max_leg_ms=2000)
 
 
 def test_axes_that_move_the_sun_the_same_way():
     mount = FakeMount(axes={"N": "E", "S": "W"})
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     with pytest.raises(CalibrationError, match="same direction"):
         calibrate(mount, camera)
 
 
 def test_backlash_is_reported_but_accepted():
     mount = FakeMount(scale={"S": 0.4})
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     calibration = calibrate(mount, camera)
     assert len(calibration.warnings) == 1 and "backlash" in calibration.warnings[0]
     assert "backlash" in calibration.describe()
@@ -220,12 +242,12 @@ def test_a_refused_guide_pulse():
 
     mount = Refusing()
     with pytest.raises(CalibrationError, match="refused a guide pulse"):
-        calibrate(mount, SimulatedSunCamera(mount))
+        calibrate(mount, sun_camera(mount))
 
 
 def test_a_calibration_can_be_stopped():
-    mount = FakeMount(rate=5)                   # slow: the calibration takes long
-    camera = SimulatedSunCamera(mount)
+    mount = FakeMount(rate=5, clock=REAL_CLOCK)     # slow, in real time: the calibration takes long
+    camera = sun_camera(mount)
     calibrator = Calibrator(mount, camera, settle_s=0.0)
     errors = []
 
@@ -247,7 +269,8 @@ def test_a_calibration_can_be_stopped():
 def test_progress_is_reported():
     lines = []
     mount = FakeMount()
-    Calibrator(mount, SimulatedSunCamera(mount), settle_s=0.0, progress=lines.append, wait_for_pulses=False).run()
+    Calibrator(mount, sun_camera(mount), settle_s=0.0, progress=lines.append, wait_for_pulses=False,
+               clock=mount.clock).run()
     assert lines[0] == "looking for the sun"
     assert any(line.startswith("guided N") for line in lines)
     assert lines[-1].startswith("done: ")
@@ -258,7 +281,7 @@ def test_progress_is_reported():
 
 def test_a_calibration_is_saved_and_read_back():
     mount = FakeMount()
-    calibration = calibrate(mount, SimulatedSunCamera(mount, rotation_deg=120, mirrored=True), camera="Canon EOS R")
+    calibration = calibrate(mount, sun_camera(mount, rotation_deg=120, mirrored=True), camera="Canon EOS R")
     again = Calibration.from_json(calibration.to_json())
     assert again == calibration
     assert again.matches((1000, 667), "Canon EOS R")
@@ -275,8 +298,8 @@ def test_pulses_for_no_movement_are_none():
 
 def test_measuring_waits_for_new_frames():
     mount = FakeMount()
-    camera = SimulatedSunCamera(mount)
-    x, y, fix = measure(camera, after=time.monotonic())
+    camera = sun_camera(mount)
+    x, y, fix = measure(camera, after=mount.clock.monotonic(), clock=mount.clock)
     assert (x, y) == pytest.approx(camera.sun_in_frame(), abs=0.3)
 
 
@@ -285,7 +308,7 @@ def test_measuring_waits_for_new_frames():
 
 def test_the_fast_rate_is_calibrated_when_the_mount_has_slew_rates():
     mount = FakeMount(fast=1200)                # "Centering": 75 px a second at 16″/px
-    camera = SimulatedSunCamera(mount, rotation_deg=50, mirrored=True)
+    camera = sun_camera(mount, rotation_deg=50, mirrored=True)
     calibration = calibrate(mount, camera)
     assert calibration.fast_rate == "2x"
     assert mount.slew_rate == "1x"              # put back
@@ -297,7 +320,7 @@ def test_the_fast_rate_is_calibrated_when_the_mount_has_slew_rates():
     for direction, ms in calibration.moves_for(40, -30).items():
         mount.set_slew_rate("2x")
         mount.nudge_start(direction)
-        time.sleep(ms / 1000)
+        mount.clock.sleep(ms / 1000)
         mount.nudge_stop(direction)
     x2, y2 = camera.sun_in_frame()
     assert math.hypot(x2 - x - 40, y2 - y + 30) < 6
@@ -305,7 +328,7 @@ def test_the_fast_rate_is_calibrated_when_the_mount_has_slew_rates():
 
 def test_a_mount_without_slew_rates_is_calibrated_for_guiding_only():
     mount = FakeMount()
-    calibration = calibrate(mount, SimulatedSunCamera(mount))
+    calibration = calibrate(mount, sun_camera(mount))
     assert not calibration.has_fast_rate
 
 
@@ -321,7 +344,7 @@ def test_calibrating_the_simulated_indi_mount():
     try:
         mount = Mount.open(f"127.0.0.1:{server.port}")
         mount.track_solar()
-        camera = SimulatedSunCamera(mount, rotation_deg=30, mirrored=True)
+        camera = sun_camera(mount, rotation_deg=30, mirrored=True)
         calibration = calibrate(mount, camera)
         assert calibration.mirrored
         assert calibration.fast_rate == "2x"         # the INDI simulator names its rates as INDI does
@@ -350,8 +373,9 @@ class DriftingMount(FakeMount):
 
 def test_a_mount_that_does_not_track_is_not_calibrated():
     mount = FakeMount(tracking=False)
-    camera = SimulatedSunCamera(mount)
-    calibrator = Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0, wait_for_pulses=False)
+    camera = sun_camera(mount)
+    calibrator = Calibrator(mount, camera, settle_s=0.0, find_timeout=1.0, wait_for_pulses=False,
+                            clock=mount.clock)
     with pytest.raises(CalibrationError, match="does not track"):
         calibrator.run()
     assert mount.pulses == []
@@ -360,8 +384,8 @@ def test_a_mount_that_does_not_track_is_not_calibrated():
 def test_tracking_that_comes_back_within_seconds_is_tracking():
     """The iOptron driver reports tracking off for a second or two now and then while the mount tracks."""
     mount = FakeMount(tracking=False)
-    camera = SimulatedSunCamera(mount)
-    threading.Timer(0.5, lambda: setattr(mount, "tracking", True)).start()
+    camera = sun_camera(mount)
+    mount.clock.call_later(0.5, lambda: setattr(mount, "tracking", True))
     calibration = calibrate(mount, camera)
     assert calibration.guide_by == "pulses"
 
@@ -369,7 +393,7 @@ def test_tracking_that_comes_back_within_seconds_is_tracking():
 def test_a_mount_that_ignores_guide_pulses_is_calibrated_with_slews():
     """The iOptron HAZ31 in alt-az mode: every pulse is answered, none moves it; its coordinates show it."""
     mount = FakeMount(moves=False, fast=1200, slow=150, guide_rates=(0.5, 0.5))
-    camera = SimulatedSunCamera(mount, rotation_deg=25)
+    camera = sun_camera(mount, rotation_deg=25)
     lines = []
     calibration = calibrate(mount, camera, progress=lines.append)
     assert calibration.by_slews and calibration.slow_rate == "1x"
@@ -384,7 +408,7 @@ def test_a_mount_that_ignores_guide_pulses_is_calibrated_with_slews():
 
 def test_a_mount_that_ignores_guide_pulses_without_coordinates_is_found_by_the_sun_not_moving():
     mount = FakeMount(moves=False, fast=1200, slow=150)
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     calibration = calibrate(mount, camera, max_leg_ms=2000)
     assert calibration.by_slews
 
@@ -392,7 +416,7 @@ def test_a_mount_that_ignores_guide_pulses_without_coordinates_is_found_by_the_s
 def test_a_mount_that_tracks_and_takes_guide_pulses_is_not_switched_to_slews():
     # 5″/s (a third of sidereal, as reported): a leg takes about 26 s, so the coordinates are checked
     mount = FakeMount(rate=5, fast=1200, guide_rates=(5 / 15.041, 5 / 15.041))
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     calibration = calibrate(mount, camera)
     assert calibration.guide_by == "pulses"
     assert max(ms for _, ms in mount.pulses) <= 3000 and sum(ms for _, ms in mount.pulses) > 20_000
@@ -401,7 +425,7 @@ def test_a_mount_that_tracks_and_takes_guide_pulses_is_not_switched_to_slews():
 def test_drift_is_not_taken_for_guiding():
     """A return leg that moves the sun on the same way: the sky drifted, the pulses did nothing."""
     mount = DriftingMount()
-    camera = SimulatedSunCamera(mount)
+    camera = sun_camera(mount)
     with pytest.raises(CalibrationError, match="drifting"):
         calibrate(mount, camera)
 
@@ -416,7 +440,7 @@ def test_a_calibration_by_slews_is_saved_and_read_back():
 def test_slews_that_move_east_faster_than_west_are_calibrated_each_way():
     """The iOptron HAZ31 in alt-az mode: at 1x east is 2× sidereal and west does not move at all."""
     mount = FakeMount(moves=False, slow=30, fast=60, slew_bias=30, guide_rates=(0.5, 0.5))
-    camera = SimulatedSunCamera(mount, rotation_deg=10)
+    camera = sun_camera(mount, rotation_deg=10)
     lines = []
     calibration = calibrate(mount, camera, progress=lines.append)
     assert calibration.by_slews

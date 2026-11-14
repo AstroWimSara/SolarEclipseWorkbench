@@ -124,6 +124,28 @@ MIN_SLEW_BACK_SHARE = 0.2
 MAX_SLEW_RATES_TRIED = 3
 
 
+class Clock:
+    """Where the calibration and the centring get the time from, and how they wait.
+
+    Real time.  The tests give a simulated clock instead (tests/fake_clock.py),
+    so that the timed slews, the settling and the timeouts take no time.
+    """
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def wait(self, event: threading.Event, seconds: float) -> bool:
+        """Wait ``seconds`` or until ``event`` is set; returns whether it is set (as Event.wait)."""
+        return event.wait(seconds)
+
+
+#: Real time
+REAL_CLOCK = Clock()
+
+
 class CalibrationError(Exception):
     """The calibration could not be done; the message says why, for the user."""
 
@@ -341,29 +363,30 @@ class Calibration:
 
 
 def measure(frames, after: float, radius_hint: Optional[float] = None, count: int = FRAMES_PER_POSITION,
-            timeout: float = 10.0, cancel: Optional[threading.Event] = None) -> tuple:
+            timeout: float = 10.0, cancel: Optional[threading.Event] = None, clock: Clock = REAL_CLOCK) -> tuple:
     """Where the sun is: the mean centre in ``count`` frames taken after ``after``.
 
     Args:
         - frames: Has ``latest()`` → (time, frame) or None (the live view, or a simulated camera)
-        - after: time.monotonic() after which the frames must be taken (after the mount has settled)
+        - after: clock.monotonic() after which the frames must be taken (after the mount has settled)
+        - clock: The clock of the frames' times
 
     Returns: (x, y, SunFix of the last frame).  Raises CalibrationError when the sun is not found in time.
     """
-    deadline = time.monotonic() + timeout
+    deadline = clock.monotonic() + timeout
     fixes: list = []
     seen = after
     while len(fixes) < count:
         if cancel is not None and cancel.is_set():
             raise CalibrationError("stopped")
-        if time.monotonic() > deadline:
+        if clock.monotonic() > deadline:
             if fixes:
                 break
             raise CalibrationError("the sun is not found in the live view: is it in the frame, through the filter, "
                                    "and is the live view running?")
         latest = frames.latest()
         if latest is None or latest[0] <= seen:
-            time.sleep(0.05)
+            clock.sleep(0.05)
             continue
         seen = latest[0]
         fix = find_sun(latest[1], radius_hint=radius_hint)
@@ -391,11 +414,14 @@ class Calibrator:
         - wait_for_pulses: Wait as long as each pulse lasts (a real mount); False for a
                            mount that moves at once (tests).  Slews are always timed for real.
         - find_timeout: Seconds to look for the sun before giving up
+        - clock: Real time; a simulated clock in the tests
     """
 
     def __init__(self, mount, frames, settle_s: float = 1.5, target_px: float = TARGET_PX,
                  progress: Optional[Callable[[str], None]] = None, camera: str = "",
-                 max_leg_ms: float = MAX_LEG_MS, wait_for_pulses: bool = True, find_timeout: float = 10.0):
+                 max_leg_ms: float = MAX_LEG_MS, wait_for_pulses: bool = True, find_timeout: float = 10.0,
+                 clock: Clock = REAL_CLOCK):
+        self.clock = clock
         self.max_leg_ms = max_leg_ms
         self.wait_for_pulses = wait_for_pulses
         self.find_timeout = find_timeout
@@ -420,7 +446,7 @@ class Calibrator:
                 logger.debug("Calibration progress callback failed", exc_info=True)
 
     def _sleep(self, seconds: float) -> None:
-        if self.cancel.wait(max(0.0, seconds)):
+        if self.clock.wait(self.cancel, max(0.0, seconds)):
             raise CalibrationError("stopped")
 
     def _guide(self, direction: str, milliseconds: float) -> None:
@@ -445,7 +471,7 @@ class Calibrator:
 
     def _timed_slew(self, direction: str, seconds: float) -> float:
         """Slew at the current slew rate for about ``seconds``.  Returns how long it really moved."""
-        start = time.monotonic()
+        start = self.clock.monotonic()
         try:
             self.mount.nudge_start(direction)
         except Exception as exc:
@@ -457,16 +483,17 @@ class Calibrator:
                 self.mount.nudge_stop(direction)
             except Exception:
                 logger.exception("Could not stop the mount moving %s", direction)
-        return time.monotonic() - start
+        return self.clock.monotonic() - start
 
     def _position(self, radius: float) -> tuple:
         self._sleep(self.settle_s)
-        return self._measure(time.monotonic(), radius)[:2]
+        return self._measure(self.clock.monotonic(), radius)[:2]
 
     def _measure(self, after: float, radius: Optional[float]) -> tuple:
         """measure(), and the frame saved for later when the sun is not found in it (once)."""
         try:
-            return measure(self.frames, after, radius_hint=radius, timeout=self.find_timeout, cancel=self.cancel)
+            return measure(self.frames, after, radius_hint=radius, timeout=self.find_timeout, cancel=self.cancel,
+                           clock=self.clock)
         except CalibrationError as exc:
             if not self.cancel.is_set() and not self._saved_frame:
                 self._saved_frame = True
@@ -641,8 +668,8 @@ class Calibrator:
         """Refuse a mount that does not track: the sky drifting through the frame would be measured."""
         if _mount_value(self.mount, "tracking") is not False:
             return          # tracking, or the mount cannot tell
-        deadline = time.monotonic() + TRACKING_WAIT_S
-        while time.monotonic() < deadline:
+        deadline = self.clock.monotonic() + TRACKING_WAIT_S
+        while self.clock.monotonic() < deadline:
             self._sleep(0.2)
             if _mount_value(self.mount, "tracking") is not False:
                 return
@@ -861,13 +888,16 @@ class Centrer:
         - target: (x, y) to keep the sun on; the middle of the frame when None
         - on_status: Called with a CentringStatus after every look (on the centring thread)
         - wait_for_pulses: Wait as long as each pulse lasts (a real mount); False for tests
+        - clock: Real time; a simulated clock in the tests
     """
 
     def __init__(self, mount, frames, calibration: Calibration, quiet: Callable[[float], bool] = lambda s: True,
                  paused: Callable[[], bool] = lambda: False, target: Optional[tuple] = None,
                  interval_s: float = CENTRING_INTERVAL_S, deadband_px: float = DEADBAND_PX, gain: float = GAIN,
                  max_correction_ms: float = MAX_CORRECTION_MS, settle_s: float = 1.5,
-                 on_status: Optional[Callable[[CentringStatus], None]] = None, wait_for_pulses: bool = True):
+                 on_status: Optional[Callable[[CentringStatus], None]] = None, wait_for_pulses: bool = True,
+                 clock: Clock = REAL_CLOCK):
+        self.clock = clock
         self.mount = mount
         self.frames = frames
         self.calibration = calibration
@@ -923,7 +953,7 @@ class Centrer:
                 return
             if self.status.state == STOPPED:
                 return
-            self._stop.wait(wait)
+            self.clock.wait(self._stop, wait)
 
     # ------------------------------------------------------------------ a look
 
@@ -967,7 +997,7 @@ class Centrer:
                 return self.interval_s
         try:
             x, y, fix = measure(self.frames, max(self._ready_after, (latest[0] - 1e-6) if latest else 0.0),
-                                radius_hint=self.radius, count=1, timeout=5.0, cancel=self._stop)
+                                radius_hint=self.radius, count=1, timeout=5.0, cancel=self._stop, clock=self.clock)
         except CalibrationError:
             if self._stop.is_set():
                 return 0.0
@@ -981,7 +1011,7 @@ class Centrer:
 
         dx, dy = x - self.target[0], y - self.target[1]
         distance = math.hypot(dx, dy)
-        found = {"offset": (dx, dy), "last_fix": time.monotonic(), "sun": (x, y)}
+        found = {"offset": (dx, dy), "last_fix": self.clock.monotonic(), "sun": (x, y)}
 
         # Did the last correction move the sun the way the calibration says it should?
         if self._expected is not None:
@@ -1046,7 +1076,7 @@ class Centrer:
             self._set(STOPPED, f"the mount refused {what}: {exc}", **found)
             return self.interval_s
         if self.wait_for_pulses:
-            self._stop.wait(self.settle_s)
+            self.clock.wait(self._stop, self.settle_s)
         return self._corrected(x, y, self.calibration.movement(pulses))
 
     def _guide(self, pulses: dict) -> None:
@@ -1057,7 +1087,7 @@ class Centrer:
             for direction, ms in chunk.items():
                 self.mount.guide(direction, ms)
             if self.wait_for_pulses:
-                self._stop.wait(max(chunk.values()) / 1000.0)
+                self.clock.wait(self._stop, max(chunk.values()) / 1000.0)
             remaining = {d: ms - chunk[d] for d, ms in remaining.items() if ms - chunk[d] >= 50}
 
     def _coarse_move(self, moves: dict, dx: float, dy: float, distance: float, found: dict) -> float:
@@ -1079,7 +1109,7 @@ class Centrer:
             self._set(STOPPED, f"the mount refused to move: {exc}", **found)
             return self.interval_s
         if self.wait_for_pulses:
-            self._stop.wait(self.settle_s)
+            self.clock.wait(self._stop, self.settle_s)
         return self._corrected(dx + self.target[0], dy + self.target[1], calibration.movement(moves, fast=True))
 
     def _timed_moves(self, moves: dict, rate: str) -> None:
@@ -1092,15 +1122,15 @@ class Centrer:
         started = []
         try:
             mount.set_slew_rate(rate)
-            begin = time.monotonic()
+            begin = self.clock.monotonic()
             for direction in moves:
                 mount.nudge_start(direction)
                 started.append(direction)
             # Stop each axis after its own time, the shortest first
             for direction, ms in sorted(moves.items(), key=lambda item: item[1]):
-                wait = begin + ms / 1000.0 - time.monotonic()
+                wait = begin + ms / 1000.0 - self.clock.monotonic()
                 if wait > 0:
-                    self._stop.wait(wait)
+                    self.clock.wait(self._stop, wait)
                 mount.nudge_stop(direction)
                 started.remove(direction)
         finally:
@@ -1117,7 +1147,7 @@ class Centrer:
 
     def _corrected(self, x: float, y: float, expected: np.ndarray) -> float:
         """Remember what the correction should have done, to check it at the next look."""
-        self._ready_after = time.monotonic()
+        self._ready_after = self.clock.monotonic()
         self._before = np.array((x, y))
         self._expected = expected
         return RECHECK_S if self.wait_for_pulses else 0.0
