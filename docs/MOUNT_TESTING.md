@@ -234,6 +234,7 @@ before the telescope gets near the sun**, for the rest.
 | A.7 Guide pulses | `sew_hardware`, `mount connect localhost`, `mount track`, `mount guide N 2000`, `mount guide E 2000` | Do they move the mount?  Which axis?  (Without guide pulses there is no centring.) | ⏳ No errors; whether they move the mount: outdoors, with the camera (A.9) |
 | A.8 Tracking alone | Outdoors: point at the sun with the nudge buttons (filter!), **Track sun**, centring off.  Watch the live view for 10 minutes | **Note how far the sun drifts, and which way.**  A few pixels a minute is the mount; the sun leaving the frame within minutes means the driver does not know where it points (A.2): tell me | ⏳ |
 | A.9 Calibrate | On the sun, roughly centred, **Calibrate** | Note the direction, mirrored or not, the px/s of guiding and of the fast rate.  If it says "the mount points at the celestial pole" while it is on the sun: the driver's position is wrong (A.2): tell me | ⏳ |
+| A.9b Slews that stay | Outdoors, on the sun: **Track sun**, hold a nudge button 1 s and watch the sun for 10 s; then **Calibrate**, then **Keep the sun centred** for 10 minutes | The sun stays where the nudge left it (it does not drift back within seconds).  The log has "tracking off while the mount slews" and "tracking on again (… s after the slew)" around each slew (debug), mostly within 1.3 s, and no "did not report a stop".  The calibration measures about the same px/s east as west, and north as south, also at the fast rate; its lags ("a slew moves as if it were … ms shorter") are positive.  The corrections bring the sun within about 7 px of the target, with no "moved the sun the wrong way" and no "corrections in a row did not move the sun".  **Note the lags and the px/s.** | ❌ 2026-11-21 (notes 10, 11); retest |
 | A.10 Field rotation | **Keep the sun centred** for at least an hour; then **Calibrate** again | As H.8: **compare the direction with A.9** | ⏳ |
 | A.11 Park | Indoors: **Park**, then **Track sun** | Note where it parks (the home position?), and that it unparks and tracks again | ⚠️ Parks at the starting (home) position, unparks and tracks again.  But a first **Park**, while `sew_hardware` (A.7) had the mount tracking, blocked the driver for a minute (note 5) |
 | A.11b Park while tracking | **Track sun**, then **Park** at once | Parks within a few seconds ("stopped tracking, to park" in the log), no "Motor not stopped"; the buttons keep working | ⏳ |
@@ -265,6 +266,46 @@ From the tests above and the sew log of 2026-11-11 (`sew-20261111-105822Z.log`):
    sew needed three tries (10:59:09 → 10:59:16), as the HAZ31 did before the fix.  When the HAZ31's
    Wi-Fi was gone (11:02), the driver logged "Read Command Error: Timeout error" every 10 s while the
    `Mount` window still showed the last state: see A.12.
+
+9. **Slews too short to move the AZ-GTi** (A.9, 2026-11-21, `sew-20261121-110810Z.log`, Canon 80D
+   on PhotoLine 80, Wi-Fi).  Guide pulses are ignored in alt-az mode, as on the HAZ31: 67 s of
+   guiding east moved the sun 9.7 px, guiding west as long moved it on the same way.  The
+   calibration then used slews at "1x", which on this driver is about 50× sidereal (its slowest rate;
+   the driver has no slower one: its other motion settings are a Silent/Normal slew mode, guide
+   rates and a track factor), about 50 px a second at 16″/px: 1 s moved the sun 48 px east and 50 px north.  The centring then sent slews of 0.2 s,
+   which moved the sun between −34 % and +22 % of the way: the sun stayed 23–43 px off (tracking
+   alone kept it there) and the centring stopped after three failed corrections.
+   **Fixed:** the calibration measures the lag of the slews and the centring adds it to every
+   correction; a correction must move the mount at least 0.1 s (5 px) beyond the lag.  To retest:
+   A.9b.  The camera dropped off USB at 11:22:55, while the keep-alive kept logging "pinged": that
+   is fixed too (it asked libgphoto2's cache, not the camera).
+   *The lag was not the cause: see note 10.*
+
+10. **Tracking undoes every slew of the AZ-GTi** (A.9b, 2026-11-21, `sew-20261121-114744Z.log`).
+   With the lag measured, the calibration still gave lags of −101 to +111 ms, and the fast rate
+   moved the sun 98 px east but 237 px west, 112 px north but 293 px south.  The centring then
+   reported the sun centred (3.2 px off) and 15 s later 203 px off, without a correction in between,
+   and two slow corrections moved the sun −180 % and −312 % of the way.  The cause is in the driver
+   (`skywatcherAPIMount.cpp` of INDI 1.9.9): when a slew of the motion controls ends while the
+   mount tracks, it does not aim tracking at the new position, and tracking drives the mount back to
+   where it was when tracking was switched on.  INDI 2 fixed this.  The slews of the morning (note
+   9) moved the mount as well, and tracking took them back.
+   **Fixed:** for this driver, sew switches tracking off while the mount slews, and on again once
+   the motors report a stop (switching tracking on aims it at where the mount points).  This also
+   covers the nudge buttons.  To retest: A.9b.  Upgrading INDI to 2.x fixes it in the driver too.
+11. **Slews stay, but tracking was off too long** (A.9b, 2026-11-21, `sew-20261121-121336Z.log`).
+   With the fix of note 10, the sun stayed within about 5–25 px of the target for 34 minutes (125
+   corrections).  But 94 of 138 slews waited the full 3 s for the motors to report a stop ("did not
+   report a stop within 3 s").  The driver sends an axis state only when it changes, and a slew of
+   0.2 s usually falls between two of its polls (a second apart), so no state came.  Tracking stays
+   off during that wait, and the sky moved the sun about 2 px a second meanwhile.  That made the
+   calibration uneven again (E 62, W 35 px/s; lags E +145, W −287 ms), and at 12:55 three small
+   corrections west in a row did only 3–26 % of their job, because the drift took most of each move
+   back.  The centring then stopped ("3 corrections in a row did not move the sun").
+   **Fixed:** the encoder values (AXIS1/2_ENCODER_VALUES) do come at the first poll after a slew,
+   so sew now switches tracking on again at that poll, or after 1.3 s when nothing came and the
+   axes still say FULL_STOP.  The debug line "tracking on again" gives the time after the slew.  To
+   retest: A.9b, calibrate again first.  The fast rate was still uneven (E 114, W 243 px).
 
 ## Calibration (step 3) — before the GUI has it
 

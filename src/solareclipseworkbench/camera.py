@@ -1747,9 +1747,23 @@ class CameraKeepAliveThread(threading.Thread):
 
 
 def _keep_alive_request(camera) -> None:
-    """Do the cheapest config read that still counts as USB activity for the camera."""
+    """Do the cheapest request that really goes over USB to the camera.
+
+    The storage info is asked of the camera every time (PTP GetStorageIDs and
+    GetStorageInfo), so it resets the camera's idle timer and fails when the
+    camera is gone.  A config read does not do either on a Canon EOS:
+    libgphoto2 answers it from the properties it cached, so it kept
+    "succeeding" with the camera unplugged or asleep.  The config read is only
+    the fallback for a driver without storage info.
+    """
     target = camera._camera if hasattr(camera, '_camera') else camera
     context = gp.gp_context_new()
+    try:
+        gp.check_result(gp.gp_camera_get_storageinfo(target, context))
+        return
+    except gphoto2.GPhoto2Error as exc:
+        if exc.code not in (gp.GP_ERROR_NOT_SUPPORTED, gp.GP_ERROR_BAD_PARAMETERS):
+            raise
     try:
         gp.check_result(gp.gp_camera_get_single_config(target, 'batterylevel', context))
     except gphoto2.GPhoto2Error as exc:

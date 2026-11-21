@@ -198,6 +198,164 @@ def test_positions_read_as_ra_and_dec():
     assert format_position(None) == ""
 
 
+# -------------------------------------------- a driver tracking its old target
+#
+# The SkyWatcher alt-azimuth driver of INDI 1.9 (AZ-GTi) keeps tracking the position the mount had
+# when tracking was switched on, and drives the mount back to it after every slew (2026-11-21).
+
+
+def _azgti(**kwargs):
+    return SimulatedIndiServer(device="Skywatcher Alt-Az", driver="indi_skywatcherAltAzMount", axes=True,
+                               old_target=True, **kwargs)
+
+
+def _track_switches(server):
+    return [changes for name, changes in server.received if name == "TELESCOPE_TRACK_STATE"]
+
+
+def _slew(mount, direction, seconds=0.4):
+    mount.set_slew_rate("4x")
+    mount.nudge_start(direction)
+    time.sleep(seconds)
+    mount.nudge_stop(direction)
+
+
+def test_a_driver_with_its_old_target_undoes_a_slew_without_the_retarget():
+    server = SimulatedIndiServer(device="Some Alt-Az", axes=True, old_target=True)
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        assert not mount.retargets_tracking
+        mount.track_solar()
+        ra = mount.position()[0]
+        _slew(mount, "E")
+        assert _until(lambda: mount.position()[0] == ra)
+    finally:
+        mount.close()
+        server.close()
+
+
+def test_tracking_is_aimed_at_where_a_slew_ends():
+    server = _azgti()
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        assert mount.retargets_tracking
+        mount.track_solar()
+        ra = mount.position()[0]
+        _slew(mount, "E")
+        # nudge_stop returns with tracking on again, aimed at the new position
+        assert mount.tracking
+        moved = mount.position()[0] - ra
+        assert moved > 0.001
+        time.sleep(1.2)
+        # Not back where tracking was switched on (the sky drifts a little while tracking is off)
+        assert mount.position()[0] - ra == pytest.approx(moved, abs=moved / 10)
+        assert _track_switches(server)[-2:] == [{"TRACK_OFF": True}, {"TRACK_ON": True}]
+    finally:
+        mount.close()
+        server.close()
+
+
+def test_tracking_comes_back_after_the_last_axis_stops():
+    server = _azgti()
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        mount.track_solar()
+        switches = len(_track_switches(server))
+        mount.set_slew_rate("4x")
+        mount.nudge_start("E")
+        mount.nudge_start("N")
+        time.sleep(0.3)
+        mount.nudge_stop("E")
+        assert not mount.tracking
+        time.sleep(0.2)
+        mount.nudge_stop("N")
+        assert mount.tracking
+        # Off once for both slews, on once after them
+        assert _track_switches(server)[switches:] == [{"TRACK_OFF": True}, {"TRACK_ON": True}]
+    finally:
+        mount.close()
+        server.close()
+
+
+def _timed_slew(mount, direction, seconds=0.5):
+    mount.set_slew_rate("1x")
+    mount.nudge_start(direction)
+    time.sleep(seconds)
+    start = time.monotonic()
+    mount.nudge_stop(direction)
+    return time.monotonic() - start
+
+
+def test_tracking_comes_back_at_the_first_poll_after_a_slew_between_two_polls(caplog):
+    # A short slew that the driver did not see: no axis state, only the encoders (2026-11-21)
+    server = _azgti(quiet_axes=True)
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        mount.track_solar()
+        waited = _timed_slew(mount, "E")
+        assert mount.tracking
+        assert waited < 1.0
+        assert "did not report a stop" not in caplog.text
+    finally:
+        mount.close()
+        server.close()
+
+
+def test_tracking_comes_back_after_a_poll_when_a_slew_changed_nothing(caplog):
+    server = _azgti(quiet_axes=True, encoders=False)
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        mount.track_solar()
+        waited = _timed_slew(mount, "N")
+        assert mount.tracking
+        assert Mount.RETARGET_POLL_S <= waited < Mount.RETARGET_TIMEOUT_S
+        assert "did not report a stop" not in caplog.text
+    finally:
+        mount.close()
+        server.close()
+
+
+def test_a_mount_that_does_not_track_is_not_made_to_track_by_a_slew():
+    server = _azgti()
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        _slew(mount, "W", 0.2)
+        assert not mount.tracking
+        assert _track_switches(server) == []
+    finally:
+        mount.close()
+        server.close()
+
+
+def test_an_abort_during_a_slew_switches_tracking_on_again():
+    server = _azgti()
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        mount.track_solar()
+        mount.nudge_start("S")
+        assert not mount.tracking
+        mount.abort()
+        assert _until(lambda: mount.tracking, timeout=3.0)
+    finally:
+        mount.close()
+        server.close()
+
+
+def test_switching_tracking_off_during_a_slew_keeps_it_off():
+    server = _azgti()
+    mount = Mount.open(f"127.0.0.1:{server.port}")
+    try:
+        mount.track_solar()
+        mount.nudge_start("S")
+        mount.stop_tracking()
+        mount.nudge_stop("S")
+        time.sleep(0.5)
+        assert not mount.tracking
+    finally:
+        mount.close()
+        server.close()
+
+
 # ----------------------------------------------------------------- the panel
 
 

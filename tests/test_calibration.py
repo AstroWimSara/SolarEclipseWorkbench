@@ -22,7 +22,8 @@ class FakeMount:
     """
 
     def __init__(self, ra_h=10.0, dec_deg=15.0, rate=150.0, scale=None, axes=None, moves=True, fast=None,
-                 tick_s=0.0, slow=15.0, guide_rates=None, tracking=None, slew_bias=0.0, clock=None):
+                 tick_s=0.0, slow=15.0, guide_rates=None, tracking=None, slew_bias=0.0, slew_lag_s=0.0,
+                 clock=None):
         self.clock = clock if clock is not None else FakeClock()
         self.ra_h, self.dec_deg = ra_h, dec_deg
         self.rate = rate
@@ -46,6 +47,9 @@ class FakeMount:
         #: Slews east are this much faster and slews west this much slower (arcseconds a second), as an
         #: alt-az iOptron slews: the motor turns at the rate against the ground, the sky drifts west
         self.slew_bias = slew_bias
+        #: Every slew moves as if it were this much shorter (Wi-Fi, the motor speeding up), as the
+        #: SkyWatcher AZ-GTi did not move at all in slews of 0.2 s
+        self.slew_lag_s = slew_lag_s
 
     def guide_rate(self):
         return self.guide_rates
@@ -67,6 +71,7 @@ class FakeMount:
         if self.tick_s:
             seconds = math.floor(seconds / self.tick_s + 1e-9) * self.tick_s
         self.motions.append((direction, seconds))
+        seconds = max(seconds - self.slew_lag_s, 0.0)
         speed = {"1x": self.slow, "2x": self.fast, "3x": self.fast * 8}[started[1]]
         speed += {"E": self.slew_bias, "W": -self.slew_bias}.get(direction, 0.0)
         self._shift(direction, max(speed, 0.0) * seconds)
@@ -466,3 +471,38 @@ def test_moves_are_solved_with_the_vectors_of_the_directions_used():
     assert calibration.movement(moves) == pytest.approx((-5, -5))
     again = Calibration.from_json(calibration.to_json())
     assert again.west == (-0.01, 0.0) and again.south == (0.0, 0.02)
+
+
+def test_the_lag_of_slews_is_measured():
+    """The SkyWatcher AZ-GTi: "1x" is about 50× sidereal (50 px a second at 16″/px) and slews of 0.2 s do not move it."""
+    mount = FakeMount(moves=False, slow=800, fast=1600, slew_lag_s=0.2, guide_rates=(0.5, 0.5))
+    camera = sun_camera(mount, rotation_deg=40)
+    lines = []
+    calibration = calibrate(mount, camera, progress=lines.append)
+    assert calibration.by_slews and calibration.slow_rate == "1x"
+    assert calibration.slew_lag_ms == pytest.approx({"E": 200, "W": 200, "N": 200, "S": 200}, abs=40)
+    # The speed once moving, not the leg's distance over its time (which would be 20 % slow)
+    assert calibration.pixels_per_second() == pytest.approx((50, 50), rel=0.1)
+    assert any("as if it were" in line for line in lines)
+    assert "shorter by" in calibration.describe()
+    assert calibration.slews_for({"E": 100.0})["E"] == pytest.approx(300, abs=40)
+    assert calibration.moving_part({"E": 300.0})["E"] == pytest.approx(100, abs=40)
+    again = Calibration.from_json(calibration.to_json())
+    assert again.slew_lag_ms == calibration.slew_lag_ms
+
+
+def test_a_mount_without_lag_has_none_measured():
+    mount = FakeMount(moves=False, slow=800, fast=1600, guide_rates=(0.5, 0.5))
+    camera = sun_camera(mount)
+    calibration = calibrate(mount, camera)
+    assert all(abs(ms) <= 40 for ms in (calibration.slew_lag_ms or {}).values())
+    assert calibration.pixels_per_second() == pytest.approx((50, 50), rel=0.1)
+
+
+def test_an_older_calibration_without_a_lag_is_read():
+    calibration = Calibration(north=(0.0, -0.01), east=(0.01, 0.0), frame_size=(960, 640), radius=100.0,
+                              guide_by="slews", slow_rate="1x")
+    data = calibration.to_json().replace(', "slew_lag_ms": null', "")
+    again = Calibration.from_json(data)
+    assert again.slew_lag_ms is None and again.lag_ms("E") == 0.0
+    assert again.slews_for({"E": 300.0}) == {"E": 300.0}

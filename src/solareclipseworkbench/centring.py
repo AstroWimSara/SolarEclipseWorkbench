@@ -110,6 +110,26 @@ TRACKING_WAIT_S = 5.0
 #: Shortest slew of a correction by slews: shorter ones are not timed well over Wi-Fi
 MIN_SLEW_MS = 200.0
 
+#: Shortest movement of a correction by slews, in milliseconds of slewing beyond the slew's lag:
+#: a shorter one is not worth it (and not reproducible) when the slowest rate is fast.  The
+#: SkyWatcher AZ-GTi slews at "1x" about 50× sidereal, 50 px a second at 16″/px: 5 px.
+MIN_SLEW_MOTION_MS = 100.0
+
+#: A slew moves the mount less than its length times its speed: the command takes time to reach
+#: the mount (Wi-Fi) and the motor speeds up and slows down.  The SkyWatcher AZ-GTi did not move
+#: at all in slews of 0.2 s at "1x", though 1 s moved the sun 48 px.  The calibration measures
+#: this lag with short slews when the slowest rate moves the sun at least this far in the longest
+#: short slew; slower mounts barely move in a short slew, and their lag does not matter.
+SHORT_SLEW_PX = 2.0
+
+#: A short slew is at most this share of a slew of the leg: the two must differ to tell the lag
+MAX_SHORT_SLEW_SHARE = 0.5
+
+#: The lag measured is kept within this many milliseconds below zero (a mount that coasts on) and
+#: this share of a slew of the leg above zero
+MIN_SLEW_LAG_MS = -500.0
+MAX_SLEW_LAG_SHARE = 0.8
+
 #: Longest slewing of one calibration leg: a slew rate that has not moved the sun far enough by
 #: then is too slow (in that direction) for the calibration
 MAX_SLEW_LEG_MS = 20_000.0
@@ -223,6 +243,10 @@ class Calibration:
     west: Optional[tuple] = None
     fast_south: Optional[tuple] = None
     fast_west: Optional[tuple] = None
+    #: How much shorter each slew at the slow rate moves than it lasts, per direction, in
+    #: milliseconds ({"N": ms, ...}): ``north`` etc. are the speeds once moving.  None: no lag
+    #: (guide pulses, or a calibration made before the lag was measured).
+    slew_lag_ms: Optional[dict] = None
 
     @property
     def by_slews(self) -> bool:
@@ -298,6 +322,18 @@ class Calibration:
             moves["E" if east_ms > 0 else "W"] = float(abs(east_ms))
         return moves
 
+    def lag_ms(self, direction: str) -> float:
+        """How much shorter a slew at the slow rate towards ``direction`` moves than it lasts, in ms."""
+        return float((self.slew_lag_ms or {}).get(direction, 0.0))
+
+    def slews_for(self, moves: dict) -> dict:
+        """How long to slew for movements of {direction: milliseconds}: each plus its lag."""
+        return {d: ms + self.lag_ms(d) for d, ms in moves.items()}
+
+    def moving_part(self, slews: dict) -> dict:
+        """How long slews of {direction: milliseconds} really move the mount: each less its lag."""
+        return {d: max(ms - self.lag_ms(d), 0.0) for d, ms in slews.items()}
+
     def movement(self, moves: dict, fast: bool = False) -> np.ndarray:
         """How far moves {direction: milliseconds} move the sun: (dx, dy) in pixels."""
         vectors = self.vectors(fast)
@@ -339,6 +375,9 @@ class Calibration:
                      f"{float(np.linalg.norm(self.west)) * 1000:.2f} px west)")
         if self.by_slews:
             text += " (the mount ignores guide pulses)"
+        if self.slew_lag_ms:
+            lags = ", ".join(f"{d} {self.lag_ms(d):.0f}" for d in ("N", "S", "E", "W") if d in self.slew_lag_ms)
+            text += f"; each slew moves as if it were shorter by {lags} ms"
         if self.has_fast_rate:
             fast = (float(np.linalg.norm(self.fast_north)) + float(np.linalg.norm(self.fast_east))) * 500
             text += f"; at the {self.fast_rate} rate {fast:.1f} px a second"
@@ -537,8 +576,10 @@ class Calibrator:
         max_leg_ms = self.max_leg_ms if self.method == PULSES else min(self.max_leg_ms, MAX_SLEW_LEG_MS)
         start_position = _mount_value(self.mount, "position")
         moving = "guided" if self.method == PULSES else f"slewed at the {self.slow_rate} rate"
+        slews = 0
         while True:
             self._guide(direction, step_ms)
+            slews += 1
             total_ms += step_ms
             position = self._position(radius)
             moved = np.array(position) - np.array(start)
@@ -563,16 +604,24 @@ class Calibrator:
             else:
                 step_ms = max(min(2 * step_ms, max_leg_ms - total_ms), 500.0)
         vector = moved / total_ms
+        lags = {}
+        if self.method == SLEWS:
+            vector, lags[direction] = self._slew_lag(direction, radius, position, moved, total_ms, slews)
 
         # Back as long, and see how far it comes back
+        back_from = np.array(self._position(radius)) if lags else np.array(start) + moved
         self._guide(back, total_ms)
-        returned = np.array(self._position(radius)) - (np.array(start) + moved)
+        returned = np.array(self._position(radius)) - back_from
         back_share = float(-np.dot(returned, moved) / np.dot(moved, moved))
         back_moving = "guided" if self.method == PULSES else "slewed"
         self._say(f"{back_moving} {back} for {total_ms / 1000:.1f} s: the sun came back {back_share:.0%} of the way")
         if self.method == SLEWS and back_share < MIN_SLEW_BACK_SHARE:
             raise _RateTooSlow(f"slewing {back} at the {self.slow_rate} rate brought the sun back only "
                                f"{back_share:.0%} of the way {direction} moved it")
+        back_vector = returned / total_ms
+        if self.method == SLEWS:
+            here = tuple(back_from + returned)
+            back_vector, lags[back] = self._slew_lag(back, radius, here, returned, total_ms, 1)
         if self.method == SLEWS and back_share < 0.9:
             # Slower that way: slew back longer, so the sun does not end up off where it started
             self._guide(back, min(total_ms * (1 - back_share) / back_share, MAX_SLEW_LEG_MS))
@@ -586,7 +635,46 @@ class Calibrator:
         if back_share < BACKLASH_SHARE and self.method == PULSES:
             warning = (f"backlash: {back_moving} {back} moved the sun only {back_share:.0%} as far as "
                        f"{direction}")
-        return vector, returned / total_ms, warning
+        return vector, back_vector, warning, lags
+
+    def _slew_lag(self, direction: str, radius: float, start: tuple, moved: np.ndarray, total_ms: float,
+                  slews: int) -> tuple:
+        """How much shorter a slew moves than it lasts, from short slews compared with the leg.
+
+        The leg's ``slews`` slews of ``total_ms`` in all moved the sun by ``moved``.
+        With a lag L and a speed v once moving, that is v (total_ms - slews L); a short
+        slew of s ms moves it v (s - L).  The short slew starts at MIN_SLEW_MS and is
+        doubled until it moves the sun SHORT_SLEW_PX (or is too long to tell apart).
+
+        Returns (vector px/ms of the speed once moving, lag in ms).
+        """
+        distance = float(np.linalg.norm(moved))
+        plain = moved / total_ms
+        longest = MAX_SHORT_SLEW_SHARE * total_ms / slews
+        if distance <= 0 or distance / total_ms * longest < SHORT_SLEW_PX:
+            return plain, 0.0           # too slow for the lag to matter
+        unit = moved / distance
+        short_ms = MIN_SLEW_MS
+        position = np.array(start)
+        while True:
+            self._guide(direction, short_ms)
+            after = np.array(self._position(radius))
+            along = float(np.dot(after - position, unit))
+            position = after
+            if along >= SHORT_SLEW_PX or short_ms * 2 > longest:
+                break
+            short_ms *= 2
+        along = max(along, 0.0)
+        speed = (distance - slews * along) / (total_ms - slews * short_ms)
+        if speed <= 0:
+            self._say(f"slewed {direction} for {short_ms / 1000:.1f} s: the sun moved {along:.1f} px, "
+                      f"more than the leg says: no lag")
+            return plain, 0.0
+        lag = float(np.clip(short_ms - along / speed, MIN_SLEW_LAG_MS, MAX_SLEW_LAG_SHARE * total_ms / slews))
+        speed = distance / (total_ms - slews * lag)
+        self._say(f"slewed {direction} for {short_ms / 1000:.1f} s: the sun moved {along:.1f} px: a slew moves "
+                  f"as if it were {lag:.0f} ms shorter, at {speed * 1000:.1f} px a second")
+        return unit * speed, lag
 
     def _slew_rate_names(self) -> list:
         """The slew rates, slowest first; empty when the mount cannot slew at a rate."""
@@ -685,16 +773,19 @@ class Calibrator:
         warnings = []
         if start is None:
             start = self._position(radius)
-        east, west, warning = self._leg("E", "W", radius, start)
+        east, west, warning, lags = self._leg("E", "W", radius, start)
         if warning:
             warnings.append(warning)
         start = self._position(radius)
-        north, south, warning = self._leg("N", "S", radius, start)
+        north, south, warning, more_lags = self._leg("N", "S", radius, start)
         if warning:
             warnings.append(warning)
+        lags.update(more_lags)
         fields = {"east": tuple(map(float, east)), "north": tuple(map(float, north)), "warnings": warnings}
         if self.method == SLEWS:
             fields.update(west=tuple(map(float, west)), south=tuple(map(float, south)))
+            if any(lags.values()):
+                fields["slew_lag_ms"] = {d: float(ms) for d, ms in lags.items()}
         return fields
 
     def _axes_by_slews(self, radius: float) -> dict:
@@ -1044,9 +1135,16 @@ class Centrer:
             if moves and max(moves.values()) >= MIN_COARSE_MS:
                 return self._coarse_move(moves, dx, dy, distance, found)
 
-        pulses = self.calibration.pulses_for(-dx * self.gain, -dy * self.gain)
-        shortest = MIN_SLEW_MS if self.calibration.by_slews else 50
-        pulses = {d: min(ms, self.max_correction_ms) for d, ms in pulses.items() if ms >= shortest}
+        calibration = self.calibration
+        pulses = calibration.pulses_for(-dx * self.gain, -dy * self.gain)
+        if calibration.by_slews:
+            # Slews: each as long as its movement plus its lag, and only when it moves the mount
+            # far enough to be worth it (and is long enough to be timed over Wi-Fi)
+            pulses = {d: min(ms, self.max_correction_ms)
+                      for d, ms in calibration.slews_for(pulses).items()
+                      if ms - calibration.lag_ms(d) >= MIN_SLEW_MOTION_MS and ms >= MIN_SLEW_MS}
+        else:
+            pulses = {d: min(ms, self.max_correction_ms) for d, ms in pulses.items() if ms >= 50}
         if not pulses:
             self._set(CENTRED, f"centred ({distance:.1f} px off)", **found)
             return self.interval_s
@@ -1077,7 +1175,8 @@ class Centrer:
             return self.interval_s
         if self.wait_for_pulses:
             self.clock.wait(self._stop, self.settle_s)
-        return self._corrected(x, y, self.calibration.movement(pulses))
+        moved = calibration.moving_part(pulses) if calibration.by_slews else pulses
+        return self._corrected(x, y, calibration.movement(moved))
 
     def _guide(self, pulses: dict) -> None:
         """Send the guide pulses, both axes at once, in pulses of at most MAX_PULSE_MS."""

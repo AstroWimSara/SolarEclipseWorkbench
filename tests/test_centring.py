@@ -446,3 +446,41 @@ def test_slews_that_move_east_faster_than_west_still_centre():
                 break
         assert loop.status.state == CENTRED, loop.status.message
         assert off_centre(camera, calibration) <= 2.0
+
+
+def _azgti():
+    """The SkyWatcher AZ-GTi over Wi-Fi: "1x" about 50 px a second, and slews of 0.2 s do not move it."""
+    mount = FakeMount(moves=False, slow=800, fast=1600, slew_lag_s=0.2, guide_rates=(0.5, 0.5))
+    camera = sun_camera(mount, rotation_deg=20)
+    return mount, camera, calibrate(mount, camera)
+
+
+def test_slews_with_a_lag_centre():
+    """Each slew lasts its movement plus the lag the calibration measured."""
+    mount, camera, calibration = _azgti()
+    drift(mount, 400, -350)                     # about 33 px at 16″/px, as on 2026-11-21
+    loop = Centrer(mount, camera, calibration, settle_s=0.0, clock=mount.clock)     # slews are timed
+    for _ in range(8):
+        loop.step()
+        assert loop.status.state != STOPPED, loop.status.message
+        if loop.status.state == CENTRED:
+            break
+    assert loop.status.state == CENTRED, loop.status.message
+    # Within what the shortest movement (MIN_SLEW_MOTION_MS: 5 px) leaves, over the gain
+    assert off_centre(camera, calibration) <= 8.0
+    assert all(seconds >= 0.2 for _, seconds in mount.motions[-4:])
+
+
+def test_slews_without_the_lag_do_not_centre():
+    """Without the lag (a calibration made before it was measured) the short slews do not move it: what
+    happened with the AZ-GTi on 2026-11-21."""
+    mount, camera, calibration = _azgti()
+    calibration.slew_lag_ms = None
+    drift(mount, 400, -350)
+    loop = Centrer(mount, camera, calibration, settle_s=0.0, clock=mount.clock)
+    for _ in range(12):
+        loop.step()
+        if loop.status.state == STOPPED:
+            break
+    assert loop.status.state == STOPPED
+    assert "did not move the sun" in loop.status.message

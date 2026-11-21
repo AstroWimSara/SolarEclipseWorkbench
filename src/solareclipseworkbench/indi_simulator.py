@@ -19,6 +19,7 @@ import logging
 import socket
 import threading
 import time
+from typing import Optional
 from xml.sax.saxutils import escape, quoteattr
 
 from solareclipseworkbench.indi_client import (ALERT, BUSY, IDLE, NUMBER, OK, SWITCH, TEXT, XmlStream,
@@ -59,7 +60,13 @@ def sun_position() -> tuple:
 #: Labels of the slew rates, as the INDI telescope base class names them
 #: Axis states of the SkyWatcher drivers (with axes=True), and how long the motors take to stop
 AXIS_STATES = ("AXIS_ONE_STATE", "AXIS_TWO_STATE")
+
+#: The axis state each motion property moves
+MOTION_AXES = {"TELESCOPE_MOTION_WE": "AXIS_ONE_STATE", "TELESCOPE_MOTION_NS": "AXIS_TWO_STATE"}
 AXIS_STOP_S = 0.3
+
+#: The encoder values of each axis state (with axes=True)
+AXIS_ENCODERS = {"AXIS_ONE_STATE": "AXIS1_ENCODER_VALUES", "AXIS_TWO_STATE": "AXIS2_ENCODER_VALUES"}
 
 SLEW_RATE_LABELS = {"1x": "Guide", "2x": "Centering", "3x": "Find", "4x": "Max"}
 
@@ -88,12 +95,27 @@ class SimulatedIndiServer:
                 tracking is switched off, and refuse a park while they run ("Motor not stopped"), as
                 the SkyWatcher AZ-GTi driver does
         - location: (latitude, longitude) the mount has before one is sent; (0, 0) is none
+        - old_target: Keep tracking the position the mount had when tracking was switched on, and
+                      drive the mount back to it after a slew, as the SkyWatcher alt-azimuth driver
+                      of INDI 1.9 does.  With axes, a slew also sets the state of its axis, and the
+                      encoder values of the axis come AXIS_STOP_S after the slew stops.
+        - quiet_axes: With axes and old_target, a slew leaves the state of its axis as it is, as the
+                      driver reports it for a slew of 0.2 s that falls between two of its polls
+        - encoders: With quiet_axes, whether the encoder values come after a slew (they do not when
+                    the slew was too short to change them)
+        - driver: DRIVER_EXEC of the mount
     """
 
     def __init__(self, port: int = 0, solar: bool = True, refuse=(), silent=(), device: str = DEVICE,
                  guide_rate: float = GUIDE_RATE, track_drops: int = 0, axes: bool = False,
-                 location: tuple = (0.0, 0.0)):
+                 location: tuple = (0.0, 0.0), old_target: bool = False, driver: str = "indi_simulator",
+                 quiet_axes: bool = False, encoders: bool = True):
         self.device = device
+        self.old_target = old_target
+        self.quiet_axes = quiet_axes
+        self.encoders = encoders
+        #: Where the mount tracks to, with old_target: (RA, DEC) when tracking was switched on
+        self.track_target: Optional[tuple] = None
         self.guide_rate = guide_rate
         self.track_drops = track_drops
         self.axes = axes
@@ -108,7 +130,7 @@ class SimulatedIndiServer:
         props = [
             _Prop("CONNECTION", SWITCH, {"CONNECT": False, "DISCONNECT": True}, rule="OneOfMany",
                   needs_connection=False),
-            _Prop("DRIVER_INFO", TEXT, {"DRIVER_NAME": "Telescope Simulator", "DRIVER_EXEC": "indi_simulator",
+            _Prop("DRIVER_INFO", TEXT, {"DRIVER_NAME": "Telescope Simulator", "DRIVER_EXEC": driver,
                                         "DRIVER_VERSION": "1.0",
                                         "DRIVER_INTERFACE": str(TELESCOPE_INTERFACE)},
                   perm="ro", needs_connection=False),
@@ -136,6 +158,7 @@ class SimulatedIndiServer:
         if axes:
             props += [_Prop(name, SWITCH, {"FULL_STOP": True, "SLEWING": False}, rule="AnyOfMany", perm="ro")
                       for name in AXIS_STATES]
+            props += [_Prop(name, NUMBER, {"RAW_MICROSTEPS": 8388608.0}, perm="ro") for name in AXIS_ENCODERS.values()]
         self.props = {p.name: p for p in props}
         self._server = socket.create_server(("127.0.0.1", port))
         self.port = self._server.getsockname()[1]
@@ -199,6 +222,11 @@ class SimulatedIndiServer:
                 moving = any(ns.values()) or any(we.values())
                 self._offset(dec_deg=step_deg * (ns["MOTION_NORTH"] - ns["MOTION_SOUTH"]),
                              ra_h=step_deg / 15.0 * (we["MOTION_EAST"] - we["MOTION_WEST"]))
+                if tracking and self.old_target and not moving and self.track_target is not None:
+                    # Back to where tracking was switched on, whatever slews moved the mount since
+                    coord = props["EQUATORIAL_EOD_COORD"].values
+                    moving = (coord["RA"], coord["DEC"]) != self.track_target
+                    coord["RA"], coord["DEC"] = self.track_target
                 if moving or now - last_sent >= 1.0:
                     last_sent = now
                     xml = self._vector(props["EQUATORIAL_EOD_COORD"], "set")
@@ -260,6 +288,21 @@ class SimulatedIndiServer:
             self.props[name].values.update(FULL_STOP=stopped, SLEWING=not stopped)
             xml += self._vector(self.props[name], "set")
         return xml
+
+    def _set_axis(self, name: str, stopped: bool) -> str:
+        """Set one axis state (with the lock held); the XML to send."""
+        self.props[name].values.update(FULL_STOP=stopped, SLEWING=not stopped)
+        return self._vector(self.props[name], "set")
+
+    def _stop_axis(self, name: str) -> None:
+        """The motor of a slew has come to a stop: the driver reads it at its next poll."""
+        with self._lock:
+            xml = "" if self.quiet_axes else self._set_axis(name, stopped=True)
+            if self.encoders or not self.quiet_axes:
+                encoder = self.props[AXIS_ENCODERS[name]]
+                encoder.values["RAW_MICROSTEPS"] += 1.0
+                xml += self._vector(encoder, "set")
+        self._broadcast(xml)
 
     def _stop_axes(self) -> None:
         """The motors have come to a stop, unless tracking was switched on again meanwhile."""
@@ -365,6 +408,9 @@ class SimulatedIndiServer:
                 pass    # momentary
             else:
                 prop.values.update(changes)
+            if name == "TELESCOPE_TRACK_STATE" and prop.values["TRACK_ON"]:
+                coord = self.props["EQUATORIAL_EOD_COORD"].values
+                self.track_target = (coord["RA"], coord["DEC"])
             if name == "TELESCOPE_PARK" and prop.values["PARK"]:
                 self.props["TELESCOPE_TRACK_STATE"].values.update(TRACK_ON=False, TRACK_OFF=True)
                 self.props["EQUATORIAL_EOD_COORD"].values["DEC"] = 90.0     # parked at the pole
@@ -394,6 +440,13 @@ class SimulatedIndiServer:
             if drop:
                 self.track_drops -= 1
             stopping = False
+            axis_stops = None
+            if self.axes and self.old_target and name in MOTION_AXES:
+                if any(prop.values.values()):
+                    if not self.quiet_axes:
+                        xml += self._set_axis(MOTION_AXES[name], stopped=False)
+                else:
+                    axis_stops = MOTION_AXES[name]
             if self.axes and name in ("TELESCOPE_TRACK_STATE", "TELESCOPE_PARK"):
                 if self.props["TELESCOPE_TRACK_STATE"].values["TRACK_ON"]:
                     xml += self._set_axes(stopped=False)
@@ -402,6 +455,10 @@ class SimulatedIndiServer:
         self._broadcast(xml)
         if stopping:
             timer = threading.Timer(AXIS_STOP_S, self._stop_axes)
+            timer.daemon = True
+            timer.start()
+        if axis_stops:
+            timer = threading.Timer(AXIS_STOP_S, self._stop_axis, args=(axis_stops,))
             timer.daemon = True
             timer.start()
         if drop:

@@ -6,8 +6,8 @@ import gphoto2 as gp
 import pytest
 
 from solareclipseworkbench import hardware_problems
-from solareclipseworkbench.camera import CameraKeepAliveThread, VirtualCamera, get_auto_power_off, \
-    parse_power_off_delay
+from solareclipseworkbench.camera import CameraKeepAliveThread, VirtualCamera, _keep_alive_request, \
+    get_auto_power_off, parse_power_off_delay
 
 
 class _FakeCamera:
@@ -125,6 +125,36 @@ def test_keep_alive_ignores_busy_camera():
         CameraKeepAliveThread(lambda: [camera]).ping_all()
 
     assert hardware_problems.count() == 0
+
+
+def test_keep_alive_request_goes_over_usb():
+    """The storage info is asked of the camera itself: a config read is answered from libgphoto2's cache on a
+    Canon EOS, so it neither keeps the camera awake nor notices that it is gone."""
+    camera = _FakeCamera()
+    with patch("solareclipseworkbench.camera.gp.gp_camera_get_storageinfo", return_value=[0, []]) as storage, \
+            patch("solareclipseworkbench.camera.gp.gp_camera_get_single_config") as config:
+        _keep_alive_request(camera)
+    storage.assert_called_once()
+    assert storage.call_args.args[0] is camera._camera
+    config.assert_not_called()
+
+
+def test_keep_alive_request_fails_when_the_camera_is_gone():
+    camera = _FakeCamera()
+    with patch("solareclipseworkbench.camera.gp.gp_camera_get_storageinfo", return_value=[gp.GP_ERROR_IO_USB_FIND, None]), \
+            patch("solareclipseworkbench.camera.gp.gp_camera_get_single_config") as config:
+        with pytest.raises(gp.GPhoto2Error):
+            _keep_alive_request(camera)
+    config.assert_not_called()
+
+
+def test_keep_alive_request_falls_back_to_a_config_read():
+    camera = _FakeCamera()
+    with patch("solareclipseworkbench.camera.gp.gp_camera_get_storageinfo",
+               return_value=[gp.GP_ERROR_NOT_SUPPORTED, None]), \
+            patch("solareclipseworkbench.camera.gp.gp_camera_get_single_config", return_value=[0, None]) as config:
+        _keep_alive_request(camera)
+    config.assert_called_once()
 
 
 def test_keep_alive_thread_honours_should_ping():

@@ -151,6 +151,12 @@ class Mount:
         #: that is from the location sent
         self.previous_site: Optional[tuple] = None
         self.site_moved_km: Optional[float] = None
+        #: Slews of a driver that keeps tracking its old target after a slew (see RETARGET_DRIVERS):
+        #: whether sew switched tracking off for them, the axes moving now, and for each axis that
+        #: was stopped, the number of updates its axis state had when it was stopped
+        self._tracking_paused = False
+        self._slewing_axes: set = set()
+        self._stopped_axes: dict = {}
 
     @property
     def identity(self) -> str:
@@ -401,6 +407,7 @@ class Mount:
         again right after it was switched on (it is tried TRACK_ATTEMPTS times).
         """
         with self._lock:
+            self._tracking_paused = False
             if self.parked:
                 self.unpark()
             rate, mode = "sidereal", None
@@ -446,6 +453,7 @@ class Mount:
         with self._lock:
             if not self._has("TELESCOPE_TRACK_STATE"):
                 raise MountError(f"{self.device} cannot switch tracking off")
+            self._tracking_paused = False
             self._change("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}, wait_done=False)
         logger.info("%s stopped tracking", self.device)
 
@@ -459,6 +467,8 @@ class Mount:
         with self._lock:
             if not self._has("TELESCOPE_PARK"):
                 raise MountError(f"{self.device} cannot park")
+            self._tracking_paused = False
+            self._slewing_axes.clear()
             if self.tracking:
                 self._change("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}, wait_done=False)
                 logger.info("%s stopped tracking, to park", self.device)
@@ -505,7 +515,15 @@ class Mount:
         """Stop every motion now (a park or a nudge); tracking is left as it is."""
         with self._lock:
             self._change("TELESCOPE_ABORT_MOTION", {"ABORT": True}, wait_done=False)
+            paused = self._tracking_paused
+            stopped = {self.AXIS_OF_MOTION[prop]: None for prop in self._slewing_axes}
+            self._slewing_axes.clear()
+            self._stopped_axes.clear()
         logger.info("%s: motion aborted", self.device)
+        if paused:
+            # Tracking was off for a slew: on again once the motors stand still, without making the caller wait
+            threading.Thread(target=self._resume_tracking, args=(stopped,), daemon=True,
+                             name=f"retrack-{self.device}").start()
 
     # ---------------------------------------------------------------- nudges
 
@@ -529,13 +547,142 @@ class Mount:
         """Start moving towards N, S, E or W, until nudge_stop."""
         _, _, prop, element = self._direction(direction)
         with self._lock:
+            if self.retargets_tracking and not self._tracking_paused and self.tracking:
+                # The driver would drive the mount back after the slew: see RETARGET_DRIVERS
+                self._change("TELESCOPE_TRACK_STATE", {"TRACK_OFF": True}, wait_done=False)
+                self._tracking_paused = True
+                self._stopped_axes.clear()
+                logger.debug("%s: tracking off while the mount slews", self.device)
+            if self._tracking_paused:
+                self._slewing_axes.add(prop)
             # Busy for as long as the mount moves: the first answer is the answer
             self._change(prop, {element: True}, wait_done=False)
 
     def nudge_stop(self, direction: str) -> None:
+        """Stop moving towards N, S, E or W.
+
+        For a driver in RETARGET_DRIVERS, this returns only once tracking is on again,
+        aimed at where the mount points now: about a second after the last axis stops.
+        """
         _, _, prop, element = self._direction(direction)
         with self._lock:
             self._change(prop, {element: False}, wait_done=False)
+            if not self._tracking_paused:
+                return
+            self._slewing_axes.discard(prop)
+            state = self.AXIS_OF_MOTION[prop]
+            self._stopped_axes[state] = self._axis_updates(state)
+            if self._slewing_axes:
+                return
+            stopped, self._stopped_axes = dict(self._stopped_axes), {}
+        self._resume_tracking(stopped)
+
+    #: Drivers that keep tracking the target they had before a slew of the motion controls
+    #: (TELESCOPE_MOTION_NS/WE), and drive the mount back to it afterwards: the SkyWatcher
+    #: alt-azimuth driver (AZ-GTi) of INDI 1.9.  Later versions aim tracking at where the mount
+    #: points when a slew ends; switching tracking on does the same in every version, so for these
+    #: drivers tracking is switched off while the mount slews, and on again once it stands still.
+    RETARGET_DRIVERS = ("indi_skywatcherAltAzMount",)
+    RETARGET_DEVICES = ("Skywatcher Alt-Az",)
+
+    #: The axis state that tells when the motor of each motion property stands still
+    AXIS_OF_MOTION = {"TELESCOPE_MOTION_WE": "AXIS_ONE_STATE", "TELESCOPE_MOTION_NS": "AXIS_TWO_STATE"}
+
+    #: The encoder values the driver sends with the state of each axis, when they change
+    ENCODER_OF_AXIS = {"AXIS_ONE_STATE": "AXIS1_ENCODER_VALUES", "AXIS_TWO_STATE": "AXIS2_ENCODER_VALUES"}
+
+    #: After a slew, the driver has read the motors at least once within this time (it polls
+    #: them once a second); when nothing came by then, it read them standing still
+    RETARGET_POLL_S = 1.3
+
+    #: How long the other updates of the same poll take to come, after the first
+    RETARGET_SETTLE_S = 0.1
+
+    #: How long to wait for the motors to stop after a slew, before tracking is switched on anyway
+    RETARGET_TIMEOUT_S = 3.0
+
+    #: How long to wait after a slew when the driver does not report its axis states
+    RETARGET_WAIT_S = 1.5
+
+    @property
+    def retargets_tracking(self) -> bool:
+        """Whether tracking is switched off during a slew, and on again after it (see RETARGET_DRIVERS)."""
+        driver = self.client.value(self.device, "DRIVER_INFO", "DRIVER_EXEC", "") or ""
+        return driver in self.RETARGET_DRIVERS or self.device in self.RETARGET_DEVICES
+
+    def _axis_updates(self, state: str) -> Optional[tuple]:
+        """(updates of the axis state, updates of its encoder values or None); None without the axis state."""
+        axis = self.client.property(self.device, state)
+        if axis is None:
+            return None
+        encoder = self.client.property(self.device, self.ENCODER_OF_AXIS.get(state, ""))
+        return axis.updates, encoder.updates if encoder is not None else None
+
+    def _axes_stopped(self, states) -> bool:
+        for state in states:
+            prop = self.client.property(self.device, state)
+            if prop is None or not prop.values.get("FULL_STOP", False):
+                return False
+        return True
+
+    def _wait_until_read_still(self, stopped: dict) -> None:
+        """Wait until the driver has read the axes in ``stopped`` standing still, after their stop.
+
+        The driver sends the state and the encoder values of an axis only when they change.  A
+        slew of 0.2 s often falls between two of its polls (a second apart), so the state may
+        not change at all; the encoder values then still come at the first poll after the slew.
+        So: FULL_STOP, with an update of the state or the encoders since the stop.  When the same
+        poll says a motor still runs, its next state update says when it stops.  When nothing
+        comes within RETARGET_POLL_S and the axes say FULL_STOP, a poll has read them standing still.
+        """
+        def read() -> bool:
+            if not self._axes_stopped(stopped):
+                return False
+            for state, (axis_updates, encoder_updates) in stopped.items():
+                axis = self.client.property(self.device, state)
+                encoder = self.client.property(self.device, self.ENCODER_OF_AXIS.get(state, ""))
+                if axis.updates == axis_updates and (encoder_updates is None or encoder is None
+                                                     or encoder.updates == encoder_updates):
+                    return False
+            return True
+
+        start = time.monotonic()
+        deadline, quiet_until = start + self.RETARGET_TIMEOUT_S, start + self.RETARGET_POLL_S
+        while True:
+            if self.client.wait_for(read, max(0.0, min(quiet_until, deadline) - time.monotonic())):
+                time.sleep(self.RETARGET_SETTLE_S)
+                if self._axes_stopped(stopped):
+                    return
+                # The same poll said a motor still runs: only a new state update tells it stopped
+                stopped = {state: (self.client.property(self.device, state).updates, None) for state in stopped}
+                quiet_until = deadline
+                continue
+            if time.monotonic() >= deadline:
+                logger.warning("%s: the motors did not report a stop within %.0f s of the slew; tracking "
+                               "is switched on again anyway", self.device, self.RETARGET_TIMEOUT_S)
+                return
+            if self._axes_stopped(stopped):
+                return      # a poll read the motors standing still: nothing changed
+            quiet_until = deadline      # a motor runs: wait for it to stop
+
+    def _resume_tracking(self, stopped: dict) -> None:
+        """Switch tracking on again once the driver has read the axes in ``stopped`` standing still.
+
+        The driver aims tracking at where it last read the motors to be (see _wait_until_read_still).
+        Tracking stays off meanwhile, so the sky drifts past: this wait should be short.
+        """
+        start = time.monotonic()
+        if stopped and all(updates is not None for updates in stopped.values()):
+            self._wait_until_read_still(stopped)
+        else:
+            time.sleep(self.RETARGET_WAIT_S)
+        with self._lock:
+            if not self._tracking_paused or self._slewing_axes:
+                return          # tracking was switched on or off meanwhile, or a new slew started
+            self._tracking_paused = False
+            self._change("TELESCOPE_TRACK_STATE", {"TRACK_ON": True}, wait_done=False)
+        logger.debug("%s: tracking on again, aimed at where the mount points now (%.1f s after the slew)",
+                     self.device, time.monotonic() - start)
 
     def slew_rates(self) -> list:
         """The rates the mount can be nudged at, slowest first: [(name, label), ...].
